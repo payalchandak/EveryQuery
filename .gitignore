@@ -1,3 +1,9 @@
+data/
+EventStream/
+scripts/
+eq_analysis.py
+eq_loader.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

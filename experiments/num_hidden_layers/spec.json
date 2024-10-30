@@ -1,0 +1,17 @@
+{
+    "description": "How does the number of hidden layers in the transformer affect AUROC?",
+    "defaults": {
+        "optimization_config.batch_size": 1024
+    },
+    "variable_param": {
+        "name": "config.num_hidden_layers",
+        "values": [
+            6,
+            8,
+            10,
+            12
+        ]
+    },
+    "seeds_per_run": 5,
+    "id": 782113
+}
