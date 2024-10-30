@@ -15,7 +15,6 @@ import torch
 
 class EveryQueryDataset(PytorchDataset):
     def __init__(self, cfg, split):
-        cfg.max_seq_len = 5
         cfg.do_include_subsequence_indices = True
         super().__init__(cfg, split)
 
