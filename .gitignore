@@ -1,8 +1,5 @@
 data/
-EventStream/
-scripts/
-eq_analysis.py
-eq_loader.py
+results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1,0 +1,40 @@
+defaults:
+  - _preprocess
+  - _self_
+input_dir: ${oc.env:MEDS_DIR}
+cohort_dir: ${oc.env:MODEL_DIR}
+stages:
+  - filter_subjects
+  - code_stats
+  - filter_measurements
+  - occlude_outliers
+  - fit_normalization
+  - fit_vocabulary_indices
+  - normalization
+  - tokenization
+  - tensorization
+
+stage_configs:
+  filter_subjects:
+    min_events_per_subject: 10
+  code_stats:
+    _script: MEDS_transform-aggregate_code_metadata
+    aggregations:
+      - code/n_occurrences
+      - code/n_subjects
+      - values/sum
+      - values/sum_sqd
+      - values/n_occurrences
+  filter_measurements:
+    min_subjects_per_code: 100
+  occlude_outliers: 
+    stddev_cutoff: 4.5
+  fit_normalization:
+    _script: MEDS_transform-aggregate_code_metadata
+    aggregations:
+      - code/n_occurrences
+      - values/n_occurrences
+      - values/sum
+      - values/sum_sqd
+      - name: values/quantiles
+        quantiles: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
