@@ -269,7 +269,7 @@ class EveryQueryDataset(PytorchDataset):
             lower, upper = 0, 0  # mask later if needed
         event = {
             "name": code["code"],
-            "vocab_index": code["code/vocab_index"],
+            "code": code["code/vocab_index"],
             "has_value": code["code/has_value"],
             "use_value": use_value,
             "range_lower": lower,
@@ -372,7 +372,7 @@ class EveryQueryDataset(PytorchDataset):
             future_dynamic = future_dynamic[start_idx:end_idx]
 
         count = 0 
-        code_idx = future_dynamic.tensors["dim1/code"] == query["vocab_index"]
+        code_idx = future_dynamic.tensors["dim1/code"] == query["code"]
         if query["has_value"] and query["use_value"]:
             values = future_dynamic.tensors["dim1/numeric_value"][code_idx]
             count = sum([query["range_lower"] <= x <= query["range_upper"]  for x in values])
@@ -444,7 +444,7 @@ class EveryQueryDataset(PytorchDataset):
         return {
             "offset": torch.tensor([x["offset"] for x in batch], dtype=torch.float64),
             "duration": torch.tensor([x["duration"] for x in batch], dtype=torch.float64),
-            "vocab_index": torch.tensor([x["code"] for x in batch], dtype=torch.int64),
+            "code": torch.tensor([x["code"] for x in batch], dtype=torch.int64),
             "has_value": torch.tensor([x["has_value"] for x in batch], dtype=torch.bool),
             "use_value": torch.tensor([x["use_value"] for x in batch], dtype=torch.bool),
             "range_lower": torch.tensor([x["range_lower"] for x in batch], dtype=torch.float64),
