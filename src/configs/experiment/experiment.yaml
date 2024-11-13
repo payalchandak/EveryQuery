@@ -5,7 +5,7 @@
 defaults:
   - override /data: everyquery
   - override /logger: wandb
-  - override /model: triplet_forecasting
+  - override /model: everyquery
   - override /trainer: gpu
 
 # all parameters below will be merged with parameters from default configurations set above
@@ -22,14 +22,6 @@ trainer:
   min_epochs: 1
   max_epochs: 10
   gradient_clip_val: 1.0
-
-data:
-  dataloader:
-    batch_size: 64
-    num_workers: 0
-  max_seq_len: 512
-  collate_type: "triplet"
-  subsequence_sampling_strategy: "to_end"
 
 model:
   token_dim: 512

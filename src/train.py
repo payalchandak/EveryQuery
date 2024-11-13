@@ -21,6 +21,7 @@ from meds_torch.utils import (
 from meds_torch.utils.resolvers import setup_resolvers
 
 from dataset import EveryQueryDataset
+from model import EveryQueryModule
 
 setup_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)

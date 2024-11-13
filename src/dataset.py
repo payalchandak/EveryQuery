@@ -444,7 +444,7 @@ class EveryQueryDataset(PytorchDataset):
         return {
             "offset": torch.tensor([x["offset"] for x in batch], dtype=torch.float64),
             "duration": torch.tensor([x["duration"] for x in batch], dtype=torch.float64),
-            "vocab_index": torch.tensor([x["vocab_index"] for x in batch], dtype=torch.int64),
+            "vocab_index": torch.tensor([x["code"] for x in batch], dtype=torch.int64),
             "has_value": torch.tensor([x["has_value"] for x in batch], dtype=torch.bool),
             "use_value": torch.tensor([x["use_value"] for x in batch], dtype=torch.bool),
             "range_lower": torch.tensor([x["range_lower"] for x in batch], dtype=torch.float64),
