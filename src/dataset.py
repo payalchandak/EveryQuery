@@ -392,7 +392,8 @@ class EveryQueryDataset(PytorchDataset):
         shard = self.subj_map[subject_id]
         subject_idx = self.subj_indices[subject_id]
         static_row = self.static_dfs[shard][subject_idx].to_dict()
-        times = static_row["time"].to_numpy()[0].astype("datetime64[m]")
+        times = static_row['time'].item().to_numpy().astype("datetime64[m]")
+        assert np.all(times[:-1] <= times[1:]), 'subject times not sorted'
         return times
 
     def get_future_duration(self, subject_id, context_end_idx, record_end_idx):
@@ -405,12 +406,6 @@ class EveryQueryDataset(PytorchDataset):
         # record_end_time is last time you can use, and not the first time you can't use
         record_end_time = times[record_end_idx - 1]
         future_duration = (record_end_time - context_end_time) / np.timedelta64(1, "m")
-        # if future_duration < 0: 
-        #     print(f'context_end_idx: {context_end_idx}')
-        #     print(f'context_end_time: {context_end_time}')
-        #     print(f'record_end_idx: {record_end_idx}')
-        #     print(f'record_end_time: {record_end_time}')
-        #     print(f'times: {times}')
         return future_duration
 
     @SeedableMixin.WithSeed
