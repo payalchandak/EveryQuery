@@ -14,9 +14,9 @@ import torch
 
 
 class EveryQueryDataset(PytorchDataset):
-    def __init__(self, cfg, split):
+    def __init__(self, cfg):
         cfg.do_include_subsequence_indices = True
-        super().__init__(cfg, split)
+        super().__init__(cfg)
 
         self.code_strategies = ["uniform", "frequency"]
         if self.config.code_sampling_strategy not in self.code_strategies:
@@ -57,10 +57,10 @@ class EveryQueryDataset(PytorchDataset):
             raise ValueError("min_query_offset must be non-negative.")
         if self.config.min_duration < 0:
             raise ValueError("min_query_duration must be non-negative.")
-        if self.config.min_offset >= self.config.max_offset:
-            raise ValueError("min_query_offset must be less than max_query_offset.")
-        if self.config.min_duration >= self.config.max_duration:
-            raise ValueError("min_query_duration must be less than max_query_duration.")
+        if self.config.min_offset > self.config.max_offset:
+            raise ValueError("min_query_offset must not be greater than max_query_offset.")
+        if self.config.min_duration > self.config.max_duration:
+            raise ValueError("min_query_duration must not be greater than max_query_duration.")
         if self.config.duration_sampling_strategy not in self.future_strategies:
             raise ValueError(
                 f"duration_sampling_strategy must be one of {self.future_strategies}."
@@ -89,27 +89,21 @@ class EveryQueryDataset(PytorchDataset):
             pl.read_parquet(self.config.code_metadata_fp)
             .filter(pl.col("code").is_not_null())
             .with_columns(
-                pl.col("values/min").alias("values/quantile/0"),
-                pl.col("values/quantiles")
-                .struct.field("values/quantile/0.25")
-                .alias("values/quantile/25"),
-                pl.col("values/quantiles")
-                .struct.field("values/quantile/0.5")
-                .alias("values/quantile/50"),
-                pl.col("values/quantiles")
-                .struct.field("values/quantile/0.75")
-                .alias("values/quantile/75"),
-                pl.col("values/max").alias("values/quantile/100"),
+                pl.col("values/quantiles").struct.field("values/quantile/0").alias("values/quantile/0"),
+                pl.col("values/quantiles").struct.field("values/quantile/0.1").alias("values/quantile/10"),
+                pl.col("values/quantiles").struct.field("values/quantile/0.2").alias("values/quantile/20"),
+                pl.col("values/quantiles").struct.field("values/quantile/0.3").alias("values/quantile/30"),
+                pl.col("values/quantiles").struct.field("values/quantile/0.4").alias("values/quantile/40"),
+                pl.col("values/quantiles").struct.field("values/quantile/0.5").alias("values/quantile/50"),
+                pl.col("values/quantiles").struct.field("values/quantile/0.6").alias("values/quantile/60"),
+                pl.col("values/quantiles").struct.field("values/quantile/0.7").alias("values/quantile/70"),
+                pl.col("values/quantiles").struct.field("values/quantile/0.8").alias("values/quantile/80"),
+                pl.col("values/quantiles").struct.field("values/quantile/0.9").alias("values/quantile/90"),
+                pl.col("values/quantiles").struct.field("values/quantile/1").alias("values/quantile/100"),
                 (pl.col("values/n_occurrences") > 0).alias("code/has_value"),
-                (pl.col("values/sum") / pl.col("values/n_occurrences")).alias(
-                    "values/mean"
-                ),
-                pl.lit(self.config.default_value_sampling_strategy).alias(
-                    "values/strategy"
-                ),
-                pl.lit([])
-                .cast(pl.List(pl.List(pl.Float64)))
-                .alias("values/range_options"),
+                (pl.col("values/sum") / pl.col("values/n_occurrences")).alias("values/mean"),
+                pl.lit(self.config.default_value_sampling_strategy).alias("values/strategy"),
+                pl.lit([]).cast(pl.List(pl.List(pl.Float64))).alias("values/range_options"),
             )
             .with_columns(
                 (
@@ -220,24 +214,27 @@ class EveryQueryDataset(PytorchDataset):
         self.set_codes(codes=self.code_options["code"].to_list())
 
     def sample_code(self):
-        match self.config.code_sampling_strategy:
-            case "uniform":
-                options = self.code_options
-            case "frequency":
-                num_buckets = int(
-                    self.code_options["code/frequency"]
-                    .log(base=10)
-                    .floor()
-                    .to_numpy()
-                    .min()
-                )
-                bucket = np.random.choice([*range(num_buckets, 0)])
-                lower, upper = np.logspace(bucket, bucket + 1, 2)
-                options = self.code_options.filter(
-                    pl.col("code/frequency").is_between(
-                        lower_bound=lower, upper_bound=upper
+        if self.code_options.height == 1:
+            options = self.code_options
+        else:
+            match self.config.code_sampling_strategy:
+                case "uniform":
+                    options = self.code_options
+                case "frequency":
+                    num_buckets = int(
+                        self.code_options["code/frequency"]
+                        .log(base=10)
+                        .floor()
+                        .to_numpy()
+                        .min()
                     )
-                )
+                    bucket = np.random.choice([*range(num_buckets, 0)])
+                    lower, upper = np.logspace(bucket, bucket + 1, 2)
+                    options = self.code_options.filter(
+                        pl.col("code/frequency").is_between(
+                            lower_bound=lower, upper_bound=upper
+                        )
+                    )
         code = options.sample().to_dicts()[0]
         return code
 
@@ -292,25 +289,18 @@ class EveryQueryDataset(PytorchDataset):
             # range is provided in un-normalized units by user
             # can use mean/std from metadata
             # change in the preprocessing
-            return query
+        return query
 
-    def sample_future(self, max_valid_duration):
-        if max_valid_duration < 0:
+    def sample_future(self, max_record_future):
+        if max_record_future < 0:
             raise ValueError(
-                f"max_valid_duration must be non-negative, but got {max_valid_duration}"
+                f"max_record_future must be non-negative, but got {max_record_future}"
             )
 
-        duration = self.sample_duration(max_valid_duration)
+        duration = self.sample_duration(max_record_future)
+        offset = self.sample_offset(max(max_record_future-duration, 0))
 
-        max_valid_offset = max_valid_duration - duration
-        if max_valid_offset < 0:
-            raise ValueError(
-                f"max_valid_offset must be non-negative, but got {max_valid_offset}"
-            )
-
-        offset = self.sample_offset(max_valid_offset)
-
-        if (duration > max_valid_duration) or (offset > max_valid_offset):
+        if (duration + offset) > max_record_future: 
             is_censored = True
         else:
             is_censored = False
@@ -319,15 +309,15 @@ class EveryQueryDataset(PytorchDataset):
 
         return future, is_censored
 
-    def sample_duration(self, max_valid_duration):
+    def sample_duration(self, max_record_future):
         match self.config.duration_sampling_strategy:
             case "within_record":
-                if max_valid_duration <= self.config.min_duration:
-                    duration = max_valid_duration
+                if max_record_future <= self.config.min_duration:
+                    duration = max_record_future
                 else:
                     duration = np.random.randint(
                         low=self.config.min_duration,
-                        high=min(self.config.max_duration, max_valid_duration),
+                        high=min(self.config.max_duration, max_record_future),
                     )
             case "random":
                 duration = np.random.randint(
@@ -339,15 +329,15 @@ class EveryQueryDataset(PytorchDataset):
             raise ValueError(f"duration must be non-negative, but got {duration}")
         return duration
 
-    def sample_offset(self, max_valid_offset):
+    def sample_offset(self, max_record_future):
         match self.config.offset_sampling_strategy:
             case "within_record":
-                if max_valid_offset <= self.config.min_offset:
-                    offset = max_valid_offset
+                if max_record_future <= self.config.min_offset:
+                    offset = max_record_future
                 else:
                     offset = np.random.randint(
                         low=self.config.min_offset,
-                        high=min(self.config.max_offset, max_valid_offset),
+                        high=min(self.config.max_offset, max_record_future),
                     )
             case "random":
                 offset = np.random.randint(
@@ -381,20 +371,13 @@ class EveryQueryDataset(PytorchDataset):
         else:
             future_dynamic = future_dynamic[start_idx:end_idx]
 
-        future_dynamic = future_dynamic.tensors
-
-        count = 0
-        for i in range(len(future_dynamic["dim1/code"])):
-            for j in range(len(future_dynamic["dim1/code"][i])):
-                if future_dynamic["dim1/code"][i][j] == query["vocab_index"]:
-                    if query["has_value"] and query["use_value"]:
-                        x = future_dynamic["dim1/numeric_value"][i][j]
-                        if x is None:
-                            continue  # is None used for outlier removal?
-                        if (x >= query["range_lower"]) and (x <= query["range_upper"]):
-                            count += 1
-                    else:
-                        count += 1
+        count = 0 
+        code_idx = future_dynamic.tensors["dim1/code"] == query["vocab_index"]
+        if query["has_value"] and query["use_value"]:
+            values = future_dynamic.tensors["dim1/numeric_value"][code_idx]
+            count = sum([query["range_lower"] <= x <= query["range_upper"]  for x in values])
+        else: 
+            count = sum(code_idx)
 
         return count
 
@@ -409,11 +392,12 @@ class EveryQueryDataset(PytorchDataset):
         shard = self.subj_map[subject_id]
         subject_idx = self.subj_indices[subject_id]
         static_row = self.static_dfs[shard][subject_idx].to_dict()
-        times = static_row["time"].to_numpy()[0].astype("datetime64[m]")
+        times = static_row['time'].item().to_numpy().astype("datetime64[m]")
+        assert np.all(times[:-1] <= times[1:]), 'subject times not sorted'
         return times
 
     def get_future_duration(self, subject_id, context_end_idx, record_end_idx):
-        assert context_end_idx <= record_end_idx
+        assert context_end_idx <= record_end_idx, f"context_end_idx: {context_end_idx}, record_end_idx: {record_end_idx}"
         times = self.get_subject_times(subject_id)
         # should be the timestamp at which the context ends (and not the timestamp of the next event)
         context_end_time = times[context_end_idx - 1]
@@ -426,6 +410,7 @@ class EveryQueryDataset(PytorchDataset):
 
     @SeedableMixin.WithSeed
     def _seeded_getitem(self, idx: int) -> dict[str, list[float]]:
+        
         context = super()._seeded_getitem(idx)
 
         (
@@ -435,16 +420,15 @@ class EveryQueryDataset(PytorchDataset):
             record_end_idx,
         ) = super().load_subject_dynamic_data(idx)
 
-        future_duration = self.get_future_duration(
-            subject_id, context["end_idx"], record_end_idx
-        )
-        future, is_censored = self.sample_future(max_valid_duration=future_duration)
+        future_duration = self.get_future_duration(subject_id, context["end_idx"], record_end_idx)
+        future, is_censored = self.sample_future(max_record_future=future_duration)
 
         event = self.sample_event()
         query = future | event
 
         if is_censored:
-            answer = {"censored": is_censored, "count": None, "occurs": None}
+            # censored is the mask for count and occurs
+            answer = {"censored": is_censored, "count": -1, "occurs": -1} 
         else:
             future_dynamic = subj_dynamic[context["end_idx"] : record_end_idx]
             count = self.tally_answer(future_dynamic, query)
@@ -459,31 +443,19 @@ class EveryQueryDataset(PytorchDataset):
     def _query_collate(self, batch: list[dict]) -> dict:
         return {
             "offset": torch.tensor([x["offset"] for x in batch], dtype=torch.float64),
-            "duration": torch.tensor(
-                [x["duration"] for x in batch], dtype=torch.float64
-            ),
-            "vocab_index": torch.tensor(
-                [x["vocab_index"] for x in batch], dtype=torch.int64
-            ),
-            "has_value": torch.tensor(
-                [x["has_value"] for x in batch], dtype=torch.bool
-            ),
-            "use_value": torch.tensor(
-                [x["use_value"] for x in batch], dtype=torch.bool
-            ),
-            "range_lower": torch.tensor(
-                [x["range_lower"] for x in batch], dtype=torch.float64
-            ),
-            "range_upper": torch.tensor(
-                [x["range_upper"] for x in batch], dtype=torch.float64
-            ),
+            "duration": torch.tensor([x["duration"] for x in batch], dtype=torch.float64),
+            "vocab_index": torch.tensor([x["code"] for x in batch], dtype=torch.int64),
+            "has_value": torch.tensor([x["has_value"] for x in batch], dtype=torch.bool),
+            "use_value": torch.tensor([x["use_value"] for x in batch], dtype=torch.bool),
+            "range_lower": torch.tensor([x["range_lower"] for x in batch], dtype=torch.float64),
+            "range_upper": torch.tensor([x["range_upper"] for x in batch], dtype=torch.float64),
         }
 
     def _answer_collate(self, batch: list[dict]) -> dict:
         return {
             "censored": torch.tensor([x["censored"] for x in batch], dtype=torch.bool),
-            "count": torch.tensor([x["count"] for x in batch], dtype=torch.int64),
-            "occurs": torch.tensor([x["occurs"] for x in batch], dtype=torch.bool),
+            "count": torch.tensor([x["count"] for x in batch], dtype=torch.int64), # count except -1 for censored
+            "occurs": torch.tensor([x["occurs"] for x in batch], dtype=torch.int64), # bool except -1 for censored
         }
 
     def collate(self, batch: list[dict]) -> dict:
