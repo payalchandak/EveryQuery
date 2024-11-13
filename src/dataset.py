@@ -427,7 +427,8 @@ class EveryQueryDataset(PytorchDataset):
         query = future | event
 
         if is_censored:
-            answer = {"censored": is_censored, "count": None, "occurs": None}
+            # censored is the mask for count and occurs
+            answer = {"censored": is_censored, "count": -1, "occurs": -1} 
         else:
             future_dynamic = subj_dynamic[context["end_idx"] : record_end_idx]
             count = self.tally_answer(future_dynamic, query)
@@ -442,31 +443,19 @@ class EveryQueryDataset(PytorchDataset):
     def _query_collate(self, batch: list[dict]) -> dict:
         return {
             "offset": torch.tensor([x["offset"] for x in batch], dtype=torch.float64),
-            "duration": torch.tensor(
-                [x["duration"] for x in batch], dtype=torch.float64
-            ),
-            "vocab_index": torch.tensor(
-                [x["vocab_index"] for x in batch], dtype=torch.int64
-            ),
-            "has_value": torch.tensor(
-                [x["has_value"] for x in batch], dtype=torch.bool
-            ),
-            "use_value": torch.tensor(
-                [x["use_value"] for x in batch], dtype=torch.bool
-            ),
-            "range_lower": torch.tensor(
-                [x["range_lower"] for x in batch], dtype=torch.float64
-            ),
-            "range_upper": torch.tensor(
-                [x["range_upper"] for x in batch], dtype=torch.float64
-            ),
+            "duration": torch.tensor([x["duration"] for x in batch], dtype=torch.float64),
+            "vocab_index": torch.tensor([x["vocab_index"] for x in batch], dtype=torch.int64),
+            "has_value": torch.tensor([x["has_value"] for x in batch], dtype=torch.bool),
+            "use_value": torch.tensor([x["use_value"] for x in batch], dtype=torch.bool),
+            "range_lower": torch.tensor([x["range_lower"] for x in batch], dtype=torch.float64),
+            "range_upper": torch.tensor([x["range_upper"] for x in batch], dtype=torch.float64),
         }
 
     def _answer_collate(self, batch: list[dict]) -> dict:
         return {
             "censored": torch.tensor([x["censored"] for x in batch], dtype=torch.bool),
-            "count": torch.tensor([x["count"] for x in batch], dtype=torch.int64),
-            "occurs": torch.tensor([x["occurs"] for x in batch], dtype=torch.bool),
+            "count": torch.tensor([x["count"] for x in batch], dtype=torch.int64), # count except -1 for censored
+            "occurs": torch.tensor([x["occurs"] for x in batch], dtype=torch.int64), # bool except -1 for censored
         }
 
     def collate(self, batch: list[dict]) -> dict:
