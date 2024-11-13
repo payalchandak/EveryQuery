@@ -1,5 +1,6 @@
-data/
+mimic/
 results/
+meds_torch/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

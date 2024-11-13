@@ -1,0 +1,31 @@
+defaults:
+  - pytorch_dataset
+  - _self_
+_target_: dataset.EveryQueryDataset.initialize
+
+code_sampling_strategy: frequency # uniform, frequency
+codes: 
+  - LAB//50868//mEq/L
+
+default_value_sampling_strategy: ignore # ignore, random_quantile, random_normal, manual
+quantiles: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
+# values_ignore:
+#   - code
+# values_random_quantile:
+#   - code
+# values_random_normal:
+#   - code
+# values_manual: 
+#   code: 
+#     - [lower, upper]
+#     - [lower, upper]
+
+normalize_query: False
+min_offset: 0
+min_duration: 60
+max_offset: 0
+max_duration: 60 
+duration_sampling_strategy: fixed # within_record, random, fixed
+fixed_duration: 1440
+offset_sampling_strategy: fixed # within_record, random, fixed
+fixed_offset: 0 
