@@ -289,7 +289,7 @@ class EveryQueryDataset(PytorchDataset):
             # range is provided in un-normalized units by user
             # can use mean/std from metadata
             # change in the preprocessing
-            return query
+        return query
 
     def sample_future(self, max_record_future):
         if max_record_future < 0:
@@ -371,20 +371,13 @@ class EveryQueryDataset(PytorchDataset):
         else:
             future_dynamic = future_dynamic[start_idx:end_idx]
 
-        future_dynamic = future_dynamic.tensors
-
-        count = 0
-        for i in range(len(future_dynamic["dim1/code"])):
-            for j in range(len(future_dynamic["dim1/code"][i])):
-                if future_dynamic["dim1/code"][i][j] == query["vocab_index"]:
-                    if query["has_value"] and query["use_value"]:
-                        x = future_dynamic["dim1/numeric_value"][i][j]
-                        if x is None:
-                            continue  # is None used for outlier removal?
-                        if (x >= query["range_lower"]) and (x <= query["range_upper"]):
-                            count += 1
-                    else:
-                        count += 1
+        count = 0 
+        code_idx = future_dynamic.tensors["dim1/code"] == query["vocab_index"]
+        if query["has_value"] and query["use_value"]:
+            values = future_dynamic.tensors["dim1/numeric_value"][code_idx]
+            count = sum([query["range_lower"] <= x <= query["range_upper"]  for x in values])
+        else: 
+            count = sum(code_idx)
 
         return count
 
@@ -412,10 +405,17 @@ class EveryQueryDataset(PytorchDataset):
         # record_end_time is last time you can use, and not the first time you can't use
         record_end_time = times[record_end_idx - 1]
         future_duration = (record_end_time - context_end_time) / np.timedelta64(1, "m")
+        # if future_duration < 0: 
+        #     print(f'context_end_idx: {context_end_idx}')
+        #     print(f'context_end_time: {context_end_time}')
+        #     print(f'record_end_idx: {record_end_idx}')
+        #     print(f'record_end_time: {record_end_time}')
+        #     print(f'times: {times}')
         return future_duration
 
     @SeedableMixin.WithSeed
     def _seeded_getitem(self, idx: int) -> dict[str, list[float]]:
+        
         context = super()._seeded_getitem(idx)
 
         (
