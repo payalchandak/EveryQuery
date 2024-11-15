@@ -453,9 +453,9 @@ class EveryQueryDataset(PytorchDataset):
 
     def _answer_collate(self, batch: list[dict]) -> dict:
         return {
-            "censored": torch.tensor([x["censored"] for x in batch], dtype=torch.bool),
-            "count": torch.tensor([x["count"] for x in batch], dtype=torch.int64), # count except -1 for censored
-            "occurs": torch.tensor([x["occurs"] for x in batch], dtype=torch.int64), # bool except -1 for censored
+            "censored": torch.tensor([x["censored"] for x in batch], dtype=torch.bool).unsqueeze(1),
+            "count": torch.tensor([x["count"] for x in batch], dtype=torch.float64).unsqueeze(1), # count except -1 for censored
+            "occurs": torch.tensor([x["occurs"] for x in batch], dtype=torch.float64).unsqueeze(1), # bool except -1 for censored
         }
 
     def collate(self, batch: list[dict]) -> dict:

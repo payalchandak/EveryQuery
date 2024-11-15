@@ -2,7 +2,9 @@ defaults:
   - input_encoder: triplet_encoder
   - backbone: triplet_transformer_decoder
   - _self_
-_target_: model.EveryQueryModule.initialize
+_target_: models.everyquery.EveryQueryModule.initialize
+
+mode: supervised_query
 
 optimizer:
   _target_: torch.optim.Adam
