@@ -5,7 +5,8 @@ _target_: dataset.EveryQueryDataset.initialize
 
 code_sampling_strategy: frequency # uniform, frequency
 codes: 
-  - HOSPITAL_DISCHARGE//HOME
+  - MEDS_DEATH
+  # - HOSPITAL_DISCHARGE//HOME
 
 default_value_sampling_strategy: ignore # ignore, random_quantile, random_normal, manual
 quantiles: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
@@ -26,6 +27,6 @@ min_duration: 60
 max_offset: 0
 max_duration: 60 
 duration_sampling_strategy: fixed # within_record, random, fixed
-fixed_duration: 10080 # 7 days
+fixed_duration: 1440 # 24 hr
 offset_sampling_strategy: fixed # within_record, random, fixed
 fixed_offset: 0 
