@@ -5,7 +5,9 @@ _target_: dataset.EveryQueryDataset.initialize
 
 code_sampling_strategy: frequency # uniform, frequency
 codes: 
-  - MEDS_DEATH
+  # - DIAGNOSIS//ICD//9//4589 # Hypotension, unspecified
+  - PROCEDURE//ICD//9//9605 # Other intubation of respiratory tract
+  # - MEDS_DEATH
   # - HOSPITAL_DISCHARGE//HOME
 
 default_value_sampling_strategy: ignore # ignore, random_quantile, random_normal, manual
