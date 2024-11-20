@@ -22,7 +22,9 @@ trainer:
     - 1
 
 model:
-  mode: supervised_context  # supervised_query
+  projector: 
+    mode: supervised_context  # supervised_query
+    dropout: 0
   token_dim: 512
   optimizer:
     lr: 0.0001

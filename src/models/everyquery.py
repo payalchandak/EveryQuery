@@ -1,7 +1,7 @@
 from omegaconf import DictConfig
 import torch
 from torchmetrics.classification import BinaryAUROC
-from meds_torch.models import BACKBONE_EMBEDDINGS_KEY as EMBED, MODEL_BATCH_LOSS_KEY as LOSS
+from meds_torch.models import BACKBONE_EMBEDDINGS_KEY
 from meds_torch.models.base_model import BaseModule
 from models.mlp import MLP
 
@@ -10,21 +10,21 @@ class EveryQueryModule(BaseModule):
         super().__init__(cfg)
         self.criterion = torch.nn.BCEWithLogitsLoss()
 
-        assert cfg.mode in [
+        assert cfg.projector.mode in [
             'supervised_context',
             'supervised_query',
         ]
 
-        if cfg.mode == 'supervised_context':
+        if cfg.projector.mode == 'supervised_context':
             self.embed_function = self.supervised_context
-            self.proj_censor = MLP(layers=[cfg.token_dim, 1], dropout_prob=0)
-            self.proj_occurs = MLP(layers=[cfg.token_dim, 1], dropout_prob=0)
+            self.proj_censor = MLP(layers=[cfg.token_dim, 1], dropout_prob=cfg.projector.dropout)
+            self.proj_occurs = MLP(layers=[cfg.token_dim, 1], dropout_prob=cfg.projector.dropout)
             
-        if cfg.mode == 'supervised_query': 
+        if cfg.projector.mode == 'supervised_query': 
             self.embed_function = self.supervised_query
-            self.proj_query = MLP(layers=[7, cfg.token_dim], dropout_prob=0)
-            self.proj_censor = MLP(layers=[cfg.token_dim*2, 1], dropout_prob=0)
-            self.proj_occurs = MLP(layers=[cfg.token_dim*2, 1], dropout_prob=0)
+            self.proj_query = MLP(layers=[7, cfg.token_dim], dropout_prob=cfg.projector.dropout)
+            self.proj_censor = MLP(layers=[cfg.token_dim*2, 1], dropout_prob=cfg.projector.dropout)
+            self.proj_occurs = MLP(layers=[cfg.token_dim*2, 1], dropout_prob=cfg.projector.dropout)
 
         self.metrics = {
             'train': {
@@ -71,12 +71,12 @@ class EveryQueryModule(BaseModule):
         query = self.proj_query(
             torch.vstack([batch['query'][k].float() for k in batch['query'].keys()]).T
         )
-        embed = torch.concat([context[EMBED], query], dim=1)
+        embed = torch.concat([context[BACKBONE_EMBEDDINGS_KEY], query], dim=1)
         return embed
 
     def supervised_context(self, batch): 
         context = self.model(self.input_encoder(batch['context']))
-        embed = context[EMBED]
+        embed = context[BACKBONE_EMBEDDINGS_KEY]
         return embed 
 
     def _step(self, batch, split):
