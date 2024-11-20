@@ -1,16 +1,14 @@
 from omegaconf import DictConfig
 import torch
-from torcheval.metrics.functional import binary_auroc
+from torchmetrics.classification import BinaryAUROC
 from meds_torch.models import BACKBONE_EMBEDDINGS_KEY as EMBED, MODEL_BATCH_LOSS_KEY as LOSS
 from meds_torch.models.base_model import BaseModule
 from models.mlp import MLP
 
-
 class EveryQueryModule(BaseModule): 
     def __init__(self, cfg: DictConfig):
         super().__init__(cfg)
-
-        self.bce = torch.nn.BCEWithLogitsLoss()
+        self.criterion = torch.nn.BCEWithLogitsLoss()
 
         assert cfg.mode in [
             'supervised_context',
@@ -18,85 +16,95 @@ class EveryQueryModule(BaseModule):
         ]
 
         if cfg.mode == 'supervised_context':
-            self.forward_fuction = self.supervised_context
+            self.embed_function = self.supervised_context
             self.proj_censor = MLP(layers=[cfg.token_dim, 1], dropout_prob=0)
             self.proj_occurs = MLP(layers=[cfg.token_dim, 1], dropout_prob=0)
             
         if cfg.mode == 'supervised_query': 
-            self.forward_fuction = self.supervised_query
+            self.embed_function = self.supervised_query
             self.proj_query = MLP(layers=[7, cfg.token_dim], dropout_prob=0)
             self.proj_censor = MLP(layers=[cfg.token_dim*2, 1], dropout_prob=0)
             self.proj_occurs = MLP(layers=[cfg.token_dim*2, 1], dropout_prob=0)
 
-    def _apply_bce(self, logits, target, mask=None): 
-        if mask is not None: 
-            logits = logits[mask]
-            target = target[mask]
-        loss = self.bce(logits, target)
-        auc = binary_auroc(logits.squeeze(1), target.squeeze(1))
-        return loss, auc
+        self.metrics = {
+            'train': {
+                'censor_auc': BinaryAUROC(),
+                'occurs_auc': BinaryAUROC(),
+            },
+            'val': {
+                'censor_auc': BinaryAUROC(),
+                'occurs_auc': BinaryAUROC(),
+            },
+            'test': {
+                'censor_auc': BinaryAUROC(),
+                'occurs_auc': BinaryAUROC(),
+            }
+        }
 
+    def update_metric(self, name, split, **kwargs): 
+        assert name in self.metrics[split], f"Metric '{name}' not found in {split} metrics."
+        self.metrics[split][name].update(**kwargs)
+        
+    def get_loss(self, embed, answer, split): 
+        censor_logits = self.proj_censor(embed)
+        censor_target = answer['censored'].float()
+        censor_loss = self.criterion(censor_logits, censor_target)
+        self.update_metric(name='censor_auc', split=split, preds=censor_logits.squeeze(1).sigmoid(), target=censor_target.squeeze(1).int())
+
+        mask = ~answer['censored'].squeeze(1)
+        occurs_logits = self.proj_occurs(embed[mask])
+        occurs_target = answer['occurs'][mask]
+        occurs_loss = self.criterion(occurs_logits, occurs_target)
+        self.update_metric(name='occurs_auc', split=split, preds=occurs_logits.squeeze(1).sigmoid(), target=occurs_target.squeeze(1).int())
+
+        loss = censor_loss + occurs_loss
+
+        if split in ['train','val','test']: 
+            self.log(f'{split}/loss', loss)
+            self.log(f'{split}/censor_loss', censor_loss)
+            self.log(f'{split}/occurs_loss', occurs_loss)
+
+        return loss 
 
     def supervised_query(self, batch): 
         context = self.model(self.input_encoder(batch['context']))
-
         query = self.proj_query(
             torch.vstack([batch['query'][k].float() for k in batch['query'].keys()]).T
         )
-
-        context_query_embed = torch.concat([context[EMBED],query], dim=1)
-
-        batch['censor_loss'], batch['censor_auc'] = self._apply_bce(
-            logits=self.proj_censor(context_query_embed),
-            target=batch['answer']['censored'].float(),
-        )
-
-        batch['occurs_loss'], batch['occurs_auc'] = self._apply_bce(
-            logits=self.proj_occurs(context_query_embed),
-            target=batch['answer']['occurs'],
-            mask=~batch['answer']['censored'].squeeze(1),
-        )
-
-        batch[LOSS] = batch['censor_loss'] + batch['occurs_loss']
-        return batch 
-            
+        embed = torch.concat([context[EMBED], query], dim=1)
+        return embed
 
     def supervised_context(self, batch): 
         context = self.model(self.input_encoder(batch['context']))
-
-        batch['censor_loss'], batch['censor_auc'] = self._apply_bce(
-            logits=self.proj_censor(context[EMBED]), 
-            target=batch['answer']['censored'].float(),
-        )
-
-        batch['occurs_loss'], batch['occurs_auc'] = self._apply_bce(
-            logits=self.proj_occurs(context[EMBED]),
-            target=batch['answer']['occurs'],
-            mask=~batch['answer']['censored'].squeeze(1),
-        )
-
-        batch[LOSS] = batch['censor_loss'] + batch['occurs_loss']
-        return batch
-
+        embed = context[EMBED]
+        return embed 
 
     def _step(self, batch, split):
-
-        batch = self.forward_fuction(batch)
-        
-        assert not torch.isnan(batch[LOSS]), f"{split} loss is NaN"
-        self._log(batch, split)
-
+        embed = self.embed_function(batch)
+        loss = self.get_loss(embed, batch['answer'], split)
+        assert not torch.isnan(loss), f"{split} loss is NaN"
         if split in ['train','val','test']: 
-            return batch[LOSS]
+            return loss
         else:
-            return batch
+            return embed
 
+    def on_epoch_end(self, split):
+        for metric_name, metric in self.metrics[split].items():
+            self.log(f'{split}/{metric_name}', metric.compute(), sync_dist=True)
+            metric.reset()
+        # self.log(f'{split}/censor_auc', self.metrics[split]['censor_auc'].compute())
+        # self.log(f'{split}/occurs_auc', self.metrics[split]['occurs_auc'].compute())
+        # self.metrics[split]['censor_auc'].reset()
+        # self.metrics[split]['occurs_auc'].reset()
+
+    def on_train_epoch_end(self):
+        self.on_epoch_end('train')
     
-    def _log(self, batch, split):
-        self.log(split + "/loss", batch[LOSS])
-        for k in batch.keys(): 
-            if k.endswith('_loss') or k.endswith('_auc'): 
-                self.log(split + f"/{k}", batch[k])
+    def on_validation_epoch_end(self):
+        self.on_epoch_end('val')
+
+    def on_test_epoch_end(self):
+        self.on_epoch_end('test')
 
     def training_step(self, batch):
         return self._step(batch, 'train')
