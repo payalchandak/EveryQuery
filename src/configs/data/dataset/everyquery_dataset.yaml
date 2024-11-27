@@ -6,8 +6,8 @@ _target_: dataset.EveryQueryDataset.initialize
 code_sampling_strategy: frequency # uniform, frequency
 codes: 
   # - DIAGNOSIS//ICD//9//4589 # Hypotension, unspecified
-  - PROCEDURE//ICD//9//9605 # Other intubation of respiratory tract
-  # - MEDS_DEATH
+  # - PROCEDURE//ICD//9//9605 # Other intubation of respiratory tract
+  - MEDS_DEATH
   # - HOSPITAL_DISCHARGE//HOME
 
 default_value_sampling_strategy: ignore # ignore, random_quantile, random_normal, manual
@@ -29,6 +29,9 @@ min_duration: 60
 max_offset: 0
 max_duration: 60 
 duration_sampling_strategy: fixed # within_record, random, fixed
-fixed_duration: 1440 # 24 hr
+fixed_duration: 1440
+# 1440 24 hr 
+# 10080 1 week
+# 525600 1 year
 offset_sampling_strategy: fixed # within_record, random, fixed
 fixed_offset: 0 
