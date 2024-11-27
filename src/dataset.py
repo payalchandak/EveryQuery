@@ -52,38 +52,70 @@ class EveryQueryDataset(PytorchDataset):
                 self.set_values(strategy=param.replace("values_", ""), data=obj)
 
         # future
-        self.future_strategies = ["within_record", "random", "fixed"]
-        if self.config.min_offset < 0:
-            raise ValueError("min_query_offset must be non-negative.")
-        if self.config.min_duration < 0:
-            raise ValueError("min_query_duration must be non-negative.")
-        if self.config.min_offset > self.config.max_offset:
-            raise ValueError("min_query_offset must not be greater than max_query_offset.")
-        if self.config.min_duration > self.config.max_duration:
-            raise ValueError("min_query_duration must not be greater than max_query_duration.")
+        self.future_strategies = ["within_record", "random", "fixed", "categorical"]
+        if self.config.min_future < 0:
+            raise ValueError("min_query_future must be non-negative.")
+        if self.config.min_future > self.config.max_future:
+            raise ValueError("min_query_future must not be greater than max_query_future.")
+        
+        # duration
         if self.config.duration_sampling_strategy not in self.future_strategies:
             raise ValueError(
                 f"duration_sampling_strategy must be one of {self.future_strategies}."
             )
+        if not self.config.min_future <= self.config.min_duration <= self.config.max_future: 
+            raise ValueError(f"min_duration must be in future bounds ({self.config.min_future}, {self.config.max_future}).")
+        if not self.config.min_future <= self.config.max_duration <= self.config.max_future: 
+            raise ValueError(f"max_duration must be in future bounds ({self.config.min_future}, {self.config.max_future}).")
         if self.config.duration_sampling_strategy == "fixed":
             if self.config.fixed_duration is None:
                 raise ValueError(
-                    "query_fixed_duration must be specified for 'fixed' sampling strategy."
+                    "fixed_duration must be specified for 'fixed' sampling strategy."
                 )
-            if self.config.fixed_duration < 0:
-                raise ValueError("query_fixed_duration must be non-negative.")
+            if not self.config.min_future <= self.config.fixed_duration <= self.config.max_future: 
+                raise ValueError(f"fixed_duration must be in future bounds ({self.config.min_future}, {self.config.max_future}).")
+        if self.config.duration_sampling_strategy == "categorical":
+            if self.config.categorical_duration is None:
+                raise ValueError(
+                    "categorical_duration must be specified for 'categorical' sampling strategy."
+                )
+            if not isinstance(self.config.categorical_duration, omegaconf.listconfig.ListConfig):
+                raise ValueError(
+                    f"categorical_duration should be {omegaconf.listconfig.ListConfig}, but got {type(self.config.categorical_duration)}."
+                )
+            for value in self.config.categorical_duration: 
+                if not self.config.min_future <= value<= self.config.max_future: 
+                    raise ValueError(f"value {value} in categorical_duration must be in future bounds ({self.config.min_future}, {self.config.max_future}).")
+        
+        # offset
         if self.config.offset_sampling_strategy not in self.future_strategies:
             raise ValueError(
                 f"offset_sampling_strategy must be one of {self.future_strategies}."
             )
+        if not self.config.min_future <= self.config.min_offset <= self.config.max_future: 
+            raise ValueError(f"min_offset must be in future bounds ({self.config.min_future}, {self.config.max_future}).")
+        if not self.config.min_future <= self.config.max_offset <= self.config.max_future: 
+            raise ValueError(f"max_offset must be in future bounds ({self.config.min_future}, {self.config.max_future}).")
         if self.config.offset_sampling_strategy == "fixed":
             if self.config.fixed_offset is None:
                 raise ValueError(
-                    "query_fixed_offset must be specified for 'fixed' sampling strategy."
+                    "fixed_offset must be specified for 'fixed' sampling strategy."
                 )
-            if self.config.fixed_offset < 0:
-                raise ValueError("query_fixed_offset must be non-negative.")
-
+            if not self.config.min_future <= self.config.fixed_offset <= self.config.max_future: 
+                raise ValueError(f"fixed_offset must be in future bounds ({self.config.min_future}, {self.config.max_future}).")
+        if self.config.offset_sampling_strategy == "categorical":
+            if self.config.categorical_offset is None:
+                raise ValueError(
+                    "categorical_offset must be specified for 'categorical' sampling strategy."
+                )
+            if not isinstance(self.config.categorical_offset, omegaconf.listconfig.ListConfig):
+                raise ValueError(
+                    f"categorical_offset should be {omegaconf.listconfig.ListConfig}, but got {type(self.config.categorical_offset)}."
+                )
+            for value in self.config.categorical_offset: 
+                if not self.config.min_future <= value<= self.config.max_future: 
+                    raise ValueError(f"value {value} in categorical_offset must be in future bounds ({self.config.min_future}, {self.config.max_future}).")
+        
     def _load_data(self):
         return (
             pl.read_parquet(self.config.code_metadata_fp)
@@ -279,11 +311,11 @@ class EveryQueryDataset(PytorchDataset):
 
     def normalize(self, query):
         if self.config.normalize_query:
-            query["duration"] = (query["duration"] - self.config.min_duration) / (
-                self.config.max_duration - self.config.min_duration
+            query["duration"] = (query["duration"] - self.config.min_future) / (
+                self.config.max_future - self.config.min_future
             )
-            query["offset"] = (query["offset"] - self.config.min_offset) / (
-                self.config.max_offset - self.config.min_offset
+            query["offset"] = (query["offset"] - self.config.min_future) / (
+                self.config.max_future - self.config.min_future
             )
             # tbd: query['range_lower'], query['range_upper']
             # range is provided in un-normalized units by user
@@ -323,6 +355,8 @@ class EveryQueryDataset(PytorchDataset):
                 duration = np.random.randint(
                     self.config.min_duration, self.config.max_duration
                 )
+            case "categorical": 
+                duration = np.random.choice(self.config.categorical_duration)
             case "fixed":
                 duration = self.config.fixed_duration
         if duration < 0:
@@ -340,9 +374,9 @@ class EveryQueryDataset(PytorchDataset):
                         high=min(self.config.max_offset, max_record_future),
                     )
             case "random":
-                offset = np.random.randint(
-                    self.config.min_offset, self.config.max_offset
-                )
+                offset = np.random.randint(self.config.min_offset, self.config.max_offset)
+            case "categorical": 
+                offset = np.random.choice(self.config.categorical_offset)
             case "fixed":
                 offset = self.config.fixed_offset
         if offset < 0:
@@ -413,12 +447,7 @@ class EveryQueryDataset(PytorchDataset):
         
         context = super()._seeded_getitem(idx)
 
-        (
-            subj_dynamic,
-            subject_id,
-            record_start_idx,
-            record_end_idx,
-        ) = super().load_subject_dynamic_data(idx)
+        subj_dynamic, subject_id, record_start_idx, record_end_idx = super().load_subject_dynamic_data(idx)
 
         future_duration = self.get_future_duration(subject_id, context["end_idx"], record_end_idx)
         future, is_censored = self.sample_future(max_record_future=future_duration)
