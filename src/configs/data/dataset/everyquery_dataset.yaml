@@ -24,18 +24,22 @@ quantiles: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
 #     - [lower, upper]
 
 normalize_query: False
-min_offset: 0
+min_future: 0 
+max_future: 525600 # 1 year
+
+duration_sampling_strategy: categorical # within_record, random, fixed, categorical
 min_duration: 60
-max_offset: 0
 max_duration: 60 
-duration_sampling_strategy: fixed # within_record, random, fixed, categorical
 fixed_duration: 1440 # 24 hour
 categorical_duration: 
   - 131400 # 3 months
   - 262800 # 6 months
   - 394200 # 9 months
   - 525600 # 1 year
-offset_sampling_strategy: fixed # within_record, random, fixed, categorical
+
+offset_sampling_strategy: categorical # within_record, random, fixed, categorical
+min_offset: 0
+max_offset: 0
 fixed_offset: 0 
 categorical_offset: 
   - 131400 # 3 months
