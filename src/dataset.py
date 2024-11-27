@@ -52,7 +52,7 @@ class EveryQueryDataset(PytorchDataset):
                 self.set_values(strategy=param.replace("values_", ""), data=obj)
 
         # future
-        self.future_strategies = ["within_record", "random", "fixed"]
+        self.future_strategies = ["within_record", "random", "fixed", "categorical"]
         if self.config.min_offset < 0:
             raise ValueError("min_query_offset must be non-negative.")
         if self.config.min_duration < 0:
@@ -68,10 +68,23 @@ class EveryQueryDataset(PytorchDataset):
         if self.config.duration_sampling_strategy == "fixed":
             if self.config.fixed_duration is None:
                 raise ValueError(
-                    "query_fixed_duration must be specified for 'fixed' sampling strategy."
+                    "fixed_duration must be specified for 'fixed' sampling strategy."
                 )
             if self.config.fixed_duration < 0:
                 raise ValueError("query_fixed_duration must be non-negative.")
+        if self.config.duration_sampling_strategy == "categorical":
+            if self.config.categorical_duration is None:
+                raise ValueError(
+                    "categorical_duration must be specified for 'categorical' sampling strategy."
+                )
+            if not isinstance(self.config.categorical_duration, omegaconf.listconfig.ListConfig):
+                raise ValueError(
+                    f"categorical_duration should be {omegaconf.listconfig.ListConfig}, but got {type(self.config.categorical_duration)}."
+                )
+            for value in self.config.categorical_duration: 
+                if not value > 0: 
+                   raise ValueError("value in categorical_duration must be non-negative.")
+        
         if self.config.offset_sampling_strategy not in self.future_strategies:
             raise ValueError(
                 f"offset_sampling_strategy must be one of {self.future_strategies}."
@@ -79,10 +92,22 @@ class EveryQueryDataset(PytorchDataset):
         if self.config.offset_sampling_strategy == "fixed":
             if self.config.fixed_offset is None:
                 raise ValueError(
-                    "query_fixed_offset must be specified for 'fixed' sampling strategy."
+                    "fixed_offset must be specified for 'fixed' sampling strategy."
                 )
             if self.config.fixed_offset < 0:
-                raise ValueError("query_fixed_offset must be non-negative.")
+                raise ValueError("fixed_offset must be non-negative.")
+        if self.config.offset_sampling_strategy == "categorical":
+            if self.config.categorical_offset is None:
+                raise ValueError(
+                    "categorical_offset must be specified for 'categorical' sampling strategy."
+                )
+            if not isinstance(self.config.categorical_offset, omegaconf.listconfig.ListConfig):
+                raise ValueError(
+                    f"categorical_offset should be {omegaconf.listconfig.ListConfig}, but got {type(self.config.categorical_offset)}."
+                )
+            for value in self.config.categorical_offset: 
+                if not value > 0: 
+                   raise ValueError("value in categorical_offset must be non-negative.")
 
     def _load_data(self):
         return (
