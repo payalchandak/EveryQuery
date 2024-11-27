@@ -348,6 +348,8 @@ class EveryQueryDataset(PytorchDataset):
                 duration = np.random.randint(
                     self.config.min_duration, self.config.max_duration
                 )
+            case "categorical": 
+                duration = np.random.choice(self.config.categorical_duration)
             case "fixed":
                 duration = self.config.fixed_duration
         if duration < 0:
@@ -365,9 +367,9 @@ class EveryQueryDataset(PytorchDataset):
                         high=min(self.config.max_offset, max_record_future),
                     )
             case "random":
-                offset = np.random.randint(
-                    self.config.min_offset, self.config.max_offset
-                )
+                offset = np.random.randint(self.config.min_offset, self.config.max_offset)
+            case "categorical": 
+                offset = np.random.choice(self.config.categorical_offset)
             case "fixed":
                 offset = self.config.fixed_offset
         if offset < 0:
@@ -438,12 +440,7 @@ class EveryQueryDataset(PytorchDataset):
         
         context = super()._seeded_getitem(idx)
 
-        (
-            subj_dynamic,
-            subject_id,
-            record_start_idx,
-            record_end_idx,
-        ) = super().load_subject_dynamic_data(idx)
+        subj_dynamic, subject_id, record_start_idx, record_end_idx = super().load_subject_dynamic_data(idx)
 
         future_duration = self.get_future_duration(subject_id, context["end_idx"], record_end_idx)
         future, is_censored = self.sample_future(max_record_future=future_duration)
