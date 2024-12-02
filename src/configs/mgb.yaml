@@ -75,6 +75,7 @@ lab:
     code:
       - LAB
       - col(name)
+      - col(units)
     numeric_value: col(value)
     time: col(date)
     time_format: "%Y-%m-%d %H:%M:%S"
@@ -107,18 +108,6 @@ medication:
     time: col(stop_date)
     time_format: "%Y-%m-%d"
     hospital: col(hospital)
-
-mrn:
-  mgh_mrn:
-    code:
-      - MGH_MRN
-      - col(mgh_mrn)
-    time: null
-  bwh_mrn:
-    code:
-      - BWH_MRN
-      - col(bwh_mrn)
-    time: null
 
 note_cardiology: 
   cardiology: 
@@ -221,6 +210,7 @@ physical_numeric:
     code: 
       - PHYSICAL
       - col(name)
+      - col(units)
     numeric_value: result
     time: date
     time_format: "%Y-%m-%d"
