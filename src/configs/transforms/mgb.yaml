@@ -1,0 +1,215 @@
+subject_id_col: "empi"
+
+demographic:
+  sex:
+    code:
+      - SEX
+      - col(sex)
+    time: null
+  date_of_birth:
+    code: DATE_OF_BIRTH
+    time: col(date_of_birth)
+  race:
+    code:
+      - RACE
+      - col(race)
+    time: null
+  zip_code:
+    code:
+      - ZIP
+      - col(zip_code)
+    time: null
+  country:
+    code:
+      - COUNTRY
+      - col(country)
+    time: null
+  vital_status:
+    code:
+      - VITAL_STATUS
+      - col(vital_status)
+    time: null
+  date_of_death:
+    code:
+      - DATE_OF_DEATH
+    time: col(date_of_death)
+
+diagnosis:
+  diagnosis:
+    code:
+      - DIAGNOSIS
+      - col(name)
+    time: col(date)
+    hospital: col(hospital)
+
+ecg: 
+  ecg:
+    code: ECG
+    time: col(date)
+    hospital: col(hospital)
+    paced: col(paced)
+    stored_at: col(path)
+
+encounter:
+  admit_date:
+    code:
+      - ENCOUNTER
+      - ADMIT_DATE
+    time: col(admit_date)
+    hospital: col(hospital)
+  discharge_date:
+    code:
+      - ENCOUNTER
+      - DISCHARGE_DATE
+    time: col(discharge_date)
+    hospital: col(hospital)
+ 
+lab:
+  lab_tests:
+    code:
+      - LAB
+      - col(name)
+      - col(units)
+    numeric_value: col(value)
+    time: col(date)
+    units: col(units)
+    loinc_code: col(loinc)
+
+lvef:
+  lvef:
+    code:
+      - LVEF
+    numeric_value: col(lvef)
+    time: col(lvef_date)
+    hospital: col(hospital)
+
+medication: 
+  med_start: 
+    code: 
+      - MEDICATION
+      - START
+      - col(drugbank_name)
+    time: col(start_date)
+    hospital: col(hospital)
+  med_stop: 
+    code: 
+      - MEDICATION
+      - STOP
+      - col(drugbank_name)
+    time: col(stop_date)
+    hospital: col(hospital)
+
+note_cardiology: 
+  cardiology: 
+    code: 
+      - NOTE
+      - CARDIOLOGY
+      - col(description)
+    time: col(date)
+    text_value: col(text)
+    
+note_discharge:
+  discharge: 
+    code: 
+      - NOTE
+      - DISCHARGE
+      - col(description)
+    time: col(date)
+    text_value: col(text)
+
+note_endoscopy:
+  endoscopy:
+    code:
+      - NOTE
+      - ENDOSCOPY
+    time: col(date)
+    text_value: col(text)
+
+note_history:
+  history:
+    code:
+      - NOTE
+      - HISTORY
+    time: col(date)
+    text_value: col(text)
+
+note_outpatient:
+  outpatient:
+    code:
+      - NOTE
+      - OUTPATIENT
+    time: col(date)
+    text_value: col(text)
+
+note_pathology:
+  pathology:
+    code:
+      - NOTE
+      - PATHOLOGY
+      - col(description)
+    time: col(date)
+    text_value: col(text)
+
+note_progress:
+  progress:
+    code:
+      - NOTE
+      - PROGRESS
+    time: col(date)
+    text_value: col(text)
+
+note_pulmonary:
+  pulmonary:
+    code:
+      - NOTE
+      - PULMONARY
+      - col(description)
+    time: col(date)
+    text_value: col(text)
+
+note_radiology:
+  radiology:
+    code:
+      - NOTE
+      - RADIOLOGY
+      - col(description)
+    time: col(date)
+    text_value: col(text)
+
+note_visit:
+  visit:
+    code:
+      - NOTE
+      - VISIT
+      - col(description)
+    time: col(date)
+    text_value: col(text)
+
+physical_numeric:
+  physical:
+    code: 
+      - PHYSICAL
+      - col(name)
+      - col(units)
+    numeric_value: result
+    time: col(date)
+    units: col(units)
+    hospital: col(hospital)
+
+physical_string:
+  physical:
+    code: 
+      - PHYSICAL
+      - col(name)
+    text_value: col(result)
+    time: col(date)
+    units: col(units)
+    hospital: col(hospital)
+
+procedure:
+  procedure:
+    code:
+      - PROCEDURE
+      - col(name)
+    time: col(date)
+    hospital: col(hospital)

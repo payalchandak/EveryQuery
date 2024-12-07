@@ -1,0 +1,3 @@
+parallelize:
+  n_workers: 5
+  launcher: "joblib"
