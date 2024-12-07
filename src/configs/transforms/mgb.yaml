@@ -9,7 +9,6 @@ demographic:
   date_of_birth:
     code: DATE_OF_BIRTH
     time: col(date_of_birth)
-    time_format: "%Y-%m-%d"
   race:
     code:
       - RACE
@@ -34,7 +33,6 @@ demographic:
     code:
       - DATE_OF_DEATH
     time: col(date_of_death)
-    time_format: "%Y-%m-%d"
 
 diagnosis:
   diagnosis:
@@ -42,14 +40,12 @@ diagnosis:
       - DIAGNOSIS
       - col(name)
     time: col(date)
-    time_format: "%Y-%m-%d"
     hospital: col(hospital)
 
 ecg: 
   ecg:
     code: ECG
     time: col(date)
-    time_format: "%Y-%m-%d %H:%M:%S"
     hospital: col(hospital)
     paced: col(paced)
     stored_at: col(path)
@@ -60,14 +56,12 @@ encounter:
       - ENCOUNTER
       - ADMIT_DATE
     time: col(admit_date)
-    time_format: "%Y-%m-%d"
     hospital: col(hospital)
   discharge_date:
     code:
       - ENCOUNTER
       - DISCHARGE_DATE
     time: col(discharge_date)
-    time_format: "%Y-%m-%d"
     hospital: col(hospital)
  
 lab:
@@ -78,7 +72,6 @@ lab:
       - col(units)
     numeric_value: col(value)
     time: col(date)
-    time_format: "%Y-%m-%d %H:%M:%S"
     units: col(units)
     loinc_code: col(loinc)
 
@@ -88,7 +81,6 @@ lvef:
       - LVEF
     numeric_value: col(lvef)
     time: col(lvef_date)
-    time_format: "%Y-%m-%d"
     hospital: col(hospital)
 
 medication: 
@@ -98,7 +90,6 @@ medication:
       - START
       - col(drugbank_name)
     time: col(start_date)
-    time_format: "%Y-%m-%d"
     hospital: col(hospital)
   med_stop: 
     code: 
@@ -106,7 +97,6 @@ medication:
       - STOP
       - col(drugbank_name)
     time: col(stop_date)
-    time_format: "%Y-%m-%d"
     hospital: col(hospital)
 
 note_cardiology: 
@@ -115,8 +105,7 @@ note_cardiology:
       - NOTE
       - CARDIOLOGY
       - col(description)
-    time: date
-    time_format: "%Y-%m-%d %H:%M:%S"
+    time: col(date)
     text_value: col(text)
     
 note_discharge:
@@ -125,8 +114,7 @@ note_discharge:
       - NOTE
       - DISCHARGE
       - col(description)
-    time: date
-    time_format: "%Y-%m-%d %H:%M:%S"
+    time: col(date)
     text_value: col(text)
 
 note_endoscopy:
@@ -134,27 +122,24 @@ note_endoscopy:
     code:
       - NOTE
       - ENDOSCOPY
-    time: date
-    time_format: "%Y-%m-%d %H:%M:%S"
-    text_value: col('text')
+    time: col(date)
+    text_value: col(text)
 
 note_history:
   history:
     code:
       - NOTE
       - HISTORY
-    time: date
-    time_format: "%Y-%m-%d %H:%M:%S"
-    text_value: col('text')
+    time: col(date)
+    text_value: col(text)
 
 note_outpatient:
   outpatient:
     code:
       - NOTE
       - OUTPATIENT
-    time: date
-    time_format: "%Y-%m-%d %H:%M:%S"
-    text_value: col('text')
+    time: col(date)
+    text_value: col(text)
 
 note_pathology:
   pathology:
@@ -162,18 +147,16 @@ note_pathology:
       - NOTE
       - PATHOLOGY
       - col(description)
-    time: date
-    time_format: "%Y-%m-%d %H:%M:%S"
-    text_value: col('text')
+    time: col(date)
+    text_value: col(text)
 
 note_progress:
   progress:
     code:
       - NOTE
       - PROGRESS
-    time: date
-    time_format: "%Y-%m-%d %H:%M:%S"
-    text_value: col('text')
+    time: col(date)
+    text_value: col(text)
 
 note_pulmonary:
   pulmonary:
@@ -181,9 +164,8 @@ note_pulmonary:
       - NOTE
       - PULMONARY
       - col(description)
-    time: date
-    time_format: "%Y-%m-%d %H:%M:%S"
-    text_value: col('text')
+    time: col(date)
+    text_value: col(text)
 
 note_radiology:
   radiology:
@@ -191,9 +173,8 @@ note_radiology:
       - NOTE
       - RADIOLOGY
       - col(description)
-    time: date
-    time_format: "%Y-%m-%d %H:%M:%S"
-    text_value: col('text')
+    time: col(date)
+    text_value: col(text)
 
 note_visit:
   visit:
@@ -201,9 +182,8 @@ note_visit:
       - NOTE
       - VISIT
       - col(description)
-    time: date
-    time_format: "%Y-%m-%d %H:%M:%S"
-    text_value: col('text')
+    time: col(date)
+    text_value: col(text)
 
 physical_numeric:
   physical:
@@ -212,10 +192,9 @@ physical_numeric:
       - col(name)
       - col(units)
     numeric_value: result
-    time: date
-    time_format: "%Y-%m-%d"
-    units: col('units')
-    hospital: col('hospital')
+    time: col(date)
+    units: col(units)
+    hospital: col(hospital)
 
 physical_string:
   physical:
@@ -223,10 +202,9 @@ physical_string:
       - PHYSICAL
       - col(name)
     text_value: col(result)
-    time: date
-    time_format: "%Y-%m-%d"
-    units: col('units')
-    hospital: col('hospital')
+    time: col(date)
+    units: col(units)
+    hospital: col(hospital)
 
 procedure:
   procedure:
@@ -234,5 +212,4 @@ procedure:
       - PROCEDURE
       - col(name)
     time: col(date)
-    time_format: "%Y-%m-%d"
     hospital: col(hospital)
