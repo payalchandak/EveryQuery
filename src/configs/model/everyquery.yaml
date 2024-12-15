@@ -4,8 +4,6 @@ defaults:
   - _self_
 _target_: models.everyquery.EveryQueryModule.initialize
 
-mode: supervised_query
-
 optimizer:
   _target_: torch.optim.Adam
   _partial_: true
