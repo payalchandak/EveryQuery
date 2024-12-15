@@ -19,13 +19,13 @@ trainer:
   gradient_clip_val: 1.0
   log_every_n_steps: 10
   devices: 
-    - 0
-    - 2 
+    - 1
 
 model:
   projector: 
-    mode: supervised_context
+    mode: supervised_query
     dropout: 0
+  query_dim: 7
   token_dim: 512
   optimizer:
     lr: 0.0001

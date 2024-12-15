@@ -22,9 +22,9 @@ class EveryQueryModule(BaseModule):
             
         if cfg.projector.mode == 'supervised_query': 
             self.embed_function = self.supervised_query
-            self.proj_query = MLP(layers=[7, cfg.token_dim], dropout_prob=cfg.projector.dropout)
-            self.proj_censor = MLP(layers=[cfg.token_dim*2, 1], dropout_prob=cfg.projector.dropout)
-            self.proj_occurs = MLP(layers=[cfg.token_dim*2, 1], dropout_prob=cfg.projector.dropout)
+            self.proj_query = MLP(layers=[7, cfg.query_dim], dropout_prob=cfg.projector.dropout)
+            self.proj_censor = MLP(layers=[cfg.token_dim+cfg.query_dim, 1], dropout_prob=cfg.projector.dropout)
+            self.proj_occurs = MLP(layers=[cfg.token_dim+cfg.query_dim, 1], dropout_prob=cfg.projector.dropout)
 
         self.metrics = {
             'train': {
@@ -68,9 +68,7 @@ class EveryQueryModule(BaseModule):
 
     def supervised_query(self, batch): 
         context = self.model(self.input_encoder(batch['context']))
-        query = self.proj_query(
-            torch.vstack([batch['query'][k].float() for k in batch['query'].keys()]).T
-        )
+        query = self.proj_query(torch.vstack([batch['query'][k].float() for k in batch['query'].keys()]).T)
         embed = torch.concat([context[BACKBONE_EMBEDDINGS_KEY], query], dim=1)
         return embed
 
