@@ -22,7 +22,7 @@ token_dim: 4
 vocab_size: ${data.dataset.vocab_size}
 # get_representations: false
 # task_name: ${data.dataset.task_name}
-batch_size: ${data.dataset.dataloader.batch_size}
+batch_size: ${data.dataloader.batch_size}
 
 # compile model for faster training with pytorch 2.0
 compile: false
