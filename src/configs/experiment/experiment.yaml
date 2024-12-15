@@ -7,7 +7,7 @@ defaults:
   - override /trainer: gpu
 
 tags:
-  - "mimiciv"
+  - "mgb"
   - "triplet"
   - "supervised"
 
@@ -19,11 +19,11 @@ trainer:
   gradient_clip_val: 1.0
   log_every_n_steps: 10
   devices: 
-    - 1
+    - 0
 
 model:
   projector: 
-    mode: supervised_context  # supervised_query
+    mode: supervised_query
     dropout: 0
   token_dim: 512
   optimizer:
