@@ -10,21 +10,28 @@ class EveryQueryModule(BaseModule):
         super().__init__(cfg)
         self.criterion = torch.nn.BCEWithLogitsLoss()
 
-        assert cfg.projector.mode in [
+        assert self.cfg.projector.mode in [
             'supervised_context',
             'supervised_query',
         ]
 
-        if cfg.projector.mode == 'supervised_context':
+        query_encoding_mode = {
+            'stack':self.cfg.query.embed_dim,
+            'triplet':self.cfg.token_dim,
+        }
+        assert self.cfg.query.mode in query_encoding_mode.keys()
+        self.cfg.query.encod_dim = query_encoding_mode[self.cfg.query.mode]
+
+        if self.cfg.projector.mode == 'supervised_context':
             self.embed_function = self.supervised_context
-            self.proj_censor = MLP(layers=[cfg.token_dim, 1], dropout_prob=cfg.projector.dropout)
-            self.proj_occurs = MLP(layers=[cfg.token_dim, 1], dropout_prob=cfg.projector.dropout)
+            self.proj_censor = MLP(layers=[self.cfg.token_dim, 1], dropout_prob=self.cfg.projector.dropout)
+            self.proj_occurs = MLP(layers=[self.cfg.token_dim, 1], dropout_prob=self.cfg.projector.dropout)
             
-        if cfg.projector.mode == 'supervised_query': 
+        if self.cfg.projector.mode == 'supervised_query': 
             self.embed_function = self.supervised_query
-            self.proj_query = MLP(layers=[7, cfg.query_dim], dropout_prob=cfg.projector.dropout)
-            self.proj_censor = MLP(layers=[cfg.token_dim+cfg.query_dim, 1], dropout_prob=cfg.projector.dropout)
-            self.proj_occurs = MLP(layers=[cfg.token_dim+cfg.query_dim, 1], dropout_prob=cfg.projector.dropout)
+            self.proj_query = MLP(layers=[self.cfg.query.encod_dim, self.cfg.query.embed_dim], dropout_prob=self.cfg.projector.dropout).append(torch.nn.ReLU())
+            self.proj_censor = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 1], dropout_prob=self.cfg.projector.dropout)
+            self.proj_occurs = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 1], dropout_prob=self.cfg.projector.dropout)
 
         self.metrics = {
             'train': {
@@ -66,9 +73,26 @@ class EveryQueryModule(BaseModule):
 
         return loss 
 
+    def query_encoder(self, query): 
+        match self.cfg.query.mode: 
+            case 'stack': 
+                encoding = torch.vstack([query[k].float() for k in query.keys()]).T
+            case 'triplet':
+                code = self.input_encoder.code_embedder.forward(query['code']) 
+                range_mask = query['has_value'].unsqueeze(1) * query['use_value'].unsqueeze(1)
+                range_lower = self.input_encoder.numeric_value_embedder.forward(query['range_lower'].unsqueeze(1).float()) * range_mask 
+                range_upper = self.input_encoder.numeric_value_embedder.forward(query['range_upper'].unsqueeze(1).float()) * range_mask 
+                # can change to time delta days and use input encoder
+                duration = query['duration'].unsqueeze(1).repeat(1,self.cfg.token_dim)
+                offset = query['offset'].unsqueeze(1).repeat(1,self.cfg.token_dim)
+                encoding = code + range_lower + range_upper + duration + offset 
+        assert encoding.shape[1] == self.cfg.query.encod_dim
+        encoding = encoding.float()
+        return encoding
+
     def supervised_query(self, batch): 
         context = self.model(self.input_encoder(batch['context']))
-        query = self.proj_query(torch.vstack([batch['query'][k].float() for k in batch['query'].keys()]).T)
+        query = self.proj_query(self.query_encoder(batch['query']))
         embed = torch.concat([context[BACKBONE_EMBEDDINGS_KEY], query], dim=1)
         return embed
 
