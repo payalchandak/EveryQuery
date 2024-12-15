@@ -23,7 +23,7 @@ values_manual:
 #     - [lower, upper]
 #     - [lower, upper]
 
-normalize_query: False
+normalize_query: True
 min_future: 0 
 max_future: 525600 # 1 year
 
