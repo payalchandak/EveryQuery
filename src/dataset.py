@@ -30,6 +30,7 @@ class EveryQueryDataset(PytorchDataset):
             )
         
         self._metadata_dict = self._load_data().to_dict()
+        self._code_options_dict = {}
 
         obj = self.config.get("codes", None)
         if obj is not None:
@@ -128,6 +129,19 @@ class EveryQueryDataset(PytorchDataset):
             self._metadata_dict = value
         else:
             raise TypeError("metadata must be a Polars DataFrame or a list of dictionaries.")
+
+    @property
+    def code_options(self):
+        return pl.DataFrame(self._code_options_dict)
+
+    @code_options.setter
+    def code_options(self, value):
+        if isinstance(value, pl.DataFrame):
+            self._code_options_dict = value.to_dict()
+        elif isinstance(value, list):
+            self._code_options_dict = value
+        else:
+            raise TypeError("code_options must be a Polars DataFrame or a list of dictionaries.")
 
     def _load_data(self):
         return (
