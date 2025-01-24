@@ -28,8 +28,8 @@ class EveryQueryDataset(PytorchDataset):
             raise ValueError(
                 f"default_value_sampling_strategy must be one of {self.value_strategies}"
             )
-
-        self.metadata = self._load_data()
+        
+        self._metadata_dict = self._load_data().to_dict()
 
         obj = self.config.get("codes", None)
         if obj is not None:
@@ -116,6 +116,19 @@ class EveryQueryDataset(PytorchDataset):
                 if not self.config.min_future <= value<= self.config.max_future: 
                     raise ValueError(f"value {value} in categorical_offset must be in future bounds ({self.config.min_future}, {self.config.max_future}).")
         
+    @property
+    def metadata(self):
+        return pl.DataFrame(self._metadata_dict)  
+
+    @metadata.setter
+    def metadata(self, value):
+        if isinstance(value, pl.DataFrame):
+            self._metadata_dict = value.to_dict() 
+        elif isinstance(value, list):
+            self._metadata_dict = value
+        else:
+            raise TypeError("metadata must be a Polars DataFrame or a list of dictionaries.")
+
     def _load_data(self):
         return (
             pl.read_parquet(self.config.code_metadata_fp)
