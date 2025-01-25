@@ -29,8 +29,12 @@ class EveryQueryDataset(PytorchDataset):
                 f"default_value_sampling_strategy must be one of {self.value_strategies}"
             )
         
-        self._metadata_dict = self._load_data().to_dict()
+        df = self._load_data()
+        self._metadata_dict = df.to_dicts()
+        self._metadata_schema = df.schema
+
         self._code_options_dict = {}
+        self._code_options_schema = None
 
         obj = self.config.get("codes", None)
         if obj is not None:
@@ -119,12 +123,13 @@ class EveryQueryDataset(PytorchDataset):
         
     @property
     def metadata(self):
-        return pl.DataFrame(self._metadata_dict)  
+        return pl.DataFrame(self._metadata_dict, schema=pl.Schema(self._metadata_schema))  
 
     @metadata.setter
     def metadata(self, value):
         if isinstance(value, pl.DataFrame):
-            self._metadata_dict = value.to_dict() 
+            self._metadata_dict = value.to_dicts() 
+            self._metadata_schema = value.schema
         elif isinstance(value, list):
             self._metadata_dict = value
         else:
@@ -132,12 +137,13 @@ class EveryQueryDataset(PytorchDataset):
 
     @property
     def code_options(self):
-        return pl.DataFrame(self._code_options_dict)
+        return pl.DataFrame(self._code_options_dict, schema=pl.Schema(self._code_options_schema))
 
     @code_options.setter
     def code_options(self, value):
         if isinstance(value, pl.DataFrame):
-            self._code_options_dict = value.to_dict()
+            self._code_options_dict = value.to_dicts()
+            self._code_options_schema = value.schema
         elif isinstance(value, list):
             self._code_options_dict = value
         else:
