@@ -27,10 +27,10 @@ normalize_query: True
 min_future: 0 
 max_future: 525600 # 1 year
 
-duration_sampling_strategy: fixed # within_record, random, fixed, categorical
+duration_sampling_strategy: categorical # within_record, random, fixed, categorical
 min_duration: 60
 max_duration: 60 
-fixed_duration: 525600 # 1 year
+fixed_duration: 
 categorical_duration: 
   - 131400 # 3 months
   - 262800 # 6 months

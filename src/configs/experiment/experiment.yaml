@@ -10,6 +10,7 @@ tags:
   - "mgb"
   - "triplet"
   - "supervised"
+  - "LVEF"
 
 seed: 140799
 
@@ -27,7 +28,7 @@ model:
     dropout: 0
   query:
     mode: triplet # stack, triplet
-    encod_dim: # set later based on mode
+    encod_dim: # will be set automatically based on mode
     embed_dim: 7
   token_dim: 512
   optimizer:
