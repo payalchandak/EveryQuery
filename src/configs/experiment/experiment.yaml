@@ -15,12 +15,12 @@ tags:
 seed: 140799
 
 trainer:
-  min_epochs: 50
+  min_epochs: 35
   max_epochs: 70
   gradient_clip_val: 1.0
   log_every_n_steps: 10
   devices: 
-    - 2
+    - 0
 
 logger:
   wandb:
