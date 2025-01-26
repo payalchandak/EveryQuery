@@ -13,6 +13,7 @@ from meds_torch.eval import evaluate
 from dataset import EveryQueryDataset
 from models.everyquery import EveryQueryModule
 from models.mlp import MLP 
+import ipdb
 
 setup_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)
@@ -25,11 +26,18 @@ def main(cfg: DictConfig) -> None:
     Args:
         cfg (DictConfig): configuration composed by Hydra.
     """
-    # apply extra utilities
-    # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
-    configure_logging(cfg)
-
-    evaluate(cfg)
+    cfg.data.test.duration_sampling_strategy = 'fixed'
+    results = {}
+    for month in range(1,13): 
+        cfg.data.test.fixed_duration = month * 43800
+        configure_logging(cfg)
+        metrics, objects = evaluate(cfg)
+        results[month] = metrics
+    for month in range(1,13): 
+        print(month, results[month]['test/censor_auc'].item())
+    for month in range(1,13): 
+        print(month, results[month]['test/occurs_auc'].item())
+    ipdb.set_trace()
 
 
 if __name__ == "__main__":
