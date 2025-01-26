@@ -1,0 +1,34 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - data: everyquery # choose datamodule with `test_dataloader()` for evaluation
+  - model: everyquery
+  - logger: wandb
+  - trainer: ddp
+  - paths: default
+  - extras: default
+  - hydra: default
+
+name: "eval"
+
+seed: 140799
+
+task_name: null
+
+tags:
+  - "mgb"
+  - "triplet"
+  - "supervised"
+  - "LVEF"
+  - "eval"
+  - "zeroshot"
+
+logger:
+  wandb:
+    tags: ${tags}
+    group: "zeroshot"
+    project: "EveryQuery"
+
+# passing checkpoint path is necessary for evaluation
+ckpt_path: /storage2/payal/EveryQuery/results/2025-01-25_08-06-37_544995/checkpoints/epoch_032.ckpt
