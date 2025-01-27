@@ -1,14 +1,14 @@
 # @package _global_
 
 defaults:
-  - _self_
-  - data: everyquery # choose datamodule with `test_dataloader()` for evaluation
+  - data: everyquery 
   - model: everyquery
   - logger: wandb
   - trainer: ddp
   - paths: default
   - extras: default
   - hydra: default
+  - _self_
 
 name: "eval"
 
