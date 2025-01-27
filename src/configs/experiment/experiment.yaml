@@ -22,6 +22,12 @@ trainer:
   devices: 
     - 0
 
+callbacks:
+  early_stopping:
+    monitor: "val/occurs_auc"
+    patience: 3
+    mode: "max"
+
 logger:
   wandb:
     tags: ${tags}
