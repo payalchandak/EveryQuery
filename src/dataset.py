@@ -204,7 +204,7 @@ class EveryQueryDataset(PytorchDataset):
             x = x.lower()
             if x not in valid_codes:
                 raise ValueError(
-                    f"Code '{x}' is not found in metadata\n\nValid options: {valid_codes}"
+                    f"Code '{x}' is not found in metadata"
                 )
         return
 
