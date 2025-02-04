@@ -20,12 +20,12 @@ trainer:
   gradient_clip_val: 1.0
   log_every_n_steps: 10
   devices: 
-    - 0
+    - 2
 
 callbacks:
   early_stopping:
     monitor: "val/occurs_auc"
-    patience: 3
+    patience: 10
     mode: "max"
 
 logger:
