@@ -26,18 +26,34 @@ def main(cfg: DictConfig) -> None:
     Args:
         cfg (DictConfig): configuration composed by Hydra.
     """
-    cfg.data.test.duration_sampling_strategy = 'fixed'
+    cfg.trainer.devices = [0]
+
     results = {}
-    for month in range(1,13): 
-        cfg.data.test.fixed_duration = month * 43800
+    for code_num in range(9): 
+        cfg.data.test.codes = [f'LVEF_{code_num}']
+        cfg.data.test.values_manual = {f'LVEF_{code_num}':[[0,40]]}
         configure_logging(cfg)
         metrics, objects = evaluate(cfg)
-        results[month] = metrics
-    for month in range(1,13): 
-        print(month, results[month]['test/censor_auc'].item())
-    for month in range(1,13): 
-        print(month, results[month]['test/occurs_auc'].item())
+        results[code_num] = metrics
+    for x in range(9): 
+        print(x, results[x]['test/occurs_auc'].item())
+    for x in range(9): 
+        print(x, results[x]['test/censor_auc'].item())
     ipdb.set_trace()
+
+    # eval duration over 1-12 months 
+    # cfg.data.test.duration_sampling_strategy = 'fixed'
+    # results = {}
+    # for month in range(1,13): 
+    #     cfg.data.test.fixed_duration = month * 43800
+    #     configure_logging(cfg)
+    #     metrics, objects = evaluate(cfg)
+    #     results[month] = metrics
+    # for month in range(1,13): 
+    #     print(month, results[month]['test/censor_auc'].item())
+    # for month in range(1,13): 
+    #     print(month, results[month]['test/occurs_auc'].item())
+    # ipdb.set_trace()
 
 
 if __name__ == "__main__":

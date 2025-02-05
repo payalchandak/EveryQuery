@@ -5,7 +5,11 @@ _target_: dataset.EveryQueryDataset.initialize
 
 code_sampling_strategy: frequency # uniform, frequency
 codes: 
-  - LVEF
+  - LVEF_0
+  - LVEF_1
+  - LVEF_2
+  - LVEF_3
+  - LVEF_4
   # - MEDS_DEATH
 default_value_sampling_strategy: manual # ignore, random_quantile, random_normal, manual
 quantiles: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
@@ -16,7 +20,15 @@ quantiles: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
 # values_random_normal:
 #   - code
 values_manual:
-  LVEF:
+  LVEF_0:
+    - [0, 40]
+  LVEF_1:
+    - [0, 40]
+  LVEF_2:
+    - [0, 40]
+  LVEF_3:
+    - [0, 40]
+  LVEF_4:
     - [0, 40]
 # values_manual: 
 #   code: 
@@ -27,10 +39,10 @@ normalize_query: True
 min_future: 0 
 max_future: 525600 # 1 year
 
-duration_sampling_strategy: categorical # within_record, random, fixed, categorical
+duration_sampling_strategy: fixed # within_record, random, fixed, categorical
 min_duration: 60
 max_duration: 60 
-fixed_duration: 
+fixed_duration: 525600 # 1 year
 categorical_duration: 
   - 131400 # 3 months
   - 262800 # 6 months

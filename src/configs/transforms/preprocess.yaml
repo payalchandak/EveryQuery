@@ -1,8 +1,8 @@
 defaults:
   - _preprocess
   - _self_
-input_dir: "/storage2/payal/dropbox/private/data/meds" # ${oc.env:MEDS_DIR}
-cohort_dir: "/storage2/payal/EveryQuery/data/mgb/processed" # ${oc.env:MODEL_DIR}
+input_dir: "/storage2/payal/dropbox/private/data/meds_lvef" # ${oc.env:MEDS_DIR}
+cohort_dir: "/storage2/payal/EveryQuery/data/mgb_lvef/processed" # ${oc.env:MODEL_DIR}
 stages:
   - filter_subjects
   - code_stats
@@ -39,4 +39,4 @@ stage_configs:
       - name: values/quantiles
         quantiles: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
 
-# MEDS_transform-runner pipeline_config_fp='/storage2/payal/EveryQuery/src/configs/preprocess.yaml' stage_runner_fp='/storage2/payal/EveryQuery/src/configs/local_parallelism_runner.yaml'
+# MEDS_transform-runner pipeline_config_fp='/storage2/payal/EveryQuery/src/configs/transforms/preprocess.yaml' stage_runner_fp='/storage2/payal/EveryQuery/src/configs/transforms/local_parallelism_runner.yaml'
