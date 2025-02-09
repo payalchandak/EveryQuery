@@ -45,6 +45,10 @@ class EveryQueryModule(BaseModule):
             'test': {
                 'censor_auc': BinaryAUROC(),
                 'occurs_auc': BinaryAUROC(),
+            },
+            'predict': {
+                'censor_auc': BinaryAUROC(),
+                'occurs_auc': BinaryAUROC(),
             }
         }
 
@@ -70,8 +74,16 @@ class EveryQueryModule(BaseModule):
             self.log(f'{split}/loss', loss)
             self.log(f'{split}/censor_loss', censor_loss)
             self.log(f'{split}/occurs_loss', occurs_loss)
+            data = {} 
+        else: 
+            data = {
+                'censor_logits':censor_logits,
+                'censor_target':censor_target,
+                'occurs_logits':occurs_logits,
+                'occurs_target':occurs_target,
+            }
 
-        return loss 
+        return loss, data
 
     def query_encoder(self, query): 
         match self.cfg.query.mode: 
@@ -103,12 +115,14 @@ class EveryQueryModule(BaseModule):
 
     def _step(self, batch, split):
         embed = self.embed_function(batch)
-        loss = self.get_loss(embed, batch['answer'], split)
+        loss, data = self.get_loss(embed, batch['answer'], split)
         assert not torch.isnan(loss), f"{split} loss is NaN"
         if split in ['train','val','test']: 
             return loss
         else:
-            return embed
+            data['batch'] = batch
+            data['embed'] = embed
+            return data
 
     def on_epoch_end(self, split):
         for metric_name, metric in self.metrics[split].items():
@@ -136,3 +150,6 @@ class EveryQueryModule(BaseModule):
 
     def test_step(self, batch):
         return self._step(batch, 'test')
+    
+    def predict_step(self, batch):
+        return self._step(batch, 'predict')
