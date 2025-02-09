@@ -91,62 +91,6 @@ lvef_1:
     time: col(lvef_date)
     hospital: col(hospital)
 
-lvef_2:
-  lvef_2:
-    code:
-      - LVEF_2
-    numeric_value: col(lvef)
-    time: col(lvef_date)
-    hospital: col(hospital)
-
-lvef_3:
-  lvef_3:
-    code:
-      - LVEF_3
-    numeric_value: col(lvef)
-    time: col(lvef_date)
-    hospital: col(hospital)
-
-lvef_4:
-  lvef_4:
-    code:
-      - LVEF_4
-    numeric_value: col(lvef)
-    time: col(lvef_date)
-    hospital: col(hospital)
-
-lvef_5:
-  lvef_5:
-    code:
-      - LVEF_5
-    numeric_value: col(lvef)
-    time: col(lvef_date)
-    hospital: col(hospital)
-
-lvef_6:
-  lvef_6:
-    code:
-      - LVEF_6
-    numeric_value: col(lvef)
-    time: col(lvef_date)
-    hospital: col(hospital)
-
-lvef_7:
-  lvef_7:
-    code:
-      - LVEF_7
-    numeric_value: col(lvef)
-    time: col(lvef_date)
-    hospital: col(hospital)
-
-lvef_8:
-  lvef_8:
-    code:
-      - LVEF_8
-    numeric_value: col(lvef)
-    time: col(lvef_date)
-    hospital: col(hospital)
-
 medication: 
   med_start: 
     code: 

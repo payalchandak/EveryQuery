@@ -1,8 +1,8 @@
 defaults:
   - _preprocess
   - _self_
-input_dir: "/storage2/payal/dropbox/private/data/meds_lvef" # ${oc.env:MEDS_DIR}
-cohort_dir: "/storage2/payal/EveryQuery/data/mgb_lvef/processed" # ${oc.env:MODEL_DIR}
+input_dir: "/storage2/payal/dropbox/private/data/meds_lvef_pt" # ${oc.env:MEDS_DIR}
+cohort_dir: "/storage2/payal/EveryQuery/data/mgb_lvef_pt/processed" # ${oc.env:MODEL_DIR}
 stages:
   - filter_subjects
   - code_stats
