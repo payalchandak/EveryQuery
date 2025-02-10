@@ -1,0 +1,29 @@
+defaults:
+  - _extract
+  - _self_
+
+event_conversion_config_fp: /storage2/payal/EveryQuery/src/configs/transforms/mgb_ecg.yaml
+ 
+input_dir: /storage2/payal/dropbox/private/data/processed_ecg_pt
+cohort_dir: /storage2/payal/dropbox/private/data/meds_ecg_pt
+
+etl_metadata:
+  dataset_name: MGB-HF-ECG-PT
+  dataset_version: 1.0
+
+stage_configs:
+  shard_events:
+    infer_schema_length: 999999999
+  split_and_shard_subjects:
+    n_subjects_per_shard: 1000
+    external_splits_json_fp: /storage2/payal/dropbox/private/data/processed/cohorts.json
+
+stages:
+  - shard_events
+  - split_and_shard_subjects
+  - convert_to_sharded_events
+  - merge_to_MEDS_cohort
+  - finalize_MEDS_metadata
+  - finalize_MEDS_data
+
+# MEDS_transform-runner "pipeline_config_fp='/storage2/payal/EveryQuery/src/configs/transforms/extract_mgb_ecg.yaml'" stage_runner_fp='/storage2/payal/EveryQuery/src/configs/transforms/local_parallelism_runner.yaml'

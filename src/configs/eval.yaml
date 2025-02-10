@@ -20,7 +20,6 @@ tags:
   - "mgb"
   - "triplet"
   - "supervised"
-  - "LVEF"
   - "eval"
   - "zeroshot"
 
@@ -31,4 +30,4 @@ logger:
     project: "EveryQuery"
 
 # passing checkpoint path is necessary for evaluation
-ckpt_path: /storage2/payal/EveryQuery/results/2025-01-25_08-06-37_544995/checkpoints/epoch_032.ckpt
+ckpt_path: /storage2/payal/EveryQuery/results/2025-02-10_09-00-51_893069/checkpoints/epoch_000.ckpt

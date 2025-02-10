@@ -35,18 +35,16 @@ def main(cfg: DictConfig) -> None:
     Args:
         cfg (DictConfig): configuration composed by Hydra.
     """
-    pts = set(pl.read_parquet('/storage2/payal/dropbox/private/data/processed/mrn.parquet').filter(pl.col('mgh_mrn').is_not_null()).select(pl.col('empi')).unique().to_numpy().reshape(-1).tolist())
-    pt_lvef = set(pl.read_parquet('/storage2/payal/dropbox/private/data/processed/lvef.parquet').select(pl.col('empi')).unique().to_numpy().reshape(-1).tolist())
-    pt_0 = set(pl.read_parquet('/storage2/payal/dropbox/private/data/processed_lvef_pt/lvef_0.parquet').select(pl.col('empi')).unique().to_numpy().reshape(-1).tolist())
-    pt_1 = set(pl.read_parquet('/storage2/payal/dropbox/private/data/processed_lvef_pt/lvef_1.parquet').select(pl.col('empi')).unique().to_numpy().reshape(-1).tolist())
+    pt_0 = set(pl.read_parquet('/storage2/payal/dropbox/private/data/processed_ecg_pt/ecg_0.parquet').select(pl.col('empi')).unique().to_numpy().reshape(-1).tolist())
+    pt_1 = set(pl.read_parquet('/storage2/payal/dropbox/private/data/processed_ecg_pt/ecg_1.parquet').select(pl.col('empi')).unique().to_numpy().reshape(-1).tolist())
     
     cfg.trainer.devices = [0]
-    for query_code in ['LVEF_0','LVEF_1']: 
+    for query_code in ['ECG_0','ECG_1']: 
         cfg.data.test.codes = [query_code]
         configure_logging(cfg)
         metrics, obj = evaluate(cfg)
         predictions = obj['trainer'].predict(model=obj['model'], dataloaders=obj['datamodule'].test_dataloader(), ckpt_path=cfg.ckpt_path)
-        for cohort_name, cohort in [('LVEF_0',pt_0),('LVEF_1',pt_1)]: 
+        for cohort_name, cohort in [('ECG_0',pt_0),('ECG_1',pt_1)]: 
             true, pred = [], []
             for x in predictions: 
                 subj = x['batch']['context']['subject_id'].numpy().tolist()
