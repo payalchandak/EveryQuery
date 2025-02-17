@@ -35,30 +35,48 @@ def main(cfg: DictConfig) -> None:
     Args:
         cfg (DictConfig): configuration composed by Hydra.
     """
-    pt_0 = set(pl.read_parquet('/storage2/payal/dropbox/private/data/processed_ecg_pt/ecg_0.parquet').select(pl.col('empi')).unique().to_numpy().reshape(-1).tolist())
-    pt_1 = set(pl.read_parquet('/storage2/payal/dropbox/private/data/processed_ecg_pt/ecg_1.parquet').select(pl.col('empi')).unique().to_numpy().reshape(-1).tolist())
+    pt_0 = set(pl.read_parquet('/storage2/payal/dropbox/private/data/processed_lvef_pt/lvef_0.parquet').select(pl.col('empi')).unique().to_numpy().reshape(-1).tolist())
+    pt_1 = set(pl.read_parquet('/storage2/payal/dropbox/private/data/processed_lvef_pt/lvef_1.parquet').select(pl.col('empi')).unique().to_numpy().reshape(-1).tolist())
     
-    cfg.trainer.devices = [0]
-    for query_code in ['ECG_0','ECG_1']: 
+    code_0 = 'LVEF_0'
+    code_1 = 'LVEF_1'
+
+    cfg.trainer.devices = [2]
+    for query_code in [code_0,code_1]: 
+        cfg.data.dataset.codes = [query_code]
+        cfg.data.train.codes = [query_code]
+        cfg.data.val.codes = [query_code]
         cfg.data.test.codes = [query_code]
         configure_logging(cfg)
         metrics, obj = evaluate(cfg)
         predictions = obj['trainer'].predict(model=obj['model'], dataloaders=obj['datamodule'].test_dataloader(), ckpt_path=cfg.ckpt_path)
-        for cohort_name, cohort in [('ECG_0',pt_0),('ECG_1',pt_1)]: 
+        all_pred, all_true = [], []
+        for cohort_name, cohort in [(code_0,pt_0),(code_1,pt_1)]: 
             true, pred = [], []
             for x in predictions: 
                 subj = x['batch']['context']['subject_id'].numpy().tolist()
                 mask = ~x['batch']['answer']['censored'].squeeze(1)
                 idx = torch.Tensor([x in cohort for x in subj])[mask].bool()
                 true.extend(x['occurs_target'].reshape(-1)[idx].long().tolist())
+                all_true.extend(x['occurs_target'].reshape(-1)[idx].long().tolist())
                 pred.extend(torch.sigmoid(x['occurs_logits'].reshape(-1)[idx]).tolist())
-            title = f"Query {query_code} Cohort {cohort_name}"
-            plt.hist(true, bins=25)
-            plt.hist(pred, bins=25)
+                all_pred.extend(torch.sigmoid(x['occurs_logits'].reshape(-1)[idx]).tolist())
+            try: 
+                auc_str = f"AUC {round(roc_auc_score(true, pred),3)}"
+            except: 
+                auc_str = "" 
+            pred = np.array(pred)
+            true = np.array(true)
+            title = f"Query {query_code} Cohort {cohort_name} {auc_str}"
+            plt.hist(true, bins=25,  label="True", density=True)
+            plt.hist(pred[np.argwhere(true == 1).flatten()], bins=25, alpha=0.5, label="Pred (Pos Class)", density=True)
+            plt.hist(pred[np.argwhere(true == 0).flatten()], bins=25, alpha=0.5, label="Pred (Neg Class)", density=True)
+            plt.legend()
             plt.xlim(0,1)
             plt.title(title)
             plt.savefig(f"{title}.png")
             plt.close()
+        print(f"Query {query_code} AUC {round(roc_auc_score(all_true, all_pred),3)}")
 
     # results = {}
     # for code_num in range(9): 

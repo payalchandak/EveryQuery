@@ -30,4 +30,4 @@ logger:
     project: "EveryQuery"
 
 # passing checkpoint path is necessary for evaluation
-ckpt_path: /storage2/payal/EveryQuery/results/2025-02-10_09-00-51_893069/checkpoints/epoch_000.ckpt
+ckpt_path: 

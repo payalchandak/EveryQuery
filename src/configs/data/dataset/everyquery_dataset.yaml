@@ -3,9 +3,10 @@ defaults:
   - _self_
 _target_: dataset.EveryQueryDataset.initialize
 
-code_sampling_strategy: frequency # uniform, frequency
+code_sampling_strategy: uniform # uniform, frequency
 codes: 
-  - ECG_0
+  - LVEF_0
+  - LVEF_1
 default_value_sampling_strategy: ignore # ignore, random_quantile, random_normal, manual
 quantiles: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
 # values_ignore:
