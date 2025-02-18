@@ -35,9 +35,9 @@ class Run:
     def __init__(self, name, dir): 
         self.dir = dir 
         self.name = name
-        self.cfg = self.load_cfg()
-        self.model = self.load_model()
-        self.trainer = self.load_trainer()
+        self._cfg = None  # Lazy loading
+        self._model = None  # Lazy loading
+        self._trainer = None  # Lazy loading
 
     @property
     def relative_dir(self): 
@@ -72,20 +72,26 @@ class Run:
                     queries.add(q)
         return queries 
     
-    def load_cfg(self): 
-        setup_resolvers()
-        with initialize(version_base='1.3', config_path=self.relative_dir):
-            cfg = compose(config_name='hydra_config.yaml')
-        return cfg 
+    @property
+    def cfg(self):
+        if self._cfg is None:
+            setup_resolvers()
+            with initialize(version_base='1.3', config_path=self.relative_dir):
+                self._cfg = compose(config_name='hydra_config.yaml')
+        return self._cfg
     
-    def load_model(self): 
-        model: LightningModule = hydra.utils.instantiate(self.cfg.model)
-        model.load_state_dict(torch.load(self.best_model_ckpt)["state_dict"])
-        return model
+    @property
+    def model(self):
+        if self._model is None:
+            self._model: LightningModule = hydra.utils.instantiate(self.cfg.model)
+            self._model.load_state_dict(torch.load(self.best_model_ckpt)["state_dict"])
+        return self._model
 
-    def load_trainer(self): 
-        trainer: Trainer = hydra.utils.instantiate(self.cfg.trainer)
-        return trainer
+    @property
+    def trainer(self):
+        if self._trainer is None:
+            self._trainer: Trainer = hydra.utils.instantiate(self.cfg.trainer)
+        return self._trainer
 
 class ExperimentRegistry:
     def __init__(self, registry_path='experiment_registry.pkl'):
