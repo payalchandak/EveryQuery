@@ -11,6 +11,7 @@ from sklearn.metrics import roc_auc_score
 import pickle
 from collections import defaultdict
 from pathlib import Path
+import numpy as np 
 
 def minutes(x):
     if isinstance(x, int): return x
@@ -112,8 +113,8 @@ class ExperimentRegistry:
             return Run(name, dir)
         return None
 
-    def get_runs(self, name):
-        return [self.get_run(dir) for dir in self.runs_by_name.get(name, [])]
+    def get_run_dirs(self, name):
+        return self.runs_by_name.get(name, set())
 
     def store_metrics(self, dir, query, metrics):
         self.metrics[(dir, query)] = metrics
@@ -155,7 +156,7 @@ class ExperimentRegistry:
             pred[k.replace('logits', 'score')] = torch.sigmoid(data).tolist()
         return pred
 
-    def evaluate(self, dir, query):
+    def _evaluate(self, dir, query):
         stored_metrics = self.get_metrics(dir, query)
         if stored_metrics:
             return stored_metrics
@@ -168,6 +169,20 @@ class ExperimentRegistry:
         self.store_metrics(dir, query, metrics)
         return metrics
 
+    def evaluate(self, id, query):
+        if id in self.runs_by_dir.keys():
+            dirs = [id]
+        elif id in self.runs_by_name.keys():
+            dirs = self.get_run_dirs(id)
+        else: 
+            raise ValueError(f"id {id} not found in names or dirs")
+        metrics = [self._evaluate(dir, query) for dir in dirs]
+        censor_auc = [m['censor_auc'] for m in metrics]
+        occurs_auc = [m['occurs_auc'] for m in metrics]
+        return {
+            'censor_auc': (np.round(np.mean(censor_auc),3), np.round(np.std(censor_auc),3), len(censor_auc)),
+            'occurs_auc': (np.round(np.mean(occurs_auc),3), np.round(np.std(occurs_auc),3), len(occurs_auc)),
+        }
 
 exp = ExperimentRegistry()
 
@@ -180,11 +195,8 @@ query = Query(code='DIAGNOSIS//Wheezing', duration=minutes('5y'), offset=0)
 metrics = exp.evaluate(dir1, query)
 print(metrics)
 
-metrics = exp.evaluate(dir1, query)
-print(metrics)
-
 metrics = exp.evaluate(dir2, query)
 print(metrics)
 
-metrics = exp.evaluate(dir2, query)
+metrics = exp.evaluate('test', query)
 print(metrics)
