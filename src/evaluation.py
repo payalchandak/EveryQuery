@@ -1,32 +1,16 @@
-from dataclasses import dataclass
-import hydra
-from omegaconf import DictConfig
-import ipdb
-from meds_torch.utils.resolvers import setup_resolvers
-from lightning import LightningDataModule, LightningModule, Trainer
-from hydra import compose, initialize
-import os 
-import torch 
-from sklearn.metrics import roc_auc_score
+import os
 import pickle
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
-import numpy as np 
-import re
-
-def minutes(x):
-    if isinstance(x, int): return x
-    assert isinstance(x, str)
-    x = x.lower().strip()
-    if x.isdigit() or x.endswith("min"):
-        return int(x.replace("min", ""))
-    match = re.match(r"^(\d+)([ymwdh])$", x)
-    if not match:
-        raise ValueError(f"Invalid time format: {x}")
-    num, unit = int(match.group(1)), match.group(2)
-    units = {'y': 525600, 'm': 43800, 'w': 10080, 'd': 1440, 'h': 60}
-    assert unit in units.keys()
-    return num * units.get(unit) 
+import hydra
+from hydra import compose, initialize
+from omegaconf import DictConfig
+import numpy as np
+import torch
+from lightning import LightningDataModule, LightningModule, Trainer
+from sklearn.metrics import roc_auc_score
+from meds_torch.utils.resolvers import setup_resolvers
 
 @dataclass(frozen=True)
 class Query: 
@@ -235,37 +219,3 @@ class ExperimentRegistry:
             comparisons[metric] = (summary(margins[id1], counts[id1]), summary(margins[id2], counts[id2]))
 
         return comparisons
-
-
-exp = ExperimentRegistry()
-
-dir1 = '/storage2/payal/EveryQuery/results/2025-02-11_20-24-06_414169'
-dir2 = '/storage2/payal/EveryQuery/results/2025-02-11_20-19-05_486757'
-
-q = [
-    Query(code='DIAGNOSIS//Wheezing', duration=minutes('5y'), offset=0),
-    Query(code='DIAGNOSIS//Wheezing', duration=minutes('2y'), offset=0),
-    Query(code='DIAGNOSIS//Wheezing', duration=minutes('1y'), offset=0),
-]
-
-exp.add_run('test', dir1)
-exp.add_run('test', dir2)
-
-query = Query(code='DIAGNOSIS//Wheezing', duration=minutes('5y'), offset=0)
-metrics = exp.evaluate(dir1, query)
-print(metrics)
-
-metrics = exp.evaluate(dir2, query)
-print(metrics)
-
-metrics = exp.evaluate('test', query)
-print(metrics)
-
-metrics = exp.evaluate(dir2, q)
-print(metrics)
-
-metrics = exp.evaluate([dir1,dir2], q)
-print(metrics)
-
-metrics = exp.compare(dir1, dir2, q)
-print(metrics)
