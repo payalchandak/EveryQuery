@@ -122,12 +122,8 @@ class ExperimentRegistry:
         else:
             raise ValueError(f"Run '{dir}' not found in the registry; cannot be removed.")
 
-
     def get_run(self, dir):
-        if dir in self.runs_by_dir:
-            name, _ = self.runs_by_dir[dir]
-            return Run(name, dir)
-        return None
+        return Run(dir)
 
     def get_run_dirs(self, name):
         return self.runs_by_name.get(name, set())
@@ -186,8 +182,8 @@ class ExperimentRegistry:
         return metrics
 
     def evaluate(self, ids, queries):
-        if isinstance(queries, Query): queries = [query]
         if isinstance(ids, str): ids = [ids]
+        if isinstance(queries, Query): queries = [queries]
         assert all(isinstance(query, Query) for query in queries)
         dirs = [] # all ids are expected to be seed variations of the same model
         for id in ids:
@@ -201,8 +197,8 @@ class ExperimentRegistry:
         censor_auc = [m['censor_auc'] for m in metrics]
         occurs_auc = [m['occurs_auc'] for m in metrics]
         return {
-            'censor_auc': (np.round(np.mean(censor_auc),3), np.round(np.std(censor_auc),3), len(censor_auc)),
-            'occurs_auc': (np.round(np.mean(occurs_auc),3), np.round(np.std(occurs_auc),3), len(occurs_auc)),
+            'censor_auc': (round(float(np.mean(censor_auc)),3), round(float(np.std(censor_auc)),3), len(censor_auc)),
+            'occurs_auc': (round(float(np.mean(occurs_auc)),3), round(float(np.std(occurs_auc)),3), len(occurs_auc)),
         }
 
 exp = ExperimentRegistry()
