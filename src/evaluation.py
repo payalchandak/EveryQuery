@@ -169,14 +169,19 @@ class ExperimentRegistry:
         self.store_metrics(dir, query, metrics)
         return metrics
 
-    def evaluate(self, id, query):
-        if id in self.runs_by_dir.keys():
-            dirs = [id]
-        elif id in self.runs_by_name.keys():
-            dirs = self.get_run_dirs(id)
-        else: 
-            raise ValueError(f"id {id} not found in names or dirs")
-        metrics = [self._evaluate(dir, query) for dir in dirs]
+    def evaluate(self, ids, queries):
+        if isinstance(queries, Query): queries = [query]
+        if isinstance(ids, str): ids = [ids]
+        assert all(isinstance(query, Query) for query in queries)
+        dirs = [] # all ids are expected to be seed variations of the same model
+        for id in ids:
+            if id in self.runs_by_dir.keys():
+                dirs.append(id)
+            elif id in self.runs_by_name.keys():
+                dirs.extend(self.get_run_dirs(id))
+            else: 
+                raise ValueError(f"Run {id} not found in names or dirs")
+        metrics = [self._evaluate(dir, query) for dir in dirs for query in queries]
         censor_auc = [m['censor_auc'] for m in metrics]
         occurs_auc = [m['occurs_auc'] for m in metrics]
         return {
@@ -199,4 +204,16 @@ metrics = exp.evaluate(dir2, query)
 print(metrics)
 
 metrics = exp.evaluate('test', query)
+print(metrics)
+
+metrics = exp.evaluate(dir2, [
+    Query(code='DIAGNOSIS//Wheezing', duration=minutes('5y'), offset=0),
+    Query(code='DIAGNOSIS//Wheezing', duration=minutes('1y'), offset=0)
+])
+print(metrics)
+
+metrics = exp.evaluate([dir1,dir2], [
+    Query(code='DIAGNOSIS//Wheezing', duration=minutes('5y'), offset=0),
+    Query(code='DIAGNOSIS//Wheezing', duration=minutes('1y'), offset=0)
+])
 print(metrics)
