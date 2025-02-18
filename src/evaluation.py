@@ -33,9 +33,8 @@ class Query:
     range: tuple[float, float] | None = None
 
 class Run: 
-    def __init__(self, name, dir): 
+    def __init__(self, dir): 
         self.dir = dir 
-        self.name = name
         self._cfg = None  # Lazy loading
         self._model = None  # Lazy loading
         self._trainer = None  # Lazy loading
@@ -103,9 +102,26 @@ class ExperimentRegistry:
         self.load()
 
     def add_run(self, name, dir):
-        # will update name if run exists
-        self.runs_by_dir[dir] = (name, dir) 
+        if dir in self.runs_by_dir:
+            existing_name, _ = self.runs_by_dir[dir]
+            if existing_name == name:
+                return  # Run is already registered with the same name, do nothing
+            raise ValueError(f"Cannot register '{name}'. Run at {dir} is already registered under the name '{existing_name}'. Remove it first before re-adding with a new name.")
+        
+        self.runs_by_dir[dir] = (name, dir)
         self.runs_by_name[name].add(dir)
+        self.save()
+        
+    def remove_run(self, dir):
+        if dir in self.runs_by_dir:
+            name, _ = self.runs_by_dir.pop(dir)
+            self.runs_by_name[name].remove(dir)
+            if not self.runs_by_name[name]:
+                del self.runs_by_name[name]
+            self.save()
+        else:
+            raise ValueError(f"Run '{dir}' not found in the registry; cannot be removed.")
+
 
     def get_run(self, dir):
         if dir in self.runs_by_dir:
