@@ -200,11 +200,52 @@ class ExperimentRegistry:
             'censor_auc': (round(float(np.mean(censor_auc)),3), round(float(np.std(censor_auc)),3), len(censor_auc)),
             'occurs_auc': (round(float(np.mean(occurs_auc)),3), round(float(np.std(occurs_auc)),3), len(occurs_auc)),
         }
+    
+    def compare(self, id1, id2, queries): 
+        assert id1 in self.runs_by_dir.keys()
+        assert id2 in self.runs_by_dir.keys()
+        if isinstance(queries, Query): queries = [queries]
+        assert all(isinstance(query, Query) for query in queries)
+        comparisons = {'censor_auc':None, 'occurs_auc':None}
+        for metric in comparisons.keys():
+            count1, count2 = 0, 0
+            margin1, margin2 = [], []
+            for query in queries: 
+                m1 = self._evaluate(id1, query)[metric]
+                m2 = self._evaluate(id2, query)[metric]
+                if m1 > m2: # model 1 wins
+                    count1 += 1 
+                    margin1.append(m1-m2)
+                elif m2 > m1: # model 2 wins
+                    count2 += 1 
+                    margin2.append(m2-m1)
+                else: # tied 
+                    count1 += 1 
+                    count2 += 1 
+                    margin1.append(0)
+                    margin2.append(0)
+            if count1: 
+                performance_1 = (round(count1/len(queries),3), len(margin1), round(float(np.mean(margin1)),3), round(float(np.std(margin1)),3))
+            else: 
+                performance_1 = (0, 0, None, None)
+            if count2: 
+                performance_2 = (round(count2/len(queries),3), len(margin2), round(float(np.mean(margin2)),3), round(float(np.std(margin2)),3))
+            else: 
+                performance_2 = (0, 0, None, None)
+            comparisons[metric] = (performance_1, performance_2)
+        return comparisons
 
 exp = ExperimentRegistry()
 
 dir1 = '/storage2/payal/EveryQuery/results/2025-02-11_20-24-06_414169'
 dir2 = '/storage2/payal/EveryQuery/results/2025-02-11_20-19-05_486757'
+
+q = [
+    Query(code='DIAGNOSIS//Wheezing', duration=minutes('5y'), offset=0),
+    Query(code='DIAGNOSIS//Wheezing', duration=minutes('2y'), offset=0),
+    Query(code='DIAGNOSIS//Wheezing', duration=minutes('1y'), offset=0),
+]
+
 exp.add_run('test', dir1)
 exp.add_run('test', dir2)
 
@@ -218,14 +259,11 @@ print(metrics)
 metrics = exp.evaluate('test', query)
 print(metrics)
 
-metrics = exp.evaluate(dir2, [
-    Query(code='DIAGNOSIS//Wheezing', duration=minutes('5y'), offset=0),
-    Query(code='DIAGNOSIS//Wheezing', duration=minutes('1y'), offset=0)
-])
+metrics = exp.evaluate(dir2, q)
 print(metrics)
 
-metrics = exp.evaluate([dir1,dir2], [
-    Query(code='DIAGNOSIS//Wheezing', duration=minutes('5y'), offset=0),
-    Query(code='DIAGNOSIS//Wheezing', duration=minutes('1y'), offset=0)
-])
+metrics = exp.evaluate([dir1,dir2], q)
+print(metrics)
+
+metrics = exp.compare(dir1, dir2, q)
 print(metrics)
