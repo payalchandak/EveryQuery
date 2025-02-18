@@ -44,36 +44,34 @@ class Run:
 
     @property
     def relative_dir(self): 
-        script_dir = os.path.dirname(os.path.abspath(__file__)) 
+        script_dir = Path(__file__).resolve().parent
         return os.path.relpath(self.dir, start=script_dir)
 
     @property
     def best_model_ckpt(self): 
         return f"{self.dir}/checkpoints/best_model.ckpt"
     
+
     @property
     def training_queries(self) -> set[Query]: 
         cfg = self.cfg.data.train
         codes = cfg.codes
-        match cfg.duration_sampling_strategy: 
-            case 'fixed': 
-                durations = [cfg.fixed_duration]
-            case 'categorical': 
-                durations = cfg.categorical_duration
-            # within_record, random
-        match cfg.offset_sampling_strategy: 
-            case 'fixed': 
-                offsets = [cfg.fixed_offset]
-            case 'categorical': 
-                offsets = cfg.categorical_offset
-            # within_record, random
-        queries = set()
-        for code in codes: 
-            for duration in durations: 
-                for offset in offsets: 
-                    q = Query(code=code, duration=duration, offset=offset)
-                    queries.add(q)
-        return queries 
+
+        match cfg.duration_sampling_strategy:
+            case 'fixed': durations = [cfg.fixed_duration]
+            case 'categorical': durations = cfg.categorical_duration
+            case 'within_record': raise NotImplementedError
+            case 'random': raise NotImplementedError
+            case _: raise ValueError(f"Unknown duration sampling strategy: {cfg.duration_sampling_strategy}")
+
+        match cfg.offset_sampling_strategy:
+            case 'fixed': offsets = [cfg.fixed_offset]
+            case 'categorical': offsets = cfg.categorical_offset
+            case 'within_record': raise NotImplementedError
+            case 'random': raise NotImplementedError
+            case _: raise ValueError(f"Unknown offset sampling strategy: {cfg.offset_sampling_strategy}")
+
+        return {Query(code, duration, offset) for code in codes for duration in durations for offset in offsets}
     
     @property
     def cfg(self):
@@ -208,34 +206,36 @@ class ExperimentRegistry:
         assert id2 in self.runs_by_dir.keys()
         if isinstance(queries, Query): queries = [queries]
         assert all(isinstance(query, Query) for query in queries)
-        comparisons = {'censor_auc':None, 'occurs_auc':None}
+
+        comparisons = {'censor_auc': None, 'occurs_auc': None}
         for metric in comparisons.keys():
-            count1, count2 = 0, 0
-            margin1, margin2 = [], []
+            margins = {id1: [], id2: []}
+            counts = {id1: 0, id2: 0}
             for query in queries: 
-                m1 = self._evaluate(id1, query)[metric]
-                m2 = self._evaluate(id2, query)[metric]
+                m1 = self._evaluate(id1, query).get(metric)
+                m2 = self._evaluate(id2, query).get(metric)
+                if m1 is None or m2 is None: continue
                 if m1 > m2: # model 1 wins
-                    count1 += 1 
-                    margin1.append(m1-m2)
+                    counts[id1] += 1
+                    margins[id1].append(m1 - m2)
                 elif m2 > m1: # model 2 wins
-                    count2 += 1 
-                    margin2.append(m2-m1)
+                    counts[id2] += 1
+                    margins[id2].append(m2 - m1)
                 else: # tied 
-                    count1 += 1 
-                    count2 += 1 
-                    margin1.append(0)
-                    margin2.append(0)
-            if count1: 
-                performance_1 = (round(count1/len(queries),3), len(margin1), round(float(np.mean(margin1)),3), round(float(np.std(margin1)),3))
-            else: 
-                performance_1 = (0, 0, None, None)
-            if count2: 
-                performance_2 = (round(count2/len(queries),3), len(margin2), round(float(np.mean(margin2)),3), round(float(np.std(margin2)),3))
-            else: 
-                performance_2 = (0, 0, None, None)
-            comparisons[metric] = (performance_1, performance_2)
+                    counts[id1] += 1
+                    counts[id2] += 1
+                    margins[id1].append(0)
+                    margins[id2].append(0)
+
+            def summary(margins, count):
+                return (round(count / len(queries), 3), len(margins), 
+                        round(float(np.mean(margins)), 3) if margins else None, 
+                        round(float(np.std(margins)), 3) if margins else None)
+
+            comparisons[metric] = (summary(margins[id1], counts[id1]), summary(margins[id2], counts[id2]))
+
         return comparisons
+
 
 exp = ExperimentRegistry()
 
