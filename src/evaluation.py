@@ -102,6 +102,7 @@ class ExperimentRegistry:
         self.load()
 
     def add_run(self, name, dir):
+        # will update name if run exists
         self.runs_by_dir[dir] = (name, dir) 
         self.runs_by_name[name].add(dir)
 
@@ -170,13 +171,20 @@ class ExperimentRegistry:
 
 exp = ExperimentRegistry()
 
-name = 'test'
-dir = '/storage2/payal/EveryQuery/results/2025-02-11_20-24-06_414169'
-exp.add_run(name, dir)
+dir1 = '/storage2/payal/EveryQuery/results/2025-02-11_20-24-06_414169'
+dir2 = '/storage2/payal/EveryQuery/results/2025-02-11_20-19-05_486757'
+exp.add_run('test', dir1)
+exp.add_run('test', dir2)
 
-query = Query(code='ECG', duration=minutes('5y'), offset=0)
-metrics = exp.evaluate(dir, query)
+query = Query(code='DIAGNOSIS//Wheezing', duration=minutes('5y'), offset=0)
+metrics = exp.evaluate(dir1, query)
 print(metrics)
 
-metrics = exp.evaluate(dir, query)
+metrics = exp.evaluate(dir1, query)
+print(metrics)
+
+metrics = exp.evaluate(dir2, query)
+print(metrics)
+
+metrics = exp.evaluate(dir2, query)
 print(metrics)
