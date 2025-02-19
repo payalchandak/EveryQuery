@@ -23,6 +23,7 @@ from meds_torch.utils.resolvers import setup_resolvers
 from dataset import EveryQueryDataset
 from models.everyquery import EveryQueryModule
 from models.mlp import MLP 
+from utils import resolve_random_codes
 
 setup_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)
@@ -133,6 +134,8 @@ def main(cfg: DictConfig) -> float | None:
     # apply extra utilities
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     configure_logging(cfg)
+
+    cfg = resolve_random_codes(cfg)
 
     # train the model
     metric_dict, _, best_model_path = train(cfg)
