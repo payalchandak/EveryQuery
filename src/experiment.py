@@ -20,7 +20,8 @@ class Query:
     range: tuple[float, float] | None = None
 
 class Run: 
-    def __init__(self, dir): 
+    def __init__(self, dir):
+        assert isinstance(dir, str)
         self.dir = dir 
         self._cfg = None  # Lazy loading
         self._model = None  # Lazy loading
@@ -108,6 +109,10 @@ class ExperimentRegistry:
 
     def get_run(self, dir):
         return Run(dir)
+    
+    def get_one_run(self, name): 
+        dirs = self.get_run_dirs(name)
+        return self.get_run(next(iter(dirs)))
 
     def get_run_dirs(self, name):
         return self.runs_by_name.get(name, set())
@@ -186,6 +191,11 @@ class ExperimentRegistry:
         }
     
     def compare(self, id1, id2, queries): 
+        # (TODO) overload function to handle names
+        '''
+        average rank of Run
+        percent of time Run is first 
+        '''
         assert id1 in self.runs_by_dir.keys()
         assert id2 in self.runs_by_dir.keys()
         if isinstance(queries, Query): queries = [queries]
