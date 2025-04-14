@@ -432,20 +432,18 @@ class EveryQueryDataset(PytorchDataset):
             # end_idx is the first index you can't use
             assert start_idx <= end_idx
 
-        if start_idx == end_idx:
-            # query is short and fits between two measurements, ie. no data is observed
-            return 0
-        else:
-            future_dynamic = future_dynamic[start_idx:end_idx]
+        query_dynamic = future_dynamic[start_idx:end_idx]
+        count = 0
 
-        count = 0 
-        code_idx = future_dynamic.tensors["dim1/code"] == query["code"]
-        if query["has_value"] and query["use_value"]:
-            values = future_dynamic.tensors["dim1/numeric_value"][code_idx]
-            count = sum([query["range_lower"] <= x <= query["range_upper"]  for x in values])
-        else: 
-            count = sum(code_idx)
-
+        # when start_idx == end_idx, query is short and fits between two measurements, ie. no data is observed
+        if start_idx != end_idx:
+            code_idx = query_dynamic.tensors["dim1/code"] == query["code"]
+            if query["has_value"] and query["use_value"]:
+                values = query_dynamic.tensors["dim1/numeric_value"][code_idx]
+                count = sum([query["range_lower"] <= x <= query["range_upper"]  for x in values])
+            else: 
+                count = sum(code_idx)
+        
         return count
 
     def get_subject_times(self, subject_id):
