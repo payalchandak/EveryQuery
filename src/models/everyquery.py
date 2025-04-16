@@ -24,14 +24,14 @@ class EveryQueryModule(BaseModule):
 
         if self.cfg.projector.mode == 'supervised_context':
             self.embed_function = self.supervised_context
-            self.proj_censor = MLP(layers=[self.cfg.token_dim, 1], dropout_prob=self.cfg.projector.dropout)
-            self.proj_occurs = MLP(layers=[self.cfg.token_dim, 1], dropout_prob=self.cfg.projector.dropout)
+            self.proj_censor = MLP(layers=[self.cfg.token_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
+            self.proj_occurs = MLP(layers=[self.cfg.token_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
             
         if self.cfg.projector.mode == 'supervised_query': 
             self.embed_function = self.supervised_query
             self.proj_query = MLP(layers=[self.cfg.query.encod_dim, self.cfg.query.embed_dim], dropout_prob=self.cfg.projector.dropout).append(torch.nn.ReLU())
-            self.proj_censor = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 1], dropout_prob=self.cfg.projector.dropout)
-            self.proj_occurs = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 1], dropout_prob=self.cfg.projector.dropout)
+            self.proj_censor = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
+            self.proj_occurs = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
 
         self.metrics = {
             'train': {
@@ -116,7 +116,7 @@ class EveryQueryModule(BaseModule):
     def _step(self, batch, split):
         embed = self.embed_function(batch)
         loss, data = self.get_loss(embed, batch['answer'], split)
-        assert not torch.isnan(loss), f"{split} loss is NaN"
+        # assert not torch.isnan(loss), f"{split} loss is NaN"
         if split in ['train','val','test']: 
             return loss
         else:

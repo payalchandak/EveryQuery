@@ -8,7 +8,7 @@ defaults:
 _target_: meds_torch.data.datamodule.MEDSDataModule.initialize
 
 dataloader:
-  batch_size: 512 # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
+  batch_size: 1 # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
   num_workers: 0
   pin_memory: False
 

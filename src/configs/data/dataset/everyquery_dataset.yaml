@@ -5,7 +5,8 @@ _target_: dataset.EveryQueryDataset.initialize
 
 code_sampling_strategy: uniform # uniform, frequency
 codes: 
-  - RANDOM//2
+  - ECG_0
+  - ECG_1
 default_value_sampling_strategy: ignore # ignore, random_quantile, random_normal, manual
 quantiles: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
 # values_ignore:
@@ -21,12 +22,12 @@ quantiles: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
 
 normalize_query: True
 min_future: 0 
-max_future: 525600 # 1 year
+max_future: 2628000 # 5 year
 
 duration_sampling_strategy: fixed # within_record, random, fixed, categorical
 min_duration: 60
 max_duration: 60 
-fixed_duration: 525600 # 1 year
+fixed_duration: 2628000 # 5 year
 categorical_duration: 
   - 131400 # 3 months
   - 262800 # 6 months
