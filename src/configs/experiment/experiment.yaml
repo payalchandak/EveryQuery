@@ -7,10 +7,9 @@ defaults:
   - override /trainer: ddp
 
 tags:
-  - "mgb"
+  - "mimiciv"
   - "triplet"
   - "supervised"
-  - "ECG"
 
 seed: 140799
 
