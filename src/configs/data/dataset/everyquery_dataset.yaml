@@ -1,11 +1,11 @@
 defaults:
   - pytorch_dataset
   - _self_
+  - codes: stage_0  # <--- This will load codes from stage_0.yaml
 _target_: dataset.EveryQueryDataset.initialize
 
 code_sampling_strategy: uniform # uniform, frequency
-codes: 
-  - MEDS_DEATH
+codes: ???
 default_value_sampling_strategy: ignore # ignore, random_quantile, random_normal, manual
 quantiles: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
 # values_ignore:
