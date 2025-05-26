@@ -443,18 +443,8 @@ class EveryQueryDataset(PytorchDataset):
                 count = sum([query["range_lower"] <= x <= query["range_upper"]  for x in values])
             else: 
                 count = sum(code_idx)
-
-        query_has_code_0 = False
-        query_has_code_1 = False
-        code_0 = 'ECG_0'
-        code_1 = 'ECG_1'
-        metadata_df = pl.read_parquet('/storage2/payal/EveryQuery/data/mgb_ecg_pt/processed/metadata/codes.parquet')
-        vocab_code_0 = metadata_df.filter(pl.col('code')==code_0).select('code/vocab_index').item()
-        vocab_code_1 = metadata_df.filter(pl.col('code')==code_1).select('code/vocab_index').item()
-        query_has_code_0 = bool(sum(query_dynamic.tensors["dim1/code"] == vocab_code_0))
-        query_has_code_1 = bool(sum(query_dynamic.tensors["dim1/code"] == vocab_code_1))
         
-        return count, query_has_code_0, query_has_code_1
+        return count
 
     def get_subject_times(self, subject_id):
         """
@@ -499,15 +489,14 @@ class EveryQueryDataset(PytorchDataset):
         if is_censored:
             # censored is the mask for count and occurs
             answer = {"censored": is_censored, "count": -1, "occurs": -1} 
-            query_has_code_0, query_has_code_1 = False, False
         else:
             future_dynamic = subj_dynamic[context["end_idx"] : record_end_idx]
-            count, query_has_code_0, query_has_code_1 = self.tally_answer(future_dynamic, query)
+            count = self.tally_answer(future_dynamic, query)
             answer = {"censored": is_censored, "count": count, "occurs": count != 0}
 
         query = self.normalize(query)
 
-        item = {"context": context, "query": query, "answer": answer, 'query_has_code_0':query_has_code_0, 'query_has_code_1':query_has_code_1}
+        item = {"context": context, "query": query, "answer": answer}
 
         return item
 
@@ -534,6 +523,4 @@ class EveryQueryDataset(PytorchDataset):
             "context": super().collate([x["context"] for x in batch]),
             "query": self._query_collate([x["query"] for x in batch]),
             "answer": self._answer_collate([x["answer"] for x in batch]),
-            "query_has_code_0": torch.tensor([x["query_has_code_0"] for x in batch], dtype=torch.bool),
-            "query_has_code_1": torch.tensor([x["query_has_code_1"] for x in batch], dtype=torch.bool),
         }

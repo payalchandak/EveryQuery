@@ -128,10 +128,6 @@ class EveryQueryModule(BaseModule):
         for metric_name, metric in self.metrics[split].items():
             self.log(f'{split}/{metric_name}', metric.compute(), sync_dist=True)
             metric.reset()
-        # self.log(f'{split}/censor_auc', self.metrics[split]['censor_auc'].compute())
-        # self.log(f'{split}/occurs_auc', self.metrics[split]['occurs_auc'].compute())
-        # self.metrics[split]['censor_auc'].reset()
-        # self.metrics[split]['occurs_auc'].reset()
 
     def on_train_epoch_end(self):
         self.on_epoch_end('train')
