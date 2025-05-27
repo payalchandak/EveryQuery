@@ -1,0 +1,21 @@
+#!/bin/bash
+#SBATCH --job-name=stage_0
+#SBATCH --output=logs/stage_0_%j.out
+#SBATCH --error=logs/stage_0_%j.err
+#SBATCH --time=24:00:00
+#SBATCH --partition=gpu_quad
+#SBATCH --gres=gpu:1
+#SBATCH --mem=50G
+#SBATCH --cpus-per-task=4
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=payal_chandak@hst.harvard.edu
+
+source ~/miniconda3/etc/profile.d/conda.sh
+
+conda activate eq
+
+cd ~/EveryQuery
+
+source .env
+
+python src/train.py experiment=experiment.yaml paths.data_dir=$PATHS_DATA_DIR paths.meds_cohort_dir=$PATHS_MEDS_COHORT_DIR paths.output_dir=$PATHS_OUTPUT_DIR "hydra.searchpath=[$MEDS_TORCH_CONFIG_DIR,$CONFIG_DIR]"
