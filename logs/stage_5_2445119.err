@@ -1,0 +1,30 @@
+[rank: 0] Seed set to 140799
+2025-05-27 22:59:17.849 | INFO     | meds_torch.data.components.pytorch_dataset:__init__:510 - Reading subject schema and static data
+2025-05-27 22:59:21.285 | INFO     | meds_torch.data.components.pytorch_dataset:__init__:510 - Reading subject schema and static data
+2025-05-27 22:59:23.659 | INFO     | meds_torch.data.components.pytorch_dataset:__init__:510 - Reading subject schema and static data
+2025-05-27 22:59:24.636 | INFO     | meds_torch.data.components.pytorch_dataset:__init__:510 - Reading subject schema and static data
+Trainer already configured with model summary callbacks: [<class 'lightning.pytorch.callbacks.rich_model_summary.RichModelSummary'>]. Skipping setting a default `ModelSummary` callback.
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+HPU available: False, using: 0 HPUs
+wandb: Currently logged in as: payalchandak. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.17.9
+wandb: Run data is saved locally in /home/pac4279/EveryQuery/results/2025-05-27_22-59-10_676219/wandb/run-20250527_225929-qti4eq9u
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run fluent-leaf-687
+wandb: ⭐️ View project at https://wandb.ai/payalchandak/EveryQuery
+wandb: 🚀 View run at https://wandb.ai/payalchandak/EveryQuery/runs/qti4eq9u
+You are using a CUDA device ('NVIDIA A100 80GB PCIe MIG 3g.40gb') that has Tensor Cores. To properly utilize them, you should set `torch.set_float32_matmul_precision('medium' | 'high')` which will trade-off precision for performance. For more details, read https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
+Initializing distributed: GLOBAL_RANK: 0, MEMBER: 1/1
+----------------------------------------------------------------------------------------------------
+distributed_backend=nccl
+All distributed processes registered. Starting with 1 processes
+----------------------------------------------------------------------------------------------------
+
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0]
+SLURM auto-requeueing enabled. Setting signal handlers.
+/home/pac4279/miniconda3/envs/eq/lib/python3.12/site-packages/lightning/pytorch/trainer/connectors/data_connector.py:424: The 'val_dataloader' does not have many workers which may be a bottleneck. Consider increasing the value of the `num_workers` argument` to `num_workers=3` in the `DataLoader` to improve performance.
+/home/pac4279/miniconda3/envs/eq/lib/python3.12/site-packages/lightning/pytorch/trainer/connectors/logger_connector/result.py:431: It is recommended to use `self.log('val/loss', ..., sync_dist=True)` when logging on epoch level in distributed setting to accumulate the metric across devices.
+/home/pac4279/miniconda3/envs/eq/lib/python3.12/site-packages/lightning/pytorch/trainer/connectors/logger_connector/result.py:431: It is recommended to use `self.log('val/censor_loss', ..., sync_dist=True)` when logging on epoch level in distributed setting to accumulate the metric across devices.
+/home/pac4279/miniconda3/envs/eq/lib/python3.12/site-packages/lightning/pytorch/trainer/connectors/logger_connector/result.py:431: It is recommended to use `self.log('val/occurs_loss', ..., sync_dist=True)` when logging on epoch level in distributed setting to accumulate the metric across devices.
+/home/pac4279/miniconda3/envs/eq/lib/python3.12/site-packages/lightning/pytorch/trainer/connectors/data_connector.py:424: The 'train_dataloader' does not have many workers which may be a bottleneck. Consider increasing the value of the `num_workers` argument` to `num_workers=3` in the `DataLoader` to improve performance.
