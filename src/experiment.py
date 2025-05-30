@@ -229,3 +229,19 @@ class ExperimentRegistry:
             comparisons[metric] = (summary(margins[id1], counts[id1]), summary(margins[id2], counts[id2]))
 
         return comparisons
+
+    def compare_printer(self, name1, name2, queries): 
+        id1 = self.get_one_run(name1).dir
+        id2 = self.get_one_run(name2).dir
+
+        comparisons = self.compare(id1, id2, queries)
+        
+        print()
+        for metric in comparisons.keys(): 
+            print(f"For metric {metric},")
+            summary = comparisons[metric]
+            s1, s2 = summary[0], summary[1]
+            print(f"\t{name1} wins {s1[0]*100:.1f}% of the time with a margin of {s1[2]*100:.1f} ± {s1[3]*100:.1f}%")
+            print(f"\t{name2} wins {s2[0]*100:.1f}% of the time with a margin of {s2[2]*100:.1f} ± {s2[3]*100:.1f}%")
+            print()
+        print()
