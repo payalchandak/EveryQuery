@@ -1,7 +1,7 @@
 defaults:
   - pytorch_dataset
   - _self_
-  - codes: stage_6  # <--- This will load codes from stage_0.yaml
+  - codes: stage_2  # <--- This will load codes from stage_0.yaml
 _target_: dataset.EveryQueryDataset.initialize
 
 code_sampling_strategy: uniform # uniform, frequency
