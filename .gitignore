@@ -6,6 +6,7 @@ mimic/
 results/
 meds-torch/ 
 logs/ 
+MEDS_EIC_AR/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
