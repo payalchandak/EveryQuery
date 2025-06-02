@@ -5,6 +5,7 @@ mgb/
 mimic/
 results/
 meds-torch/ 
+logs/ 
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
