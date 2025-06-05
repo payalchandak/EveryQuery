@@ -5,7 +5,7 @@ mgb/
 mimic/
 results/
 meds-torch/ 
-logs/ 
+logs/*
 MEDS_EIC_AR/
 
 # Byte-compiled / optimized / DLL files
