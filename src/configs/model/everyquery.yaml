@@ -27,13 +27,12 @@ optimizer:
   betas: [0.9, 0.999] # default
   amsgrad: false # default
   fused: false # default
-
 scheduler:
-  _target_: torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
+  _target_: transformers.get_cosine_schedule_with_warmup
   _partial_: true
-  T_0: ${int_prod:0.1,${trainer.max_steps}} # number of steps before restart
-  T_mult: 2 # multiplicative increase in epochs between restarts
-  eta_min: 1e-6 # minimum learning rate
+  num_warmup_steps: ${int_prod:0.1,${.num_training_steps}} # ~10% of training steps
+  num_training_steps: ${trainer.max_steps}
+  num_cycles: 0.5
 
 max_seq_len: ${data.dataset.max_seq_len}
 token_dim: 512
