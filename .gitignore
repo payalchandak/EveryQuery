@@ -7,6 +7,9 @@ results/
 meds-torch/ 
 logs/*
 MEDS_EIC_AR/
+*.png
+*.pkl
+experiment_registry.pkl
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

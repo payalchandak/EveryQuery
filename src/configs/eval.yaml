@@ -30,6 +30,4 @@ logger:
     project: "EveryQuery"
 
 # passing checkpoint path is necessary for evaluation
-ckpt_path: '/storage2/payal/EveryQuery/results/2025-04-14_15-08-39_280969/checkpoints/epoch_037.ckpt' # big mlp categorical model
-# ckpt_path: '/storage2/payal/EveryQuery/results/2025-02-11_20-19-05_486757/checkpoints/epoch_030.ckpt' # original categorical model
-# ckpt_path: '/storage2/payal/EveryQuery/results/2025-02-10_09-17-58_872984/checkpoints/epoch_029.ckpt' # ecg 0 fixed single supervised 
+ckpt_path: "/home/pac4279/EveryQuery/results/2025-05-26_17-07-50_945117/checkpoints/best_model.ckpt"

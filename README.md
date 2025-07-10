@@ -8,6 +8,10 @@ python src/train.py experiment=experiment.yaml paths.data_dir=$PATHS_DATA_DIR pa
 python src/eval.py paths.data_dir=$PATHS_DATA_DIR paths.meds_cohort_dir=$PATHS_MEDS_COHORT_DIR paths.output_dir=$PATHS_OUTPUT_DIR "hydra.searchpath=[$MEDS_TORCH_CONFIG_DIR,$CONFIG_DIR]"
 ```
 
+```
+python src/estimate_query_prevalence.py paths.data_dir=$PATHS_DATA_DIR paths.meds_cohort_dir=$PATHS_MEDS_COHORT_DIR paths.output_dir=$PATHS_OUTPUT_DIR "hydra.searchpath=[$MEDS_TORCH_CONFIG_DIR,$CONFIG_DIR]"
+```
+
 
 Sample .env on O2 
 
