@@ -2,8 +2,15 @@ defaults:
   - pytorch_dataset
   - _self_
   - codes: stage_4  # <--- This will load codes from stage_X.yaml
-_target_: dataset.EveryQueryDataset.initialize
 
+_target_: meds_torch.data.datamodule.MEDSDataModule.initialize
+dataset_cls: dataset.EveryQueryDataset
+
+dataloader:
+  batch_size: 256 # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
+  num_workers: 0
+  pin_memory: False
+  
 code_sampling_strategy: uniform # uniform, frequency
 codes: ???
 default_value_sampling_strategy: ignore # ignore, random_quantile, random_normal, manual

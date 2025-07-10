@@ -14,9 +14,9 @@ import torch
 
 
 class EveryQueryDataset(PytorchDataset):
-    def __init__(self, cfg):
+    def __init__(self, cfg, split):
         cfg.do_include_subsequence_indices = True
-        super().__init__(cfg)
+        super().__init__(cfg, split)
 
         self.code_strategies = ["uniform", "frequency"]
         if self.config.code_sampling_strategy not in self.code_strategies:

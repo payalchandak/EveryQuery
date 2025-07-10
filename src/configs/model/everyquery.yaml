@@ -35,11 +35,11 @@ scheduler:
   num_training_steps: ${trainer.max_steps}
   num_cycles: 0.5
 
-max_seq_len: ${data.dataset.max_seq_len}
+max_seq_len: ${data.max_seq_len}
 token_dim: 512
-vocab_size: ${data.dataset.vocab_size}
+vocab_size: ${data.vocab_size}
 # get_representations: false
-# task_name: ${data.dataset.task_name}
+# task_name: ${data.task_name}
 batch_size: ${data.dataloader.batch_size}
 
 # compile model for faster training with pytorch 2.0
