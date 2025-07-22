@@ -42,7 +42,7 @@ class Run:
 
     @property
     def training_queries(self) -> set[Query]: 
-        cfg = self.cfg.data.train
+        cfg = self.cfg.data
         codes = cfg.codes
 
         match cfg.duration_sampling_strategy:
@@ -84,6 +84,7 @@ class Run:
 
 class ExperimentRegistry:
     def __init__(self, registry_path='experiment_registry.pkl'):
+        self.predict_N_times = 5
         self.runs_by_dir = {}  # Only names and paths, instantiate on demand
         self.runs_by_name = defaultdict(set)
         self.metrics = defaultdict(dict)  # {(dir, query) -> metrics dictionary}
@@ -106,6 +107,8 @@ class ExperimentRegistry:
             self.runs_by_name[name].remove(dir)
             if not self.runs_by_name[name]:
                 del self.runs_by_name[name]
+            keys_to_remove = [k for k in self.metrics.keys() if k[0]==dir]
+            _ = [self.metrics.pop(k) for k in keys_to_remove]
             self.save()
         else:
             raise ValueError(f"Run '{dir}' not found in the registry; cannot be removed.")
@@ -141,14 +144,15 @@ class ExperimentRegistry:
 
     def predict(self, run, query):
         cfg = run.cfg
-        cfg.data.test.codes = [query.code]
-        cfg.data.test.duration_sampling_strategy = 'fixed'
-        cfg.data.test.fixed_duration = query.duration
-        cfg.data.test.offset_sampling_strategy = 'fixed'
-        cfg.data.test.fixed_offset = query.offset
+        cfg.data.codes = [query.code]
+        cfg.data.duration_sampling_strategy = 'fixed'
+        cfg.data.fixed_duration = query.duration
+        cfg.data.offset_sampling_strategy = 'fixed'
+        cfg.data.fixed_offset = query.offset
         if query.range is None:
-            cfg.data.test.default_value_sampling_strategy = 'ignore'
+            cfg.data.default_value_sampling_strategy = 'ignore'
         datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
+        datamodule.setup(stage='test')
         pred = run.trainer.predict(model=run.model, dataloaders=datamodule.test_dataloader())
         assert pred, f"Prediction output is empty for run {run} and query {query}"
         pred = {k: [x[k] for x in pred] for k in pred[0].keys()}
@@ -165,11 +169,14 @@ class ExperimentRegistry:
         if stored_metrics:
             return stored_metrics
         run = self.get_run(dir)
-        pred = self.predict(run, query)
         metrics = {
-            'censor_auc': roc_auc_score(pred['censor_target'], pred['censor_score']),
-            'occurs_auc': roc_auc_score(pred['occurs_target'], pred['occurs_score'])
+            'censor_auc': [],
+            'occurs_auc': [],
         }
+        for i in range(self.predict_N_times): 
+            pred = self.predict(run, query)
+            metrics['censor_auc'].append(roc_auc_score(pred['censor_target'], pred['censor_score']))
+            metrics['occurs_auc'].append(roc_auc_score(pred['occurs_target'], pred['occurs_score']))
         self.store_metrics(dir, query, metrics)
         return metrics
 
