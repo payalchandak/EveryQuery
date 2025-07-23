@@ -107,6 +107,8 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         if best_model_path == "":
             log.warning("Best ckpt not found! Using current weights for testing...")
             best_model_path = None
+        for logger in trainer.loggers:
+            logger.log_hyperparams({'best_model_path':best_model_path})
         trainer.test(model=model, datamodule=datamodule, ckpt_path=best_model_path)
         log.info(f"Best ckpt path: {best_model_path}")
 
