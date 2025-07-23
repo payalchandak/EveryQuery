@@ -4,12 +4,13 @@ import ipdb
 
 exp = ExperimentRegistry()
 
-exp.add_run('stage_0', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-05-26_17-07-50_945117")
-exp.add_run('stage_1', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-05-26_22-03-31_379915")
-exp.add_run('stage_2', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-07-01_09-30-24_735572")
-exp.add_run('stage_3', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-07-06_16-53-24_105174")
+exp.add_run('stage_0', "")
+exp.add_run('stage_1', "")
+exp.add_run('stage_2', "")
+exp.add_run('stage_3', "")
 
 eval_queries = exp.get_one_run('stage_0').training_queries
+# also get hold out queries
 
 for query in eval_queries: 
     print(query)
