@@ -174,7 +174,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
                         )
                     )
 
-    @TimeableMixin.TimeAs('eq__load_data')
     def _load_data(self):
         return (
             pl.read_parquet(self.config.code_metadata_fp)
@@ -207,7 +206,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
             )
         )
 
-    @TimeableMixin.TimeAs('eq__set_data_at_code')
     def _set_data_at_code(self, code, col, value):
         code = code.lower()
         self.metadata = self.metadata.with_columns(
@@ -217,7 +215,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
             .alias(col)
         )
 
-    @TimeableMixin.TimeAs('eq__get_data_at_code')
     def _get_data_at_code(self, code, col):
         code = code.lower()
         return (
@@ -226,7 +223,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
             .item()
         )
 
-    @TimeableMixin.TimeAs('eq__validate_codes')
     def _validate_codes(self, codes):
         valid_codes = {x.lower() for x in self.metadata["code"].to_list()}
         for x in codes:
@@ -237,7 +233,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
                 )
         return
 
-    @TimeableMixin.TimeAs('eq__validate_range_bound')
     def _validate_range_bound(self, x):
         if isinstance(x, str):
             if not x.startswith("Q"):
@@ -251,7 +246,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
         elif not isinstance(x, (int, float)):
             raise ValueError(f"Value '{x}' must be an int, float, or str.")
 
-    @TimeableMixin.TimeAs('eq_set_codes')
     def set_codes(self, codes: list[str] = None):
         if codes is None or not codes:
             self.code_options = self.metadata
@@ -267,7 +261,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
             )
         )
 
-    @TimeableMixin.TimeAs('eq_set_values')
     def set_values(self, strategy: str, data: list | dict):
         assert strategy in self.value_strategies
         if strategy == "manual":
@@ -310,12 +303,10 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
         # refresh code options with updated value info
         self.set_codes(codes=self.code_options["code"].to_list())
 
-    @TimeableMixin.TimeAs('eq_sample_code')
     def sample_code(self):
         code = random.choice(self._code_options_dict)
         return code 
 
-    @TimeableMixin.TimeAs('eq_sample_value_range')
     def sample_value_range(self, code):
         match code["values/strategy"]:
             case "manual":
@@ -356,7 +347,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
         }
         return event
 
-    @TimeableMixin.TimeAs('eq_normalize')
     def normalize(self, query):
         if self.config.normalize_query:
             query["duration"] = (query["duration"] - self.config.min_future) / (
@@ -390,7 +380,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
 
         return future, is_censored
 
-    @TimeableMixin.TimeAs('eq_sample_duration')
     def sample_duration(self, max_record_future):
         match self.config.duration_sampling_strategy:
             case "within_record":
@@ -413,7 +402,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
             raise ValueError(f"duration must be non-negative, but got {duration}")
         return duration
 
-    @TimeableMixin.TimeAs('eq_sample_offset')
     def sample_offset(self, max_record_future):
         match self.config.offset_sampling_strategy:
             case "within_record":
@@ -465,7 +453,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
         
         return count
 
-    @TimeableMixin.TimeAs('eq_get_subject_times')
     def get_subject_times(self, subject_id):
         """
         alternative option to compute times
@@ -481,7 +468,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
         assert np.all(times[:-1] <= times[1:]), 'subject times not sorted'
         return times
 
-    @TimeableMixin.TimeAs('eq_get_future_duration')
     def get_future_duration(self, subject_id, context_end_idx, record_end_idx):
         assert context_end_idx <= record_end_idx, f"context_end_idx: {context_end_idx}, record_end_idx: {record_end_idx}"
         times = self.get_subject_times(subject_id)
@@ -522,7 +508,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
 
         return item
 
-    @TimeableMixin.TimeAs('eq__query_collate')
     def _query_collate(self, batch: list[dict]) -> dict:
         return {
             "offset": torch.tensor([x["offset"] for x in batch], dtype=torch.float64),
@@ -534,7 +519,6 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
             "range_upper": torch.tensor([x["range_upper"] for x in batch], dtype=torch.float64),
         }
 
-    @TimeableMixin.TimeAs('eq__answer_collate')
     def _answer_collate(self, batch: list[dict]) -> dict:
         return {
             "censored": torch.tensor([x["censored"] for x in batch], dtype=torch.bool).unsqueeze(1),
