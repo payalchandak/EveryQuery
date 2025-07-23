@@ -166,19 +166,23 @@ class ExperimentRegistry:
 
     def _evaluate(self, dir, query):
         stored_metrics = self.get_metrics(dir, query)
-        if stored_metrics:
-            return stored_metrics
-        run = self.get_run(dir)
         metrics = {
-            'censor_auc': [],
-            'occurs_auc': [],
+            'censor_auc': stored_metrics.get('censor_auc', []) if stored_metrics else [],
+            'occurs_auc': stored_metrics.get('occurs_auc', []) if stored_metrics else [],
         }
-        for i in range(self.predict_N_times): 
+        n_done = len(metrics['censor_auc'])
+        if n_done >= self.predict_N_times:
+            return metrics
+        run = self.get_run(dir)
+        for _ in range(n_done, self.predict_N_times):
+            print(f"Predicting {_} of {self.predict_N_times-n_done}")
             pred = self.predict(run, query)
             metrics['censor_auc'].append(roc_auc_score(pred['censor_target'], pred['censor_score']))
             metrics['occurs_auc'].append(roc_auc_score(pred['occurs_target'], pred['occurs_score']))
-        self.store_metrics(dir, query, metrics)
+            self.store_metrics(dir, query, metrics)
+            del pred 
         return metrics
+
 
     def evaluate(self, ids, queries):
         if isinstance(ids, str): ids = [ids]
