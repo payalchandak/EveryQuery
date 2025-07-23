@@ -119,6 +119,10 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if hasattr(datamodule.data_train, "_timings"):
         loguru.logger.debug("Train Time: ", datamodule.data_train._profile_durations())
 
+    print('-'*60)
+    print("PROFILING")
+    print(datamodule.data_train._profile_durations())
+
     return metric_dict, object_dict, best_model_path
 
 
