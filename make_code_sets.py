@@ -1,6 +1,6 @@
 import yaml, pathlib, os, polars as pl, numpy as np
 
-sizes = [10, 50, 100, 500, 1000, 5000, 10000]  
+sizes = [10, 100, 1000, 10000]  
 
 OUT_DIR = "src/configs/data/codes"
 out_dir = pathlib.Path(OUT_DIR)
