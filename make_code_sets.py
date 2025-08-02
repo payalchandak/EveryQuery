@@ -1,4 +1,4 @@
-import yaml, pathlib, os, polars as pl, numpy as np
+import re, yaml, pathlib, os, polars as pl, numpy as np
 
 sizes = [10, 100, 1000, 10000]  
 
@@ -41,9 +41,7 @@ with open(out_path, "w") as f:
 print(f"Saved hold out codes with {len(hold_out)} codes to {out_path}")
 
 # tests 
-import re
 
-# Collect stage YAMLs in the order 10 → 100 → 1000 → 10000
 stage_files = sorted(
     out_dir.glob("stage_*.yaml"),
     key=lambda p: int(re.search(r"\d+$", p.stem).group()),
@@ -61,20 +59,16 @@ with open(out_dir / "hold_out.yaml") as fh:
         yaml.safe_load("".join(line for line in fh if not line.lstrip().startswith("#")))
     )
 
-# 1️⃣  correct sizes
 actual_sizes = [len(s) for s in stage_sets]
 assert actual_sizes == sizes, f"Stage sizes mismatch: {actual_sizes} ≠ {sizes}"
 
-# 2️⃣  inclusion property
 for i in range(1, len(stage_sets)):
     assert stage_sets[i - 1] <= stage_sets[i], (
         f"stage with {sizes[i-1]} codes is *not* a subset of stage with {sizes[i]} codes"
     )
 
-# 3️⃣  hold‑out disjointness
 assert hold_out_set.isdisjoint(stage_sets[-1]), "Hold‑out overlaps with staged codes"
 
-# 4️⃣  exhaustive coverage
 assert stage_sets[-1] | hold_out_set == set(all_codes), (
     "Union of largest stage and hold‑out does not equal the full code universe"
 )
