@@ -278,8 +278,7 @@
 - DIAGNOSIS//ICD//9//E9359
 - LAB//51879//N/A
 - MEDICATION//START//Vancomycin Oral Liquid
-- MEDICATION//START//PHENObarbital - ICU Alcohol Withdrawal (Initial Load / Rescue
-  Dose)
+- MEDICATION//START//PHENObarbital - ICU Alcohol Withdrawal (Initial Load / Rescue Dose)
 - MEDICATION//START//Atropine Sulfate
 - MEDICATION//STOP//Naltrexone
 - MEDICATION//Nicotine Patch//Applied
@@ -891,8 +890,7 @@
 - DRG//HCFA//194//SIMPLE PNEUMONIA & PLEURISY W CC
 - PROCEDURE//ICD//9//3951
 - DIAGNOSIS//ICD//10//M940
-- DRG//HCFA//246//PERCUTANEOUS CARDIOVASCULAR PROCEDURES W DRUG-ELUTING STENT W MCC
-  OR 4+
+- DRG//HCFA//246//PERCUTANEOUS CARDIOVASCULAR PROCEDURES W DRUG-ELUTING STENT W MCC OR 4+
 - MEDICATION//STOP//Aspirin EC
 - DIAGNOSIS//ICD//10//G252
 - DIAGNOSIS//ICD//10//G40209
@@ -953,8 +951,7 @@
 - DIAGNOSIS//ICD//10//G40109
 - PROCEDURE//ICD//9//3220
 - LAB//51063//mOsm/kg
-- MEDICATION//STOP//PHENObarbital - ICU Alcohol Withdrawal (Initial Load / Rescue
-  Dose)
+- MEDICATION//STOP//PHENObarbital - ICU Alcohol Withdrawal (Initial Load / Rescue Dose)
 - LAB//227872//UNK
 - LAB//227616//UNK
 - MEDICATION//STOP//Cyclophosphamide
@@ -1470,8 +1467,7 @@
 - LAB//224023//UNK
 - TRANSFER_TO//admit//Transplant
 - LAB//227953//UNK
-- MEDICATION//START//Alteplase 1mg/2mL ( Clearance ie. PICC, midline, tunneled access
-  line, PA )
+- MEDICATION//START//Alteplase 1mg/2mL ( Clearance ie. PICC, midline, tunneled access line, PA )
 - DIAGNOSIS//ICD//10//S2241XA
 - MEDICATION//STOP//Aquaphor Ointment
 - DIAGNOSIS//ICD//9//25090
@@ -2157,8 +2153,7 @@
 - DIAGNOSIS//ICD//9//73819
 - MEDICATION//Nitroglycerin//Not Started
 - MEDICATION//START//Amlodipine
-- MEDICATION//Potassium Chloride Replacement (Critical Care and Oncology)//Not Given
-  per Sliding Scale
+- MEDICATION//Potassium Chloride Replacement (Critical Care and Oncology)//Not Given per Sliding Scale
 - DIAGNOSIS//ICD//10//S72002A
 - DIAGNOSIS//ICD//9//V462
 - MEDICATION//START//Cepacol (Menthol)
@@ -3895,8 +3890,7 @@
 - DIAGNOSIS//ICD//10//G931
 - MEDICATION//START//Ipratropium-Albuterol Neb
 - LAB//223900//UNK
-- DRG//HCFA//65//INTRACRANIAL HEMORRHAGE OR CEREBRAL INFARCTION W CC OR TPA IN 24
-  HRS
+- DRG//HCFA//65//INTRACRANIAL HEMORRHAGE OR CEREBRAL INFARCTION W CC OR TPA IN 24 HRS
 - PROCEDURE//END//229351
 - LAB//50873//N/A
 - MEDICATION//START//Estradiol
@@ -4800,8 +4794,7 @@
 - MEDICATION//Lidocaine 1%//Administered
 - MEDICATION//STOP//Albuterol MDI
 - MEDICATION//Morphine Sulfate//Started
-- MEDICATION//Calcium Gluconate sliding scale (Critical Care-Ionized calcium)//Not
-  Given per Sliding Scale
+- MEDICATION//Calcium Gluconate sliding scale (Critical Care-Ionized calcium)//Not Given per Sliding Scale
 - DIAGNOSIS//ICD//9//2448
 - DIAGNOSIS//ICD//9//V1082
 - LAB//223921//UNK
@@ -4814,8 +4807,7 @@
 - MEDICATION//START//Phosphorus
 - LAB//225339//UNK
 - DIAGNOSIS//ICD//10//D573
-- MEDICATION//Magnesium Sulfate Replacement (Critical Care and Oncology)//Not Given
-  per Sliding Scale
+- MEDICATION//Magnesium Sulfate Replacement (Critical Care and Oncology)//Not Given per Sliding Scale
 - INFUSION_END//221668
 - PROCEDURE//ICD//10//0B9D8ZX
 - PROCEDURE//ICD//9//311
@@ -5767,8 +5759,7 @@
 - LAB//224970//UNK
 - MEDICATION//START//Milrinone
 - MEDICATION//STOP//Quetiapine extended-release
-- MEDICATION//START//Alteplase 1mg/2mL ( Clearance ie. PICC, tunneled access line,
-  PA )
+- MEDICATION//START//Alteplase 1mg/2mL ( Clearance ie. PICC, tunneled access line, PA )
 - PROCEDURE//ICD//9//5411
 - DRG//HCFA//244//PERMANENT CARDIAC PACEMAKER IMPLANT W/O CC/MCC
 - DIAGNOSIS//ICD//9//9972
@@ -5888,8 +5879,7 @@
 - LAB//227813//UNK
 - MEDICATION//Heparin// in Other Location
 - DIAGNOSIS//ICD//9//56400
-- DRG//APR//312//SKIN GRAFT, EXCEPT HAND, FOR MUSCULOSKELETAL & CONNECTIVE TISSUE
-  DIAGNOSES
+- DRG//APR//312//SKIN GRAFT, EXCEPT HAND, FOR MUSCULOSKELETAL & CONNECTIVE TISSUE DIAGNOSES
 - MEDICATION//Torsemide//Delayed Administered
 - DRG//APR//383//CELLULITIS & OTHER SKIN INFECTIONS
 - LAB//224441//UNK
@@ -6008,8 +5998,7 @@
 - DIAGNOSIS//ICD//10//C8338
 - PROCEDURE//ICD//9//8628
 - DIAGNOSIS//ICD//10//G4733
-- MEDICATION//STOP//Alteplase 1mg/2mL ( Clearance ie. PICC, tunneled access line,
-  PA )
+- MEDICATION//STOP//Alteplase 1mg/2mL ( Clearance ie. PICC, tunneled access line, PA )
 - MEDICATION//STOP//Morphine Sulfate (Concentrated Oral Soln)
 - LAB//229695//UNK
 - DIAGNOSIS//ICD//10//B954
@@ -6210,8 +6199,7 @@
 - PROCEDURE//ICD//9//8876
 - MEDICATION//START//Morphine Sulfate (Oral Soln.)
 - DIAGNOSIS//ICD//10//M179
-- DRG//HCFA//291//HEART FAILURE & SHOCK W MCC OR PERIPHERAL EXTRACORPOREAL MEMBRANE
-  OXYGEN
+- DRG//HCFA//291//HEART FAILURE & SHOCK W MCC OR PERIPHERAL EXTRACORPOREAL MEMBRANE OXYGEN
 - LAB//51626//UNK
 - MEDICATION//START//Lanthanum
 - MEDICATION//STOP//Acyclovir Ointment 5%
@@ -6526,8 +6514,7 @@
 - DIAGNOSIS//ICD//9//64683
 - MEDICATION//Alteplase//Confirmed
 - LAB//224019//UNK
-- "MEDICATION//Morphine Infusion \u2013 Comfort Care Guidelines//Administered Bolus\
-  \ from IV Drip"
+- "MEDICATION//Morphine Infusion \u2013 Comfort Care Guidelines//Administered Bolus from IV Drip"
 - HOSPITAL_DISCHARGE//HOME
 - DIAGNOSIS//ICD//9//87344
 - MEDICATION//RisperiDONE//Administered
@@ -6681,8 +6668,7 @@
 - DRG//APR//133//RESPIRATORY FAILURE
 - MEDICATION//START//Nystatin Cream
 - DIAGNOSIS//ICD//9//78701
-- MEDICATION//Potassium Chloride Replacement (Critical Care and Oncology) //Not Given
-  per Sliding Scale
+- MEDICATION//Potassium Chloride Replacement (Critical Care and Oncology) //Not Given per Sliding Scale
 - LAB//51296//N/A
 - LAB//229122//UNK
 - DIAGNOSIS//ICD//9//3659
@@ -7141,8 +7127,7 @@
 - DIAGNOSIS//ICD//9//67202
 - MEDICATION//CeFAZolin//Stopped
 - MEDICATION//Bupivacaine 0.1%//Stopped - Unscheduled
-- MEDICATION//Alteplase 1mg/2mL ( Clearance ie. PICC, midline, tunneled access line,
-  PA )//Not Given
+- MEDICATION//Alteplase 1mg/2mL ( Clearance ie. PICC, midline, tunneled access line, PA )//Not Given
 - MEDICATION//START//glimepiride
 - LAB//228569//UNK
 - MEDICATION//START//Anti-Thymocyte Globulin (Rabbit)
@@ -7409,8 +7394,7 @@
 - LAB//224370//UNK
 - DIAGNOSIS//ICD//9//5531
 - MEDICATION//START//Doxepin HCl
-- DRG//HCFA//897//ALCOHOL/DRUG ABUSE OR DEPENDENCE W/O REHABILITATION THERAPY W/O
-  MCC
+- DRG//HCFA//897//ALCOHOL/DRUG ABUSE OR DEPENDENCE W/O REHABILITATION THERAPY W/O MCC
 - HOSPITAL_DISCHARGE//AGAINST ADVICE
 - INFUSION_START//225869
 - DIAGNOSIS//ICD//9//7210
@@ -8234,8 +8218,7 @@
 - DRG//HCFA//834//ACUTE LEUKEMIA W/O MAJOR O.R. PROCEDURE W MCC
 - MEDICATION//CefTRIAXone//Not Given
 - MEDICATION//Labetalol//Not Given
-- DRG//APR//57//CONCUSSION, CLOSED SKULL FX NOS,UNCOMPLICATED INTRACRANIAL INJURY,
-  COMA < 1 HR OR NO COMA
+- DRG//APR//57//CONCUSSION, CLOSED SKULL FX NOS,UNCOMPLICATED INTRACRANIAL INJURY, COMA < 1 HR OR NO COMA
 - INFUSION_END//229632
 - DIAGNOSIS//ICD//10//K2960
 - PROCEDURE//ICD//9//5732
@@ -8542,8 +8525,7 @@
 - LAB//224896//cm
 - MEDICATION//Heparin//Not Confirmed
 - INFUSION_END//226367
-- MEDICATION//STOP//Alteplase 1mg/2mL ( Clearance ie. PICC, midline, tunneled access
-  line, PA )
+- MEDICATION//STOP//Alteplase 1mg/2mL ( Clearance ie. PICC, midline, tunneled access line, PA )
 - MEDICATION//START//Amitriptyline HCl
 - MEDICATION//START//Hydrocortisone Acetate 10%  Foam
 - LAB//223973//UNK
@@ -9221,13 +9203,11 @@
 - DIAGNOSIS//ICD//9//04110
 - LAB//225231//UNK
 - DIAGNOSIS//ICD//10//R29701
-- DRG//HCFA//269//AORTIC AND HEART ASSIST PROCEDURES EXCEPT PULSATION BALLOON W/O
-  MCC
+- DRG//HCFA//269//AORTIC AND HEART ASSIST PROCEDURES EXCEPT PULSATION BALLOON W/O MCC
 - MEDICATION//START//LeVETiracetam
 - DRG//HCFA//856//POSTOPERATIVE OR POST-TRAUMATIC INFECTIONS W O.R. PROC W MCC
 - DIAGNOSIS//ICD//10//K279
-- MEDICATION//START//Alteplase 1mg/2mL ( Clearance ie. PICC, tunneled access line
-  )
+- MEDICATION//START//Alteplase 1mg/2mL ( Clearance ie. PICC, tunneled access line )
 - LAB//224430//UNK
 - DRG//APR//44//INTRACRANIAL HEMORRHAGE
 - MEDICATION//START//LevoFLOXacin
@@ -9980,8 +9960,7 @@
 - DIAGNOSIS//ICD//9//7336
 - LAB//50952//ug/dL
 - DRG//HCFA//502//SOFT TISSUE PROCEDURES W/O CC/MCC
-- MEDICATION//Alteplase 1mg/2mL ( Clearance ie. PICC, midline, tunneled access line,
-  PA )//Administered
+- MEDICATION//Alteplase 1mg/2mL ( Clearance ie. PICC, midline, tunneled access line, PA )//Administered
 - MEDICATION//START//Perphenazine
 - LAB//223961//UNK
 - DRG//HCFA//69//TRANSIENT ISCHEMIA
@@ -10100,8 +10079,7 @@
 - MEDICATION//Scopolamine Patch//Removed
 - LAB//51507//#/lpf
 - MEDICATION//START//Ambisome
-- MEDICATION//Alteplase 1mg/2mL ( Clearance ie. PICC, tunneled access line )//Not
-  Given
+- MEDICATION//Alteplase 1mg/2mL ( Clearance ie. PICC, tunneled access line )//Not Given
 - MEDICATION//STOP//CloNIDine
 - MEDICATION//Atovaquone Suspension//Not Given
 - INFUSION_START//227531
@@ -11153,8 +11131,7 @@
 - DRG//HCFA//884//ORGANIC DISTURBANCES & MENTAL RETARDATION
 - MEDICATION//Phosphorus//Administered
 - MEDICATION//UNK//Not Confirmed
-- DRG//APR//56//BRAIN CONTUSION/LACERATION & COMPLICATED SKULL FX, COMA < 1 HR OR
-  NO COMA
+- DRG//APR//56//BRAIN CONTUSION/LACERATION & COMPLICATED SKULL FX, COMA < 1 HR OR NO COMA
 - DIAGNOSIS//ICD//9//4592
 - DIAGNOSIS//ICD//10//F05
 - MEDICATION//PARoxetine//Not Given

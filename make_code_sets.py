@@ -20,7 +20,7 @@ if N < max(SIZES):
     raise ValueError(f"Need at least {max(SIZES)} unique codes in metadata, but only {N} found.")
 
 # 2️⃣  Canonical shuffled order for this SEED ------------------------------------
-shuffle_path = out_dir / f"shuffled_codes_seed_{SEED}.yaml"
+shuffle_path = out_dir / f"shuffled_seed_{SEED}.yaml"
 
 if shuffle_path.exists():
     # Re‑use the canonical order
@@ -38,7 +38,7 @@ else:
     print(shuffled[7])
     print(shuffled[1999])
     with open(shuffle_path, "w") as fh:
-        yaml.safe_dump(shuffled, fh)
+        yaml.safe_dump(shuffled, fh, width=float("inf"))
     print(f"Saved canonical shuffle of {N} codes → {shuffle_path}")
 
 # 3️⃣  Generate / validate stage files ------------------------------------------
