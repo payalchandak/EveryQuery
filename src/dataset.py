@@ -11,7 +11,7 @@ import omegaconf
 import polars as pl
 import scipy
 import torch
-
+import pickle
 
 class EveryQueryDataset(PytorchDataset, TimeableMixin):
 
@@ -485,6 +485,9 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
     def _seeded_getitem(self, idx: int) -> dict[str, list[float]]:
         
         context = super()._seeded_getitem(idx)
+        
+        with open(f'/home/pac4279/EveryQuery/data-test/context_{idx}.pkl', 'wb') as f: 
+            pickle.dump(context, f)
 
         subj_dynamic, subject_id, record_start_idx, record_end_idx = super().load_subject_dynamic_data(idx)
 
