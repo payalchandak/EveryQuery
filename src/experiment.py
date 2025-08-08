@@ -83,8 +83,8 @@ class Run:
         return self._trainer
 
 class ExperimentRegistry:
-    def __init__(self, registry_path='experiment_registry.pkl'):
-        self.predict_N_times = 5
+    def __init__(self, predict_N_times=5, registry_path='experiment_registry.pkl'):
+        self.predict_N_times = predict_N_times
         self.runs_by_dir = {}  # Only names and paths, instantiate on demand
         self.runs_by_name = defaultdict(set)
         self.metrics = defaultdict(dict)  # {(dir, query) -> metrics dictionary}
@@ -127,8 +127,11 @@ class ExperimentRegistry:
         self.metrics[(dir, query)] = metrics
         self.save()
 
-    def get_metrics(self, dir, query):
-        return self.metrics.get((dir, query))
+    def get_metrics(self, dir, query=None):
+        if query is not None: 
+            return self.metrics.get((dir, query))
+        else: 
+            return {k:v for k,v in self.metrics.items() if k[0]==dir}
 
     def save(self):
         with open(self.registry_path, 'wb') as f:
@@ -151,6 +154,7 @@ class ExperimentRegistry:
         cfg.data.fixed_offset = query.offset
         if query.range is None:
             cfg.data.default_value_sampling_strategy = 'ignore'
+        cfg.data.dataloader.num_workers = 10
         datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
         datamodule.setup(stage='test')
         pred = run.trainer.predict(model=run.model, dataloaders=datamodule.test_dataloader())
@@ -269,7 +273,7 @@ class ExperimentRegistry:
         run_b: str,
         queries: list[Query] | set[Query],
         *,
-        marker_size: int = 100,
+        marker_size: int = 7,
         xlim: tuple[float, float] = (0, 1.0),
         ylim: tuple[float, float] = (0, 1.0),
         figsize: tuple[int, int] = (8, 8),
@@ -309,11 +313,16 @@ class ExperimentRegistry:
             queries = [queries]
 
         # Collect AUROC values
-        aurocs_a, aurocs_b = [], []
+        aurocs_a_mean, aurocs_b_mean = [], []
+        aurocs_a_std, aurocs_b_std = [], []
         for q in queries:
             try:
-                aurocs_a.append(self.evaluate(run_a, q)["occurs_auc"][0])
-                aurocs_b.append(self.evaluate(run_b, q)["occurs_auc"][0])
+                metric_a = self.evaluate(run_a, q)["occurs_auc"]
+                metric_b = self.evaluate(run_b, q)["occurs_auc"]
+                aurocs_a_mean.append(metric_a[0])
+                aurocs_b_mean.append(metric_b[0])
+                aurocs_a_std.append(metric_a[1])
+                aurocs_b_std.append(metric_b[1])
             except Exception as exc:
                 print(f"[plot_auroc_comparison] Skipping {q} – {exc}")
 
@@ -321,7 +330,20 @@ class ExperimentRegistry:
         if ax is None:
             fig, ax = plt.subplots(figsize=figsize)
 
-        ax.scatter(aurocs_a, aurocs_b, s=marker_size)
+        ax.errorbar(
+            aurocs_a_mean,
+            aurocs_b_mean,
+            xerr=aurocs_a_std,
+            yerr=aurocs_b_std,
+            fmt='o',
+            markersize=marker_size,  # markersize in errorbar is diameter; adjust if needed
+            ecolor='gray',
+            color='k',
+            capsize=3,
+            linestyle='None'
+        )
+
+        # ax.scatter(aurocs_a, aurocs_b, s=marker_size)
         # Reference parity line
         ax.plot(xlim, ylim, "r--", linewidth=1)
 

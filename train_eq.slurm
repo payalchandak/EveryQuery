@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=stage_4
-#SBATCH --output=logs/stage_4_%j.out
-#SBATCH --error=logs/stage_4_%j.err
+#SBATCH --job-name=n1
+#SBATCH --output=logs/n1_%j.out
+#SBATCH --error=logs/n1_%j.err
 #SBATCH --time=40:00:00
 #SBATCH --partition=gpu_quad
 #SBATCH --gres=gpu:1
