@@ -3,7 +3,7 @@ import re, yaml, random, pathlib, os, polars as pl, numpy as np
 # ------------ user‑configurable parameters ------------------------
 SIZES      = [1, 3, 5, 8, 10, 100, 1000, 10000]        # grow this list any time
 SEED       = 140799                          # keep constant for reproducibility
-OUT_DIR    = "src/configs/data/codes"        # root output directory
+OUT_DIR    = "configs/data/codes"        # root output directory
 PROCESSED  = os.getenv("PROCESSED", "/n/data1/hms/dbmi/zaklab/payal/mimic/processed")
 # ------------------------------------------------------------------
 
