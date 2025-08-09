@@ -17,7 +17,6 @@ exp.add_run('stage_2', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-0
 exp.add_run('stage_3',"/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-07-22_22-59-42_411916/")
 
 in_queries = exp.get_one_run('stage_0').training_queries
-print(in_queries)
 
 # with open('/home/pac4279/EveryQuery/src/configs/data/codes/hold_out.yaml', 'r') as file:
 #     data = yaml.safe_load(file)
@@ -56,13 +55,23 @@ plt.tight_layout()
 plt.savefig('figures/in_out_histogram.png')
 
 predictions = []
-run = exp.get_run("/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-07-22_23-07-53_790919/")
-for q in list(out_queries): 
+run = exp.get_run("/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-07-22_22-59-42_411916/")
+for q in list(in_queries): 
     pred = exp.predict(run, q)
     predictions.append((run, q, pred['censor_target'], pred['censor_score'], pred['occurs_target'], pred['occurs_score']))
     del pred
     gc.collect()
     torch.cuda.empty_cache()
+fig, axes = plt.subplots(2, 5, figsize=(50, 10))
+axes = axes.flatten()
+for i in range(len(predictions)): 
+    run, q, cen_target, cen_score, occ_target, occ_score = predictions[i]
+    occ_score = torch.tensor(occ_score)
+    occ_target = torch.tensor(occ_target)
+    axes[i].set_title(q.code)
+    sns.histplot(occ_score[occ_target==0], alpha=0.5, legend="0", ax=axes[i], stat='density', bins=25)
+    sns.histplot(occ_score[occ_target==1], alpha=0.5, legend="1", ax=axes[i], stat='density', bins=10)
+plt.legend(); plt.tight_layout(); plt.savefig('figures/occurs_distribution.png')
 cen_auc_heatmap = np.zeros((len(predictions),len(predictions)))
 occ_auc_heatmap = np.zeros((len(predictions),len(predictions)))
 for i, (run_i, q_i, cen_target_i, cen_score_i, occ_target_i, occ_score_i) in enumerate(predictions): 
@@ -73,20 +82,15 @@ for i, (run_i, q_i, cen_target_i, cen_score_i, occ_target_i, occ_score_i) in enu
         cen_auc_heatmap[j][i] = roc_auc_score(cen_target_j, cen_score_i)
         occ_auc_heatmap[i][i] = roc_auc_score(occ_target_i, occ_score_i)
         occ_auc_heatmap[j][j] = roc_auc_score(occ_target_j, occ_score_j)
-        # need to truncate because censoring is different 
-        occ_auc_heatmap[i][j] = roc_auc_score(occ_target_i[:6000], occ_score_j[:6000])
-        occ_auc_heatmap[j][i] = roc_auc_score(occ_target_j[:6000], occ_score_i[:6000])
+        occ_auc_heatmap[i][j] = roc_auc_score(occ_target_i, occ_score_j)
+        occ_auc_heatmap[j][i] = roc_auc_score(occ_target_j, occ_score_i)
 fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-sns.heatmap(cen_auc_heatmap*100, ax=axes[0], annot=True, fmt=".0f", annot_kws={"size":8}, cbar=True, vmin=0, vmax=100)
-axes[0].set_title("Censor AUC")
-axes[0].set_xlabel("Score Query")
-axes[0].set_ylabel("Target Query")
+sns.heatmap(cen_auc_heatmap*100, ax=axes[0], annot=True, fmt=".0f", annot_kws={"size":8}, cbar=True)
+axes[0].set_title("Censor AUC"); axes[0].set_xlabel("Score Query"); axes[0].set_ylabel("Target Query")
 sns.heatmap(occ_auc_heatmap*100, ax=axes[1], annot=True, fmt=".0f", annot_kws={"size":8}, cbar=True, vmin=0, vmax=100)
-axes[1].set_title("Occurs AUC")
-axes[1].set_xlabel("Score Query")
-axes[1].set_ylabel("Target Query")
-plt.tight_layout()
-plt.savefig('figures/permuted_auc.png')
+axes[1].set_title("Occurs AUC"); axes[1].set_xlabel("Score Query"); axes[1].set_ylabel("Target Query")
+plt.tight_layout(); plt.savefig('figures/permuted_auc_n10000.png')
+ipdb.set_trace()
 
 exp.plot_auroc_comparison('stage_0','stage_1',in_queries).figure.savefig('figures/in_01.png')
 exp.plot_auroc_comparison('stage_0','stage_2',in_queries).figure.savefig('figures/in_02.png')

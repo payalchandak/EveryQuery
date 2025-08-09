@@ -6,6 +6,7 @@ mimic/
 results/
 meds-torch/ 
 data-test/
+figures/
 logs/*
 MEDS_EIC_AR/
 *.png
