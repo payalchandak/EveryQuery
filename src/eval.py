@@ -16,6 +16,8 @@ exp.add_run('stage_1', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-0
 exp.add_run('stage_2', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-07-23_17-20-20_211916/")
 exp.add_run('stage_3',"/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-07-22_22-59-42_411916/")
 
+exp.add_run('censor_occurs_separate',"/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-08-08_23-11-47_886728")
+
 in_queries = exp.get_one_run('stage_0').training_queries
 
 # with open('/home/pac4279/EveryQuery/src/configs/data/codes/hold_out.yaml', 'r') as file:
@@ -33,29 +35,29 @@ out_queries = [Query(code=x, duration=out_duration, offset=0, range=None) for x 
 #         print(f'\t stage_{s} {metric[0]} ± {metric[1]}')
 #     print()
 
-fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-axes = axes.flatten()
-for s in [0, 1, 2, 3]:
-    stage_training_queries = exp.get_one_run(f'stage_{s}').training_queries
-    for q in stage_training_queries:
-        assert q.code not in out_codes
-        assert q not in out_queries
-    in_aucs = [exp.evaluate(f'stage_{s}', query)['occurs_auc'][0] for query in in_queries]
-    out_aucs = [exp.evaluate(f'stage_{s}', query)['occurs_auc'][0] for query in out_queries]
-    ax = axes[s]
-    ax.hist(in_aucs,  bins=20, alpha=0.7, label='In-distribution')
-    ax.hist(out_aucs, bins=20, alpha=0.5, label='Out-of-distribution')
-    ax.set_title(f"N={len(stage_training_queries)} \n In: {np.mean(in_aucs):.2f}    Out: {np.mean(out_aucs):.2f}")
-    ax.set_xlabel("AUROC")
-    ax.set_ylabel("Count")
-    ax.set_xlim(0,1)
-    ax.set_ylim(0,5)
-    ax.legend(loc='upper left')
-plt.tight_layout()
-plt.savefig('figures/in_out_histogram.png')
+# fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+# axes = axes.flatten()
+# for s in [0, 1, 2, 3]:
+#     stage_training_queries = exp.get_one_run(f'stage_{s}').training_queries
+#     for q in stage_training_queries:
+#         assert q.code not in out_codes
+#         assert q not in out_queries
+#     in_aucs = [exp.evaluate(f'stage_{s}', query)['occurs_auc'][0] for query in in_queries]
+#     out_aucs = [exp.evaluate(f'stage_{s}', query)['occurs_auc'][0] for query in out_queries]
+#     ax = axes[s]
+#     ax.hist(in_aucs,  bins=20, alpha=0.7, label='In-distribution')
+#     ax.hist(out_aucs, bins=20, alpha=0.5, label='Out-of-distribution')
+#     ax.set_title(f"N={len(stage_training_queries)} \n In: {np.mean(in_aucs):.2f}    Out: {np.mean(out_aucs):.2f}")
+#     ax.set_xlabel("AUROC")
+#     ax.set_ylabel("Count")
+#     ax.set_xlim(0,1)
+#     ax.set_ylim(0,5)
+#     ax.legend(loc='upper left')
+# plt.tight_layout()
+# plt.savefig('figures/in_out_histogram.png')
 
 predictions = []
-run = exp.get_run("/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-07-22_22-59-42_411916/")
+run = exp.get_run("/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-08-08_23-11-47_886728")
 for q in list(in_queries): 
     pred = exp.predict(run, q)
     predictions.append((run, q, pred['censor_target'], pred['censor_score'], pred['occurs_target'], pred['occurs_score']))
@@ -85,11 +87,11 @@ for i, (run_i, q_i, cen_target_i, cen_score_i, occ_target_i, occ_score_i) in enu
         occ_auc_heatmap[i][j] = roc_auc_score(occ_target_i, occ_score_j)
         occ_auc_heatmap[j][i] = roc_auc_score(occ_target_j, occ_score_i)
 fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-sns.heatmap(cen_auc_heatmap*100, ax=axes[0], annot=True, fmt=".0f", annot_kws={"size":8}, cbar=True)
+sns.heatmap(cen_auc_heatmap*100, ax=axes[0], annot=True, fmt=".4f", annot_kws={"size":8}, cbar=True)
 axes[0].set_title("Censor AUC"); axes[0].set_xlabel("Score Query"); axes[0].set_ylabel("Target Query")
 sns.heatmap(occ_auc_heatmap*100, ax=axes[1], annot=True, fmt=".0f", annot_kws={"size":8}, cbar=True, vmin=0, vmax=100)
 axes[1].set_title("Occurs AUC"); axes[1].set_xlabel("Score Query"); axes[1].set_ylabel("Target Query")
-plt.tight_layout(); plt.savefig('figures/permuted_auc_n10000.png')
+plt.tight_layout(); plt.savefig('figures/permuted_auc.png')
 ipdb.set_trace()
 
 exp.plot_auroc_comparison('stage_0','stage_1',in_queries).figure.savefig('figures/in_01.png')
