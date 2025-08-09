@@ -12,6 +12,7 @@ dataloader:
   pin_memory: False
 
 subsequence_sampling_strategy: random
+load_context_from_test_data: False
   
 code_sampling_strategy: uniform 
 codes: ???

@@ -484,10 +484,13 @@ class EveryQueryDataset(PytorchDataset, TimeableMixin):
     @SeedableMixin.WithSeed
     def _seeded_getitem(self, idx: int) -> dict[str, list[float]]:
         
-        context = super()._seeded_getitem(idx)
-        
-        with open(f'/home/pac4279/EveryQuery/data-test/context_{idx}.pkl', 'wb') as f: 
-            pickle.dump(context, f)
+        # with open(f'/home/pac4279/EveryQuery/data-test/context_{idx}.pkl', 'wb') as f: 
+        #     pickle.dump(context, f)
+        if 'load_context_from_test_data' in self.config and self.config.load_context_from_test_data: 
+            with open(f'/home/pac4279/EveryQuery/data-test/context_{idx}.pkl', 'rb') as f: 
+                context = pickle.load(f)
+        else:
+            context = super()._seeded_getitem(idx)
 
         subj_dynamic, subject_id, record_start_idx, record_end_idx = super().load_subject_dynamic_data(idx)
 

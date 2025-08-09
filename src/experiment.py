@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import hydra
 from hydra import compose, initialize
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 import numpy as np
 import torch
 from lightning import LightningDataModule, LightningModule, Trainer
@@ -155,6 +155,8 @@ class ExperimentRegistry:
         if query.range is None:
             cfg.data.default_value_sampling_strategy = 'ignore'
         cfg.data.dataloader.num_workers = 10
+        OmegaConf.set_struct(cfg.data, False)
+        cfg.data.load_context_from_test_data = True
         datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
         datamodule.setup(stage='test')
         pred = run.trainer.predict(model=run.model, dataloaders=datamodule.test_dataloader())

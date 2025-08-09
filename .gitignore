@@ -5,6 +5,7 @@ mgb/
 mimic/
 results/
 meds-torch/ 
+data-test/
 logs/*
 MEDS_EIC_AR/
 *.png
