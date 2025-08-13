@@ -1,8 +1,7 @@
 from omegaconf import DictConfig
 import torch
 from torchmetrics.classification import BinaryAUROC
-from meds_torch.models import BACKBONE_EMBEDDINGS_KEY, BACKBONE_TOKENS_KEY
-from meds_torch.input_encoder import INPUT_ENCODER_MASK_KEY
+from meds_torch.models import BACKBONE_EMBEDDINGS_KEY
 from meds_torch.models.base_model import BaseModule
 from models.mlp import MLP
 
@@ -15,9 +14,6 @@ class EveryQueryModule(BaseModule):
             'supervised_context',
             'supervised_query',
             'separate_censor_occurs',
-            # New fusion modes that use cross-attention from query→context tokens
-            'ca_shared',               # one fused embedding used for both heads
-            'ca_separate',             # separate fused embeddings for censor/occurs (future vs query)
         ]
 
         query_encoding_mode = {
@@ -43,18 +39,6 @@ class EveryQueryModule(BaseModule):
             self.proj_query = MLP(layers=[self.cfg.query.encod_dim, self.cfg.query.embed_dim], dropout_prob=self.cfg.projector.dropout).append(torch.nn.ReLU())
             self.proj_censor = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
             self.proj_occurs = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
-
-        # Cross-attention fusion modes
-        if self.cfg.projector.mode in ['ca_shared', 'ca_separate']:
-            self.embed_function = self.cross_attention_fusion if self.cfg.projector.mode == 'ca_shared' else self.cross_attention_fusion_separate
-            # Project query (or future) encoding up to token_dim to act as attention query
-            self.proj_query = MLP(layers=[self.cfg.query.encod_dim, self.cfg.token_dim], dropout_prob=self.cfg.projector.dropout).append(torch.nn.ReLU())
-            # Multihead attention: query (1 token) attends over context tokens
-            nheads = getattr(self.cfg.backbone, 'nheads', 4)
-            self.cross_attn = torch.nn.MultiheadAttention(embed_dim=self.cfg.token_dim, num_heads=nheads, batch_first=True)
-            # Heads operate on fused token_dim embeddings
-            self.proj_censor = MLP(layers=[self.cfg.token_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
-            self.proj_occurs = MLP(layers=[self.cfg.token_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
         
         self.metrics = {
             'train': {
@@ -146,8 +130,7 @@ class EveryQueryModule(BaseModule):
         return encoding
     
     def separate_censor_occurs(self, batch): 
-        encoded_context = self.input_encoder(batch['context'])
-        context = self.model(encoded_context)
+        context = self.model(self.input_encoder(batch['context']))
         future = self.proj_query(self.future_encoder(batch['query'])) # reuse query encoder
         censor_embed = torch.concat([context[BACKBONE_EMBEDDINGS_KEY], future], dim=1)
         query = self.proj_query(self.query_encoder(batch['query']))
@@ -155,62 +138,15 @@ class EveryQueryModule(BaseModule):
         return (censor_embed, occurs_embed)
 
     def supervised_query(self, batch): 
-        encoded_context = self.input_encoder(batch['context'])
-        context = self.model(encoded_context)
+        context = self.model(self.input_encoder(batch['context']))
         query = self.proj_query(self.query_encoder(batch['query']))
         embed = torch.concat([context[BACKBONE_EMBEDDINGS_KEY], query], dim=1)
         return embed
 
     def supervised_context(self, batch): 
-        encoded_context = self.input_encoder(batch['context'])
-        context = self.model(encoded_context)
+        context = self.model(self.input_encoder(batch['context']))
         embed = context[BACKBONE_EMBEDDINGS_KEY]
         return embed 
-
-    def _ca(self, query_vec: torch.Tensor, context_tokens: torch.Tensor, key_padding_mask: torch.Tensor) -> torch.Tensor:
-        """Run single-token cross-attention from query_vec over context_tokens.
-
-        Shapes:
-          - query_vec: (B, D)
-          - context_tokens: (B, S, D)
-          - key_padding_mask: (B, S) with True for masked (padded) positions
-        Returns:
-          - fused: (B, D)
-        """
-        q = query_vec.unsqueeze(1)  # (B, 1, D)
-        fused, _ = self.cross_attn(q, context_tokens, context_tokens, key_padding_mask=key_padding_mask)
-        return fused.squeeze(1)
-
-    def cross_attention_fusion(self, batch):
-        """Shared fused embedding for both heads using the query encoding."""
-        encoded_context = self.input_encoder(batch['context'])
-        # meds-torch sets INPUT_ENCODER_MASK_KEY to True for valid tokens; MultiheadAttention expects True for padding -> invert
-        key_padding_mask = ~encoded_context[INPUT_ENCODER_MASK_KEY]
-        context = self.model(encoded_context)
-        context_tokens = context[BACKBONE_TOKENS_KEY]  # (B, S, D)
-
-        query = self.proj_query(self.query_encoder(batch['query']))  # (B, D)
-        fused = self._ca(query, context_tokens, key_padding_mask)
-        return fused
-
-    def cross_attention_fusion_separate(self, batch):
-        """Separate fused embeddings for censor and occurs heads.
-
-        - Censor: fuse with future window (offset+duration)
-        - Occurs: fuse with full query (code ± value, duration, offset)
-        """
-        encoded_context = self.input_encoder(batch['context'])
-        # meds-torch mask True=valid; MHA needs True=pad
-        key_padding_mask = ~encoded_context[INPUT_ENCODER_MASK_KEY]
-        context = self.model(encoded_context)
-        context_tokens = context[BACKBONE_TOKENS_KEY]  # (B, S, D)
-
-        future = self.proj_query(self.future_encoder(batch['query']))  # (B, D)
-        query = self.proj_query(self.query_encoder(batch['query']))    # (B, D)
-
-        censor_embed = self._ca(future, context_tokens, key_padding_mask)
-        occurs_embed = self._ca(query, context_tokens, key_padding_mask)
-        return (censor_embed, occurs_embed)
 
     def _step(self, batch, split):
         embed = self.embed_function(batch)
