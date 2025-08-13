@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=n1
+#SBATCH --job-name=another_10
 #SBATCH --output=logs/n1_%j.out
 #SBATCH --error=logs/n1_%j.err
-#SBATCH --time=40:00:00
+#SBATCH --time=20:00:00
 #SBATCH --partition=gpu_quad
 #SBATCH --gres=gpu:1
-#SBATCH --mem=50G
+#SBATCH --mem=25G
 #SBATCH --cpus-per-task=4
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=payal_chandak@hst.harvard.edu

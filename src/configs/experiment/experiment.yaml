@@ -14,18 +14,20 @@ tags:
 seed: 140799
 
 trainer:
-  min_steps: 2000
-  max_steps: 10000
+  min_steps: 25000
+  max_steps: 100000
+  min_epochs: 25
+  max_epochs: 200
   gradient_clip_val: 1.0
   log_every_n_steps: 10
   devices: 
     - 0
 
-callbacks:
-  early_stopping:
-    monitor: "val/occurs_auc"
-    patience: 10
-    mode: "max"
+# callbacks:
+#   early_stopping:
+#     monitor: "val/occurs_auc"
+#     patience: 10
+#     mode: "max"
 
 logger:
   wandb:

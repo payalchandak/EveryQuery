@@ -8,7 +8,7 @@ dataset_cls: dataset.EveryQueryDataset
 
 dataloader:
   batch_size: 256 # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
-  num_workers: 10
+  num_workers: 25
   pin_memory: False
 
 subsequence_sampling_strategy: random
