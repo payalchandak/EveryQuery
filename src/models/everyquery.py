@@ -80,7 +80,7 @@ class EveryQueryModule(BaseModule):
         self.metrics[split][name].update(**kwargs)
         
     def get_loss(self, embed, answer, split): 
-        if self.cfg.projector.mode in ['separate_censor_occurs', 'ca_separate']:
+        if self.cfg.projector.mode == 'separate_censor_occurs': 
             censor_embed, occurs_embed = embed
         else: 
             occurs_embed = embed
