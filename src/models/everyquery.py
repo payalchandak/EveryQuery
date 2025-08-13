@@ -53,6 +53,20 @@ class EveryQueryModule(BaseModule):
             }
         }
 
+    def pool_backbone_embeddings(self, context: dict) -> torch.Tensor:
+        embeddings = context[BACKBONE_EMBEDDINGS_KEY]
+        try:
+            print(f"[pool_backbone_embeddings] raw embeddings shape: {tuple(embeddings.shape)}")
+        except Exception:
+            print(f"[pool_backbone_embeddings] raw embeddings type: {type(embeddings)}")
+        if isinstance(embeddings, torch.Tensor) and embeddings.dim() == 3 and embeddings.size(1) > 0:
+            print("[pool_backbone_embeddings] using CLS token pooling (taking first token)")
+            pooled = embeddings[:, 0, :]
+            print(f"[pool_backbone_embeddings] pooled embeddings shape: {tuple(pooled.shape)}")
+            return pooled
+        print(f"[pool_backbone_embeddings] returning embeddings as-is with shape: {tuple(embeddings.shape) if isinstance(embeddings, torch.Tensor) else 'N/A'}")
+        return embeddings
+
     def update_metric(self, name, split, **kwargs): 
         # Safely no-op if metric tracking is disabled for this split/name
         metric = self.metrics.get(split, {}).get(name)
@@ -108,13 +122,23 @@ class EveryQueryModule(BaseModule):
 
     def supervised_query(self, batch): 
         context = self.model(self.input_encoder(batch['context']))
-        query = self.proj_query(self.query_encoder(batch['query']))
-        embed = torch.concat([context[BACKBONE_EMBEDDINGS_KEY], query], dim=1)
+        try:
+            print(f"[supervised_query] context raw embeddings shape: {tuple(context[BACKBONE_EMBEDDINGS_KEY].shape)}")
+        except Exception:
+            pass
+        context_embed = self.pool_backbone_embeddings(context)
+        print(f"[supervised_query] context pooled embedding shape: {tuple(context_embed.shape)}")
+        query_pre_proj = self.query_encoder(batch['query'])
+        print(f"[supervised_query] query pre-projection shape: {tuple(query_pre_proj.shape)}")
+        query = self.proj_query(query_pre_proj)
+        print(f"[supervised_query] query post-projection shape: {tuple(query.shape)}")
+        embed = torch.concat([context_embed, query], dim=1)
+        print(f"[supervised_query] final concatenated embedding shape: {tuple(embed.shape)}")
         return embed
 
     def supervised_context(self, batch): 
         context = self.model(self.input_encoder(batch['context']))
-        embed = context[BACKBONE_EMBEDDINGS_KEY]
+        embed = self.pool_backbone_embeddings(context)
         return embed 
 
     def _step(self, batch, split):
