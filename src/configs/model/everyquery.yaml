@@ -5,7 +5,7 @@ defaults:
 _target_: models.everyquery.EveryQueryModule.initialize
 
 projector: 
-  mode: separate_censor_occurs
+  mode: supervised_query
   dropout: 0
   
 query:

@@ -13,7 +13,6 @@ class EveryQueryModule(BaseModule):
         assert self.cfg.projector.mode in [
             'supervised_context',
             'supervised_query',
-            'separate_censor_occurs',
         ]
 
         query_encoding_mode = {

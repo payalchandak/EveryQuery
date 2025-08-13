@@ -154,7 +154,7 @@ class ExperimentRegistry:
         cfg.data.fixed_offset = query.offset
         if query.range is None:
             cfg.data.default_value_sampling_strategy = 'ignore'
-        cfg.data.dataloader.num_workers = 25
+        cfg.data.dataloader.num_workers = 10
         OmegaConf.set_struct(cfg.data, False)
         cfg.data.load_context_from_test_data = True
         datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
