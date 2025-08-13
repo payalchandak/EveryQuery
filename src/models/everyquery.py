@@ -34,10 +34,11 @@ class EveryQueryModule(BaseModule):
             self.proj_occurs = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
 
         self.metrics = {
-            'train': {
-                'censor_auc': BinaryAUROC(),
-                'occurs_auc': BinaryAUROC(),
-            },
+            # 'train': {
+            #     'censor_auc': BinaryAUROC(),
+            #     'occurs_auc': BinaryAUROC(),
+            # },
+            'train': {}, # Do not track AUC during training to save compute
             'val': {
                 'censor_auc': BinaryAUROC(),
                 'occurs_auc': BinaryAUROC(),
@@ -53,8 +54,11 @@ class EveryQueryModule(BaseModule):
         }
 
     def update_metric(self, name, split, **kwargs): 
-        assert name in self.metrics[split], f"Metric '{name}' not found in {split} metrics."
-        self.metrics[split][name].update(**kwargs)
+        # Safely no-op if metric tracking is disabled for this split/name
+        metric = self.metrics.get(split, {}).get(name)
+        if metric is None:
+            return
+        metric.update(**kwargs)
         
     def get_loss(self, embed, answer, split): 
         censor_logits = self.proj_censor(embed)
