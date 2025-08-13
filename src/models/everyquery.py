@@ -33,12 +33,6 @@ class EveryQueryModule(BaseModule):
             self.proj_censor = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
             self.proj_occurs = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
 
-        if self.cfg.projector.mode == 'separate_censor_occurs': 
-            self.embed_function = self.separate_censor_occurs
-            self.proj_query = MLP(layers=[self.cfg.query.encod_dim, self.cfg.query.embed_dim], dropout_prob=self.cfg.projector.dropout).append(torch.nn.ReLU())
-            self.proj_censor = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
-            self.proj_occurs = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
-        
         self.metrics = {
             'train': {
                 'censor_auc': BinaryAUROC(),
@@ -63,19 +57,13 @@ class EveryQueryModule(BaseModule):
         self.metrics[split][name].update(**kwargs)
         
     def get_loss(self, embed, answer, split): 
-        if self.cfg.projector.mode == 'separate_censor_occurs': 
-            censor_embed, occurs_embed = embed
-        else: 
-            occurs_embed = embed
-            censor_embed = embed
-
-        censor_logits = self.proj_censor(censor_embed)
+        censor_logits = self.proj_censor(embed)
         censor_target = answer['censored'].float()
         censor_loss = self.criterion(censor_logits, censor_target)
         self.update_metric(name='censor_auc', split=split, preds=censor_logits.squeeze(1).sigmoid(), target=censor_target.squeeze(1).int())
 
         mask = ~answer['censored'].squeeze(1)
-        occurs_logits = self.proj_occurs(occurs_embed[mask])
+        occurs_logits = self.proj_occurs(embed[mask])
         occurs_target = answer['occurs'][mask]
         occurs_loss = self.criterion(occurs_logits, occurs_target)
         self.update_metric(name='occurs_auc', split=split, preds=occurs_logits.squeeze(1).sigmoid(), target=occurs_target.squeeze(1).int())
@@ -113,28 +101,6 @@ class EveryQueryModule(BaseModule):
         assert encoding.shape[1] == self.cfg.query.encod_dim
         encoding = encoding.float()
         return encoding
-    
-    def future_encoder(self, query): 
-        match self.cfg.query.mode: 
-            case 'stack': 
-                future = query['duration'] + query['offset']
-                encoding = torch.vstack([future.float() for _ in query.keys()]).T
-            case 'triplet':
-                assert self.cfg.token_dim % 2 == 0, "token_dim must be even"
-                duration = query['duration'].unsqueeze(1).repeat(1,self.cfg.token_dim//2)
-                offset = query['offset'].unsqueeze(1).repeat(1,self.cfg.token_dim//2)
-                encoding = torch.concat([duration, offset], dim=1)
-        assert encoding.shape[1] == self.cfg.query.encod_dim
-        encoding = encoding.float()
-        return encoding
-    
-    def separate_censor_occurs(self, batch): 
-        context = self.model(self.input_encoder(batch['context']))
-        future = self.proj_query(self.future_encoder(batch['query'])) # reuse query encoder
-        censor_embed = torch.concat([context[BACKBONE_EMBEDDINGS_KEY], future], dim=1)
-        query = self.proj_query(self.query_encoder(batch['query']))
-        occurs_embed = torch.concat([context[BACKBONE_EMBEDDINGS_KEY], query], dim=1)
-        return (censor_embed, occurs_embed)
 
     def supervised_query(self, batch): 
         context = self.model(self.input_encoder(batch['context']))
