@@ -1,6 +1,6 @@
 defaults:
   - input_encoder: triplet_encoder
-  - backbone: triplet_transformer_decoder
+  - backbone: triplet_transformer_encoder
   - _self_
 _target_: models.everyquery.EveryQueryModule.initialize
 
