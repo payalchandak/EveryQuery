@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=another_10
+#SBATCH --job-name=cross-attn
 #SBATCH --output=logs/n1_%j.out
 #SBATCH --error=logs/n1_%j.err
 #SBATCH --time=20:00:00

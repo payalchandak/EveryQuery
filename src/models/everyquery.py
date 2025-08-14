@@ -128,37 +128,24 @@ class EveryQueryModule(BaseModule):
         mask = context['INPUT_ENCODER//MASK']      # B, T (bool)
         query = self.query_encoder(batch['query']) # B, Q, D (expected Q=5)
 
-        batch_size, seq_len, token_dim = tokens.shape
+        assert self.cfg.batch_size == tokens.shape[0] == mask.shape[0] == query.shape[0]
+        assert self.cfg.max_seq_len == tokens.shape[1] == mask.shape[1]
+        assert self.cfg.token_dim == tokens.shape[2] == query.shape[2]
         query_len = query.shape[1]
-        assert query_len <= seq_len, "Query length cannot exceed context sequence length"
+        assert query_len <= self.cfg.max_seq_len, "Query length cannot exceed context sequence length"
 
-        # Vectorized construction of new tokens/mask according to requested semantics
-        # Compute per-sample effective lengths and how many tokens to overwrite from start
-        effective_len = mask.sum(dim=1)                             # (B,)
-        pad_len = seq_len - effective_len                           # (B,)
-        overwrite_from_start = torch.clamp(query_len - pad_len, min=0)  # (B,)
+        context_token_len = mask.sum(dim=1)                                     # B
+        pad_len = self.cfg.max_seq_len - context_token_len                      # B
+        starts = torch.clamp(query_len-pad_len, min=0)  # B tokens to overwrite from the start of context
+        context_seq_len = self.cfg.max_seq_len - query_len # Max valid context tokens to keep after queries
+        ends = starts + context_seq_len
 
-        tail_len = seq_len - query_len
-        # Number of valid context tokens to keep after queries
-        keep_len = torch.clamp(effective_len - overwrite_from_start, min=0)
-        keep_len = torch.minimum(keep_len, torch.full_like(keep_len, tail_len))  # (B,)
-
-        # Build gather indices for the kept part
-        arange_tail = torch.arange(tail_len, device=tokens.device)              # (tail_len,)
-        src_indices = overwrite_from_start.unsqueeze(1) + arange_tail.unsqueeze(0)  # (B, tail_len)
-
-        # Mark which positions are valid (within keep_len)
-        valid_tail = arange_tail.unsqueeze(0) < keep_len.unsqueeze(1)           # (B, tail_len) bool
-
-        # Gather tokens for tail, zero out invalid positions
-        gather_index = src_indices.unsqueeze(-1).expand(-1, -1, token_dim)      # (B, tail_len, D)
-        gathered_tail = tokens.gather(dim=1, index=gather_index)                # (B, tail_len, D)
-        gathered_tail = gathered_tail * valid_tail.unsqueeze(-1)                # zero-out invalid
-
-        # Assemble new tokens/mask
-        new_tokens = torch.cat([query, gathered_tail], dim=1)                   # (B, T, D)
-        new_mask_prefix = torch.ones((batch_size, query_len), dtype=mask.dtype, device=mask.device)
-        new_mask = torch.cat([new_mask_prefix, valid_tail], dim=1)              # (B, T)
+        truncated_context_tokens = torch.stack([tokens[b, starts[b]:ends[b], :] for b in range(self.cfg.batch_size)])
+        new_tokens = torch.cat([query, truncated_context_tokens], dim=1)                   # (B, T, D)
+        
+        truncated_context_mask = torch.stack([mask[b, starts[b]:ends[b]] for b in range(self.cfg.batch_size)])
+        query_mask = torch.ones((self.cfg.batch_size, query_len), dtype=mask.dtype, device=mask.device)
+        new_mask = torch.cat([query_mask, truncated_context_mask], dim=1)              # (B, T)
 
         context['INPUT_ENCODER//TOKENS'] = new_tokens
         context['INPUT_ENCODER//MASK'] = new_mask
