@@ -37,7 +37,9 @@ class EveryQueryModule(BaseModule):
             self.proj_occurs = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
 
         if self.cfg.projector.mode == 'cross_attention':
-            pass 
+            self.embed_function = self.cross_attention
+            self.proj_censor = MLP(layers=[self.cfg.token_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
+            self.proj_occurs = MLP(layers=[self.cfg.token_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
 
         self.metrics = {
             # 'train': {
@@ -119,6 +121,51 @@ class EveryQueryModule(BaseModule):
         assert encoding.shape[-1] == self.cfg.query.encod_dim
         encoding = encoding.float()
         return encoding
+    
+    def cross_attention(self, batch):
+        context = self.input_encoder(batch['context'])
+        tokens = context['INPUT_ENCODER//TOKENS']  # B, T, D
+        mask = context['INPUT_ENCODER//MASK']      # B, T (bool)
+        query = self.query_encoder(batch['query']) # B, Q, D (expected Q=5)
+
+        batch_size, seq_len, token_dim = tokens.shape
+        query_len = query.shape[1]
+        assert query_len <= seq_len, "Query length cannot exceed context sequence length"
+
+        # Vectorized construction of new tokens/mask according to requested semantics
+        # Compute per-sample effective lengths and how many tokens to overwrite from start
+        effective_len = mask.sum(dim=1)                             # (B,)
+        pad_len = seq_len - effective_len                           # (B,)
+        overwrite_from_start = torch.clamp(query_len - pad_len, min=0)  # (B,)
+
+        tail_len = seq_len - query_len
+        # Number of valid context tokens to keep after queries
+        keep_len = torch.clamp(effective_len - overwrite_from_start, min=0)
+        keep_len = torch.minimum(keep_len, torch.full_like(keep_len, tail_len))  # (B,)
+
+        # Build gather indices for the kept part
+        arange_tail = torch.arange(tail_len, device=tokens.device)              # (tail_len,)
+        src_indices = overwrite_from_start.unsqueeze(1) + arange_tail.unsqueeze(0)  # (B, tail_len)
+
+        # Mark which positions are valid (within keep_len)
+        valid_tail = arange_tail.unsqueeze(0) < keep_len.unsqueeze(1)           # (B, tail_len) bool
+
+        # Gather tokens for tail, zero out invalid positions
+        gather_index = src_indices.unsqueeze(-1).expand(-1, -1, token_dim)      # (B, tail_len, D)
+        gathered_tail = tokens.gather(dim=1, index=gather_index)                # (B, tail_len, D)
+        gathered_tail = gathered_tail * valid_tail.unsqueeze(-1)                # zero-out invalid
+
+        # Assemble new tokens/mask
+        new_tokens = torch.cat([query, gathered_tail], dim=1)                   # (B, T, D)
+        new_mask_prefix = torch.ones((batch_size, query_len), dtype=mask.dtype, device=mask.device)
+        new_mask = torch.cat([new_mask_prefix, valid_tail], dim=1)              # (B, T)
+
+        context['INPUT_ENCODER//TOKENS'] = new_tokens
+        context['INPUT_ENCODER//MASK'] = new_mask
+
+        model_out = self.model(context)
+        embed = model_out[BACKBONE_EMBEDDINGS_KEY]
+        return embed
 
     def supervised_query(self, batch): 
         context = self.model(self.input_encoder(batch['context']))
