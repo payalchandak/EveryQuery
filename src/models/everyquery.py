@@ -13,14 +13,17 @@ class EveryQueryModule(BaseModule):
         assert self.cfg.projector.mode in [
             'supervised_context',
             'supervised_query',
+            'cross_attention',
         ]
 
         query_encoding_mode = {
             'stack':self.cfg.query.embed_dim,
             'triplet':self.cfg.token_dim,
+            'sequence':self.cfg.token_dim,
         }
         assert self.cfg.query.mode in query_encoding_mode.keys()
         self.cfg.query.encod_dim = query_encoding_mode[self.cfg.query.mode]
+        self.query_time_encoder = torch.nn.Linear(1, self.cfg.token_dim)
 
         if self.cfg.projector.mode == 'supervised_context':
             self.embed_function = self.supervised_context
@@ -32,6 +35,9 @@ class EveryQueryModule(BaseModule):
             self.proj_query = MLP(layers=[self.cfg.query.encod_dim, self.cfg.query.embed_dim], dropout_prob=self.cfg.projector.dropout).append(torch.nn.ReLU())
             self.proj_censor = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
             self.proj_occurs = MLP(layers=[self.cfg.token_dim+self.cfg.query.embed_dim, 128, 1], dropout_prob=self.cfg.projector.dropout)
+
+        if self.cfg.projector.mode == 'cross_attention':
+            pass 
 
         self.metrics = {
             # 'train': {
@@ -89,7 +95,7 @@ class EveryQueryModule(BaseModule):
 
         return loss, data
 
-    def query_encoder(self, query): 
+    def query_encoder(self, query):
         match self.cfg.query.mode: 
             case 'stack': 
                 encoding = torch.vstack([query[k].float() for k in query.keys()]).T
@@ -102,7 +108,15 @@ class EveryQueryModule(BaseModule):
                 duration = query['duration'].unsqueeze(1).repeat(1,self.cfg.token_dim)
                 offset = query['offset'].unsqueeze(1).repeat(1,self.cfg.token_dim)
                 encoding = code + range_lower + range_upper + duration + offset 
-        assert encoding.shape[1] == self.cfg.query.encod_dim
+            case 'sequence':
+                code = self.input_encoder.code_embedder.forward(query['code'])
+                range_mask = query['has_value'].unsqueeze(1) * query['use_value'].unsqueeze(1)
+                range_lower = self.input_encoder.numeric_value_embedder.forward(query['range_lower'].unsqueeze(1).float()) * range_mask 
+                range_upper = self.input_encoder.numeric_value_embedder.forward(query['range_upper'].unsqueeze(1).float()) * range_mask 
+                duration = self.query_time_encoder(query['duration'].unsqueeze(1).float())
+                offset = self.query_time_encoder(query['offset'].unsqueeze(1).float())
+                encoding = torch.stack([code, range_lower, range_upper, duration, offset], dim=1)
+        assert encoding.shape[-1] == self.cfg.query.encod_dim
         encoding = encoding.float()
         return encoding
 
