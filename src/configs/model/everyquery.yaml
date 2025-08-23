@@ -21,7 +21,7 @@ backbone:
 optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
-  lr: 5.0e-4
+  lr: 5.0e-6
   weight_decay: 0.01
   eps: 1.0e-8 # default
   betas: [0.9, 0.999] # default

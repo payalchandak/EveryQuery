@@ -38,6 +38,10 @@ class Run:
     @property
     def best_model_ckpt(self): 
         return f"{self.dir}/checkpoints/best_model.ckpt"
+
+    @property
+    def last_model_ckpt(self): 
+        return f"{self.dir}/checkpoints/last.ckpt"
     
 
     @property
@@ -73,7 +77,8 @@ class Run:
     def model(self):
         if self._model is None:
             self._model: LightningModule = hydra.utils.instantiate(self.cfg.model)
-            self._model.load_state_dict(torch.load(self.best_model_ckpt)["state_dict"])
+            # self._model.load_state_dict(torch.load(self.best_model_ckpt)["state_dict"])
+            self._model.load_state_dict(torch.load(self.last_model_ckpt)["state_dict"])
         return self._model
 
     @property

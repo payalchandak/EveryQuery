@@ -16,6 +16,13 @@ exp.add_run('stage_1', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-0
 exp.add_run('stage_2', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-07-23_17-20-20_211916/")
 exp.add_run('stage_3',"/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-07-22_22-59-42_411916/")
 
+# exp.add_run('', )
+
+exp.add_run('revert-10', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-08-12_22-58-06_558309/")
+exp.add_run('bidirectional', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-08-13_12-54-12_063090/")
+exp.add_run('cross-attn', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-08-14_18-04-23_934355/")
+exp.add_run('cross-attn-low-lr', "/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-08-21_16-21-04_121300")
+
 in_queries = exp.get_one_run('stage_0').training_queries
 
 # with open('/home/pac4279/EveryQuery/src/configs/data/codes/hold_out.yaml', 'r') as file:
@@ -33,36 +40,36 @@ out_queries = [Query(code=x, duration=out_duration, offset=0, range=None) for x 
 #         print(f'\t stage_{s} {metric[0]} ± {metric[1]}')
 #     print()
 
-fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-axes = axes.flatten()
-for s in [0, 1, 2, 3]:
-    stage_training_queries = exp.get_one_run(f'stage_{s}').training_queries
-    for q in stage_training_queries:
-        assert q.code not in out_codes
-        assert q not in out_queries
-    in_aucs = [exp.evaluate(f'stage_{s}', query)['occurs_auc'][0] for query in in_queries]
-    out_aucs = [exp.evaluate(f'stage_{s}', query)['occurs_auc'][0] for query in out_queries]
-    ax = axes[s]
-    ax.hist(in_aucs,  bins=20, alpha=0.7, label='In-distribution')
-    ax.hist(out_aucs, bins=20, alpha=0.5, label='Out-of-distribution')
-    ax.set_title(f"N={len(stage_training_queries)} \n In: {np.mean(in_aucs):.2f}    Out: {np.mean(out_aucs):.2f}")
-    ax.set_xlabel("AUROC")
-    ax.set_ylabel("Count")
-    ax.set_xlim(0,1)
-    ax.set_ylim(0,5)
-    ax.legend(loc='upper left')
-plt.tight_layout()
-plt.savefig('figures/in_out_histogram.png')
+# fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+# axes = axes.flatten()
+# for s in [0, 1, 2, 3]:
+#     stage_training_queries = exp.get_one_run(f'stage_{s}').training_queries
+#     for q in stage_training_queries:
+#         assert q.code not in out_codes
+#         assert q not in out_queries
+#     in_aucs = [exp.evaluate(f'stage_{s}', query)['occurs_auc'][0] for query in in_queries]
+#     out_aucs = [exp.evaluate(f'stage_{s}', query)['occurs_auc'][0] for query in out_queries]
+#     ax = axes[s]
+#     ax.hist(in_aucs,  bins=20, alpha=0.7, label='In-distribution')
+#     ax.hist(out_aucs, bins=20, alpha=0.5, label='Out-of-distribution')
+#     ax.set_title(f"N={len(stage_training_queries)} \n In: {np.mean(in_aucs):.2f}    Out: {np.mean(out_aucs):.2f}")
+#     ax.set_xlabel("AUROC")
+#     ax.set_ylabel("Count")
+#     ax.set_xlim(0,1)
+#     ax.set_ylim(0,5)
+#     ax.legend(loc='upper left')
+# plt.tight_layout()
+# plt.savefig('figures/in_out_histogram.png')
 
 predictions = []
-run = exp.get_run("/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-07-22_22-59-42_411916/")
-for q in list(in_queries): 
+run = exp.get_run("/n/data1/hms/dbmi/zaklab/payal/EveryQuery/results/2025-08-12_23-25-16_873186/")
+for q in list(run.training_queries): 
     pred = exp.predict(run, q)
     predictions.append((run, q, pred['censor_target'], pred['censor_score'], pred['occurs_target'], pred['occurs_score']))
     del pred
     gc.collect()
     torch.cuda.empty_cache()
-fig, axes = plt.subplots(2, 5, figsize=(50, 10))
+fig, axes = plt.subplots(5, 5, figsize=(50, 10))
 axes = axes.flatten()
 for i in range(len(predictions)): 
     run, q, cen_target, cen_score, occ_target, occ_score = predictions[i]
@@ -85,26 +92,27 @@ for i, (run_i, q_i, cen_target_i, cen_score_i, occ_target_i, occ_score_i) in enu
         occ_auc_heatmap[i][j] = roc_auc_score(occ_target_i, occ_score_j)
         occ_auc_heatmap[j][i] = roc_auc_score(occ_target_j, occ_score_i)
 fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-sns.heatmap(cen_auc_heatmap*100, ax=axes[0], annot=True, fmt=".0f", annot_kws={"size":8}, cbar=True)
+sns.heatmap(cen_auc_heatmap*100, ax=axes[0], annot=True, fmt=".0f", annot_kws={"size":8}, cbar=True, vmin=0, vmax=100)
 axes[0].set_title("Censor AUC"); axes[0].set_xlabel("Score Query"); axes[0].set_ylabel("Target Query")
 sns.heatmap(occ_auc_heatmap*100, ax=axes[1], annot=True, fmt=".0f", annot_kws={"size":8}, cbar=True, vmin=0, vmax=100)
 axes[1].set_title("Occurs AUC"); axes[1].set_xlabel("Score Query"); axes[1].set_ylabel("Target Query")
-plt.tight_layout(); plt.savefig('figures/permuted_auc_n10000.png')
+axes[1].set_xticklabels([x[1].code for x in predictions], rotation=45, ha="right", fontsize=8)
+plt.tight_layout(); plt.savefig('figures/permuted_auc.png')
 ipdb.set_trace()
 
-exp.plot_auroc_comparison('stage_0','stage_1',in_queries).figure.savefig('figures/in_01.png')
-exp.plot_auroc_comparison('stage_0','stage_2',in_queries).figure.savefig('figures/in_02.png')
-exp.plot_auroc_comparison('stage_1','stage_2',in_queries).figure.savefig('figures/in_12.png')
-exp.plot_auroc_comparison('stage_0','stage_3',in_queries).figure.savefig('figures/in_03.png')
-exp.plot_auroc_comparison('stage_1','stage_3',in_queries).figure.savefig('figures/in_13.png')
-exp.plot_auroc_comparison('stage_2','stage_3',in_queries).figure.savefig('figures/in_23.png')
-exp.plot_auroc_heatmap(['stage_0','stage_1','stage_2', 'stage_3'], in_queries).figure.savefig('figures/in_heatmap.png', dpi=600, bbox_inches="tight")
-# exp.plot_auroc_clustermap(['stage_0','stage_1','stage_2', 'stage_3'], eval_queries).figure.savefig('figures/clustermap.png', dpi=600, bbox_inches="tight")
+# exp.plot_auroc_comparison('stage_0','stage_1',in_queries).figure.savefig('figures/in_01.png')
+# exp.plot_auroc_comparison('stage_0','stage_2',in_queries).figure.savefig('figures/in_02.png')
+# exp.plot_auroc_comparison('stage_1','stage_2',in_queries).figure.savefig('figures/in_12.png')
+# exp.plot_auroc_comparison('stage_0','stage_3',in_queries).figure.savefig('figures/in_03.png')
+# exp.plot_auroc_comparison('stage_1','stage_3',in_queries).figure.savefig('figures/in_13.png')
+# exp.plot_auroc_comparison('stage_2','stage_3',in_queries).figure.savefig('figures/in_23.png')
+# exp.plot_auroc_heatmap(['stage_0','stage_1','stage_2', 'stage_3'], in_queries).figure.savefig('figures/in_heatmap.png', dpi=600, bbox_inches="tight")
+# # exp.plot_auroc_clustermap(['stage_0','stage_1','stage_2', 'stage_3'], eval_queries).figure.savefig('figures/clustermap.png', dpi=600, bbox_inches="tight")
 
-exp.plot_auroc_comparison('stage_0','stage_1',out_queries).figure.savefig('figures/out_01.png')
-exp.plot_auroc_comparison('stage_0','stage_2',out_queries).figure.savefig('figures/out_02.png')
-exp.plot_auroc_comparison('stage_1','stage_2',out_queries).figure.savefig('figures/out_12.png')
-exp.plot_auroc_comparison('stage_0','stage_3',out_queries).figure.savefig('figures/out_03.png')
-exp.plot_auroc_comparison('stage_1','stage_3',out_queries).figure.savefig('figures/out_13.png')
-exp.plot_auroc_comparison('stage_2','stage_3',out_queries).figure.savefig('figures/out_23.png')
-exp.plot_auroc_heatmap(['stage_0','stage_1','stage_2', 'stage_3'], out_queries).figure.savefig('figures/out_heatmap.png', dpi=600, bbox_inches="tight")
+# exp.plot_auroc_comparison('stage_0','stage_1',out_queries).figure.savefig('figures/out_01.png')
+# exp.plot_auroc_comparison('stage_0','stage_2',out_queries).figure.savefig('figures/out_02.png')
+# exp.plot_auroc_comparison('stage_1','stage_2',out_queries).figure.savefig('figures/out_12.png')
+# exp.plot_auroc_comparison('stage_0','stage_3',out_queries).figure.savefig('figures/out_03.png')
+# exp.plot_auroc_comparison('stage_1','stage_3',out_queries).figure.savefig('figures/out_13.png')
+# exp.plot_auroc_comparison('stage_2','stage_3',out_queries).figure.savefig('figures/out_23.png')
+# exp.plot_auroc_heatmap(['stage_0','stage_1','stage_2', 'stage_3'], out_queries).figure.savefig('figures/out_heatmap.png', dpi=600, bbox_inches="tight")

@@ -23,7 +23,8 @@ class EveryQueryModule(BaseModule):
         }
         assert self.cfg.query.mode in query_encoding_mode.keys()
         self.cfg.query.encod_dim = query_encoding_mode[self.cfg.query.mode]
-        self.query_time_encoder = torch.nn.Linear(1, self.cfg.token_dim)
+        if query_encoding_mode=='sequence':
+            self.query_time_encoder = torch.nn.Linear(1, self.cfg.token_dim)
 
         if self.cfg.projector.mode == 'supervised_context':
             self.embed_function = self.supervised_context
@@ -117,7 +118,7 @@ class EveryQueryModule(BaseModule):
                 range_upper = self.input_encoder.numeric_value_embedder.forward(query['range_upper'].unsqueeze(1).float()) * range_mask 
                 duration = self.query_time_encoder(query['duration'].unsqueeze(1).float())
                 offset = self.query_time_encoder(query['offset'].unsqueeze(1).float())
-                encoding = torch.stack([code, range_lower, range_upper, duration, offset], dim=1)
+                encoding = torch.stack([range_lower, range_upper, code, duration, offset], dim=1)
         assert encoding.shape[-1] == self.cfg.query.encod_dim
         encoding = encoding.float()
         return encoding
@@ -128,7 +129,8 @@ class EveryQueryModule(BaseModule):
         mask = context['INPUT_ENCODER//MASK']      # B, T (bool)
         query = self.query_encoder(batch['query']) # B, Q, D (expected Q=5)
 
-        assert self.cfg.batch_size == tokens.shape[0] == mask.shape[0] == query.shape[0]
+        assert tokens.shape[0] == mask.shape[0] == query.shape[0] # self.cfg.batch_size
+        B = tokens.shape[0]
         assert self.cfg.max_seq_len == tokens.shape[1] == mask.shape[1]
         assert self.cfg.token_dim == tokens.shape[2] == query.shape[2]
         query_len = query.shape[1]
@@ -140,11 +142,11 @@ class EveryQueryModule(BaseModule):
         context_seq_len = self.cfg.max_seq_len - query_len # Max valid context tokens to keep after queries
         ends = starts + context_seq_len
 
-        truncated_context_tokens = torch.stack([tokens[b, starts[b]:ends[b], :] for b in range(self.cfg.batch_size)])
+        truncated_context_tokens = torch.stack([tokens[b, int(starts[b]):int(ends[b]), :] for b in range(B)])
         new_tokens = torch.cat([query, truncated_context_tokens], dim=1)                   # (B, T, D)
         
-        truncated_context_mask = torch.stack([mask[b, starts[b]:ends[b]] for b in range(self.cfg.batch_size)])
-        query_mask = torch.ones((self.cfg.batch_size, query_len), dtype=mask.dtype, device=mask.device)
+        truncated_context_mask = torch.stack([mask[b, int(starts[b]):int(ends[b])] for b in range(B)])
+        query_mask = torch.ones((B, query_len), dtype=mask.dtype, device=mask.device)
         new_mask = torch.cat([query_mask, truncated_context_mask], dim=1)              # (B, T)
 
         context['INPUT_ENCODER//TOKENS'] = new_tokens
