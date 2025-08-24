@@ -1,0 +1,9 @@
+datamodule:
+  _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
+  config: 
+    _target_: meds_torchdata.MEDSTorchDataConfig
+    tensorized_cohort_dir: /n/data1/hms/dbmi/zaklab/payal/mimic/processed
+    static_inclusion_mode: omit
+    max_seq_len: 10
+  batch_size: 3
+  num_workers: 1
