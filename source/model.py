@@ -48,10 +48,10 @@ class Model(torch.nn.Module):
         "transformer-engine": torch.bfloat16,
     }
 
-    def __init__(self, gpt_kwargs: dict | DictConfig, precision: str = "32-true", do_demo: bool = False):
+    def __init__(self, precision: str = "32-true", do_demo: bool = False):
         super().__init__()
 
-        self.config: ModernBertConfig = AutoConfig.from_pretrained("answerdotai/ModernBERT-large")
+        self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained("answerdotai/ModernBERT-large")
 
         extra_kwargs = {"torch_dtype": self.PRECISION_TO_MODEL_WEIGHTS_DTYPE.get(precision)}
 
@@ -72,7 +72,7 @@ class Model(torch.nn.Module):
                     f"'transformer-engine', '16-mixed' and 'bf16-mixed'. Using {precision} may cause errors."
                 )
 
-        self.HF_model = AutoModelForCausalLM.from_config(self.HF_model_config, **extra_kwargs)
+        self.HF_model = ModernBertModel._from_config(self.HF_model_config, **extra_kwargs)
 
         self.do_demo = do_demo
         if self.do_demo:
@@ -80,14 +80,7 @@ class Model(torch.nn.Module):
         else:
             self.forward = self._forward
 
-        if isinstance(gpt_kwargs, DictConfig):
-            logger.info("Converting gpt_kwargs from DictConfig to dict.")
-            gpt_kwargs = OmegaConf.to_container(gpt_kwargs, resolve=True)
-        elif not isinstance(gpt_kwargs, dict):
-            logger.warning(f"gpt_kwargs should be a dict or DictConfig, but got {type(gpt_kwargs)}.")
-
         self.hparams = {
-            "gpt_kwargs": gpt_kwargs,
             "precision": precision,
             "do_demo": do_demo,
         }
@@ -289,13 +282,13 @@ class Model(torch.nn.Module):
         if _val(torch.isnan(loss).any()):
             logger.warning("Loss contains nan values.")
 
-        logits = outputs.logits
-        inf_count = _val(torch.isinf(logits).sum())
+        embeddings = outputs.last_hidden_state
+        inf_count = _val(torch.isinf(embeddings).sum())
         if inf_count > 0:
-            logger.warning(f"Logits contains {inf_count}/{logits.numel()} inf values.")
-        nan_count = _val(torch.isnan(logits).sum())
+            logger.warning(f"Embeddings contains {inf_count}/{embeddings.numel()} inf values.")
+        nan_count = _val(torch.isnan(embeddings).sum())
         if nan_count > 0:
-            logger.warning(f"Logits contains {nan_count}/{logits.numel()} nan values.")
+            logger.warning(f"Embeddings contains {nan_count}/{embeddings.numel()} nan values.")
 
     def _hf_inputs(self, batch: MEDSTorchBatch) -> dict[str, torch.Tensor]:
         """Converts the MEDSTorchBatch to a dictionary of inputs for the Hugging Face model.
@@ -347,77 +340,9 @@ class Model(torch.nn.Module):
 
     def _forward(self, batch: MEDSTorchBatch) -> tuple[torch.FloatTensor, CausalLMOutputWithPast]:
         outputs = self.HF_model(**self._hf_inputs(batch))
-        loss = F.cross_entropy(
-            outputs.logits[:, :-1].transpose(2, 1), batch.code[:, 1:], ignore_index=batch.PAD_INDEX
-        )
+        embeddings = outputs.last_hidden_state
+        loss = None
 
         return loss, outputs
 
-    def generate(self, batch: MEDSTorchBatch, do_sample: bool = True, **kwargs) -> torch.Tensor:
-        """Generates a sequence of tokens from the model using the HF generation mixin.
-
-        Examples:
-            >>> _ = torch.manual_seed(0)
-            >>> torch.use_deterministic_algorithms(True)
-            >>> model = Model({
-            ...     "num_hidden_layers": 2,
-            ...     "num_attention_heads": 2,
-            ...     "hidden_size": 4,
-            ...     "max_position_embeddings": 10,
-            ...     "vocab_size": dataset_config.vocab_size,
-            ... }, precision="32-true")
-
-        This model has a maximum sequence length of 10. If we check, our sample batch has a sequence length of
-        9:
-
-            >>> sample_batch.code.shape
-            torch.Size([2, 9])
-
-        This means that by default, the model will generate 1 token:
-
-            >>> print(model.generate(sample_batch, do_sample=False))
-            tensor([[2],
-                    [2]])
-
-        If we create a model with a maximum sequence length of 20, we can generate 11 tokens:
-
-            >>> _ = torch.manual_seed(0)
-            >>> model = Model({
-            ...     "num_hidden_layers": 2,
-            ...     "num_attention_heads": 2,
-            ...     "hidden_size": 4,
-            ...     "max_position_embeddings": 20,
-            ...     "vocab_size": dataset_config.vocab_size,
-            ... }, precision="32-true")
-            >>> print(model.generate(sample_batch, do_sample=False))
-            tensor([[ 2, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16],
-                    [ 2, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16]])
-
-        Note that here, as we've turned sampling off for determinism in these testing algorithms, the
-        generated samples are clearly visibly not meaningful. This is completely expected because we are
-        working with a model that has just been randomly initialized. What if we try with a model that has
-        undergone a (tiny) bit of pre-training? TODO(generation test).
-        """
-
-        for_hf = self._hf_inputs(batch)
-
-        generation_config = GenerationConfig(
-            max_new_tokens=self.max_seq_len - batch.code.shape[1],
-            do_sample=do_sample,
-            num_beams=1,  # no beam search
-            temperature=1.0,
-            pad_token_id=batch.PAD_INDEX,
-            bos_token_id=None,
-            eos_token_id=self.HF_model.config.eos_token_id,
-        )
-
-        output_ids = self.HF_model.generate(
-            for_hf.pop("input_ids"),
-            generation_config=generation_config,
-            **for_hf,
-            **kwargs,
-        )
-
-        input_seq_len = batch.code.shape[1]
-
-        return output_ids[:, input_seq_len:]
+    
