@@ -4,9 +4,11 @@ from omegaconf import DictConfig
 import hydra, ipdb
 
 from transformers import AutoConfig, ModernBertModel
+from model import Model
 
-config = AutoConfig.from_pretrained("answerdotai/ModernBERT-large")
-model = ModernBertModel._from_config(config)
+#config = AutoConfig.from_pretrained("answerdotai/ModernBERT-large")
+#model = ModernBertModel._from_config(config)
+model = Model()
 
 @hydra.main(version_base="1.3", config_path='', config_name='config.yaml')
 def main(cfg: DictConfig) -> float | None:
@@ -18,8 +20,9 @@ def main(cfg: DictConfig) -> float | None:
             "input_ids": batch.code,
             "attention_mask": (batch.code != batch.PAD_INDEX),
         }
-        outputs = model(**hf_inputs)
-        print(outputs.last_hidden_state.shape)
+        #outputs = model(**hf_inputs)
+        outputs = model(batch)
+        print(outputs)
         ipdb.set_trace()
         break
 

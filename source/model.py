@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from meds_torchdata import MEDSTorchBatch
 from omegaconf import DictConfig, OmegaConf
 from transformers import AutoConfig, ModernBertConfig, ModernBertModel
+from transformers.modeling_outputs import BaseModelOutput
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +241,7 @@ class Model(torch.nn.Module):
             if num_inf > 0:
                 logger.warning(f"Parameter {n} contains {num_inf}/{p.numel()} inf values.")
 
-    def _check_outputs(self, loss: torch.FloatTensor, outputs: CausalLMOutputWithPast):
+    def _check_outputs(self, loss: torch.FloatTensor, outputs: BaseModelOutput):
         """Logs a warning if the loss is inf or nan.
 
         This does not raise an error because when this mode is enabled, typically detect anomaly is on in the
@@ -328,7 +329,7 @@ class Model(torch.nn.Module):
             "attention_mask": (batch.code != batch.PAD_INDEX),
         }
 
-    def _forward_demo(self, batch: MEDSTorchBatch) -> tuple[torch.FloatTensor, CausalLMOutputWithPast]:
+    def _forward_demo(self, batch: MEDSTorchBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         """A demo forward pass that adds more checks and assertions."""
 
         self._check_inputs(batch)
@@ -338,11 +339,10 @@ class Model(torch.nn.Module):
 
         return out
 
-    def _forward(self, batch: MEDSTorchBatch) -> tuple[torch.FloatTensor, CausalLMOutputWithPast]:
+    def _forward(self, batch: MEDSTorchBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         outputs = self.HF_model(**self._hf_inputs(batch))
         embeddings = outputs.last_hidden_state
         loss = None
 
         return loss, outputs
 
-    
