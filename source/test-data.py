@@ -1,13 +1,10 @@
 from meds import DataSchema
+from datamodule import Datamodule
 from meds_torchdata import MEDSPytorchDataset, MEDSTorchBatch, MEDSTorchDataConfig
 from omegaconf import DictConfig
 import hydra, ipdb
-
-from transformers import AutoConfig, ModernBertModel
 from model import Model
 
-#config = AutoConfig.from_pretrained("answerdotai/ModernBERT-large")
-#model = ModernBertModel._from_config(config)
 model = Model()
 
 @hydra.main(version_base="1.3", config_path='', config_name='config.yaml')
