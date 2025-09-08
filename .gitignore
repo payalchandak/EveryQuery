@@ -12,7 +12,7 @@ MEDS_EIC_AR/
 *.png
 *.pkl
 experiment_registry.pkl
-
+outputs/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

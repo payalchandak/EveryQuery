@@ -1,5 +1,5 @@
 from meds import DataSchema
-from datamodule import Datamodule
+from dataset import EveryQueryPytorchDataset
 from meds_torchdata import MEDSPytorchDataset, MEDSTorchBatch, MEDSTorchDataConfig
 from omegaconf import DictConfig
 import hydra, ipdb
@@ -20,7 +20,8 @@ def main(cfg: DictConfig) -> float | None:
         #outputs = model(**hf_inputs)
         outputs = model(batch)
         print(outputs)
-        ipdb.set_trace()
+        print('Success')
+        # ipdb.set_trace()
         break
 
 if __name__ == "__main__":
