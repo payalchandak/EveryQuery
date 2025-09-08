@@ -1,4 +1,5 @@
 import logging
+from typing import NamedTuple
 from functools import cached_property
 from pathlib import Path
 
@@ -13,6 +14,42 @@ from meds_torchdata.config import MEDSTorchDataConfig, StaticInclusionMode
 from meds_torchdata.types import BatchMode, MEDSTorchBatch, StaticData, SubsequenceSamplingStrategy
 
 logger = logging.getLogger(__name__)
+
+class QueryData(NamedTuple):
+    """Simple data structure to hold query data, capturing codes.
+
+    As a `NamedTuple`, can be accessed both by index (e.g. `data[0]`) and by attribute (e.g. `data.code`).
+
+    Attributes:
+        code: List of integer codes.
+    """
+
+    code: list[int]
+
+    def to_JNRT(self, batch_mode: BatchMode, schema: dict | None = None) -> JointNestedRaggedTensorDict:
+        """Converts the query data into a JointNestedRaggedTensorDict representation.
+
+        Raises:
+            ValueError: If the batch mode is not SEM or SM.
+        """
+
+        match batch_mode:
+            case BatchMode.SEM:
+                query_dict = {
+                    "time_delta_days": [np.nan],
+                    "code": [self.code],
+                    "numeric_value": [np.nan],
+                }
+            case BatchMode.SM:
+                query_dict = {
+                    "time_delta_days": [np.nan for _ in range(len(self.code))],
+                    "code": self.code,
+                    "numeric_value": [np.nan for _ in range(len(self.code))],
+                }
+            case _:
+                raise ValueError(f"Invalid batch mode {batch_mode}!")
+
+        return JointNestedRaggedTensorDict(query_dict, schema=schema)
 
 
 class EveryQueryPytorchDataset(torch.utils.data.Dataset):
@@ -224,6 +261,14 @@ class EveryQueryPytorchDataset(torch.utils.data.Dataset):
         """
         return self.has_task_index and (self.LABEL_COL in self.schema_df.collect_schema().names())
 
+    def encode_query(self, code_name: str) -> int:
+        """Encode query using the canonical code vocabulary mapping
+        """
+        try:
+            return int(self.code_to_index.get(code_name, MEDSTorchBatch.PAD_INDEX))
+        except Exception:
+            return MEDSTorchBatch.PAD_INDEX
+    
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         """Retrieve a single data point from the dataset.
 
@@ -270,6 +315,10 @@ class EveryQueryPytorchDataset(torch.utils.data.Dataset):
         if self.config.static_inclusion_mode == StaticInclusionMode.PREPEND:
             static_as_JNRT = static_data.to_JNRT(self.config.batch_mode, dynamic_data.schema)
             dynamic_data = JointNestedRaggedTensorDict.concatenate([static_as_JNRT, dynamic_data])
+
+        query_data = QueryData(code=[self.encode_query(self.query[idx])])
+        query_as_JNRT = query_data.to_JNRT(self.config.batch_mode, dynamic_data.schema)
+        dynamic_data = JointNestedRaggedTensorDict.concatenate([query_as_JNRT, dynamic_data])
 
         out["dynamic"] = dynamic_data
 
@@ -375,13 +424,7 @@ class EveryQueryPytorchDataset(torch.utils.data.Dataset):
         if getattr(self, "has_occurs", False):
             out["occurs"] = torch.Tensor([item["occurs"] for item in batch]).bool()
         if getattr(self, "has_query", False):
-            # Encode query using the canonical code vocabulary mapping
-            def encode_query(q: str) -> int:
-                try:
-                    return int(self.code_to_index.get(q, MEDSTorchBatch.PAD_INDEX))
-                except Exception:
-                    return MEDSTorchBatch.PAD_INDEX
-            query_ids = [encode_query(item["query"]) for item in batch]
+            query_ids = [self.encode_query(item["query"]) for item in batch]
             out["query"] = torch.as_tensor(query_ids).long()
 
         return MEDSTorchBatch(**out)
