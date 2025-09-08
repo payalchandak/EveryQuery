@@ -82,9 +82,9 @@ for query in query_codes:
     x = task_df.select(
         ["subject_id","prediction_time","censored",query]
     ).with_columns(
-        pl.lit(query).alias('categorical_value'),
+        pl.lit(query).alias('query'),
     ).rename(
-        {query:'integer_value'}
+        {query:'occurs'}
     )
     final.append(x)
 final = pl.concat(final).sample(fraction=1,shuffle=True)

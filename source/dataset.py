@@ -18,26 +18,12 @@ logger = logging.getLogger(__name__)
 class EveryQueryPytorchDataset(torch.utils.data.Dataset):
     """A PyTorch dataset that provides efficient PyTorch access to a MEDS dataset.
 
-    This dataset is designed to work with data from the MEDS (Medical Event Data Set) format, supporting
-    various types of medical events, static patient information, and task-specific labels. It provides
-    functionality for loading, processing, and collating data for use in PyTorch models in an efficient manner
-    that takes advantage of the sparsity of EHR data to minimize memory usage and computational time.
-
     Key design principles:
       1. The class will store an `index` variable that specifies what is the valid range of data to consider
          for any given subject in the dataset corresponding to an integer index passed to `__getitem__`.
-      2. Data will only be loaded for subjects on an as-needed basis, and will not be cached, to minimize
-         memory usage during normal operation.
-      3. As much work as possible should be relegated to separate dataset pre-processing (resulting in files
-         stored on disk) rather than this class to streamline operation.
-      4. The primary input to this class in terms of data is a pre-processed set of "schema files" and "nested
+      2. The primary input to this class in terms of data is a pre-processed set of "schema files" and "nested
          ragged tensor" data files that can be used to identify the shape of the dataset and to efficiently
          load the relevant tensor data, respectively.
-
-    Args:
-        cfg: Configuration options for the dataset, realized through a dataclass instance.
-        split: The data split to use. This must match up to the splits stored in the root dataset's
-               `metadata/subject_splits.parquet` file's `split` column.
 
     Attributes:
         config: The configuration options for the dataset.
@@ -78,9 +64,19 @@ class EveryQueryPytorchDataset(torch.utils.data.Dataset):
         group_cols = ["_row", DataSchema.subject_id_name, LabelSchema.prediction_time_name]
         out_cols = [DataSchema.subject_id_name, cls.END_IDX, LabelSchema.prediction_time_name]
 
-        if cls.LABEL_COL in label_df.collect_schema().names():
+        label_names = label_df.collect_schema().names()
+
+        if cls.LABEL_COL in label_names:
             group_cols.append(cls.LABEL_COL)
             out_cols.append(cls.LABEL_COL)
+
+        # Include pass-through task annotations if present
+        if "occurs" in label_names:
+            group_cols.append("occurs")
+            out_cols.append("occurs")
+        if "query" in label_names:
+            group_cols.append("query")
+            out_cols.append("query")
 
         return (
             label_df.join(schema_df, on=DataSchema.subject_id_name, how="inner", maintain_order="left")
@@ -126,6 +122,20 @@ class EveryQueryPytorchDataset(torch.utils.data.Dataset):
             zip(self.schema_df[DataSchema.subject_id_name], self.schema_df[self.END_IDX], strict=False)
         )
         self.labels = self.schema_df[self.LABEL_COL] if self.has_task_labels else None
+        # Extra task annotations
+        self.has_occurs: bool = "occurs" in self.schema_df.collect_schema().names()
+        self.has_query: bool = "query" in self.schema_df.collect_schema().names()
+        self.occurs = self.schema_df["occurs"] if self.has_occurs else None
+        self.query = self.schema_df["query"] if self.has_query else None
+        # Load code vocabulary mapping (string code -> integer vocab index) for encoding queries
+        try:
+            code_meta = pl.read_parquet(self.config.code_metadata_fp, columns=["code", "code/vocab_index"], use_pyarrow=True)
+            codes = code_meta["code"].to_list()
+            vocab_indices = code_meta["code/vocab_index"].to_list()
+            self.code_to_index: dict[str, int] = {c: int(i) for c, i in zip(codes, vocab_indices, strict=False)}
+        except Exception as e:
+            logger.warning(f"Failed to load code metadata for query encoding: {e}")
+            self.code_to_index = {}
 
     @property
     def labels_df(self) -> pl.DataFrame:
@@ -138,7 +148,11 @@ class EveryQueryPytorchDataset(torch.utils.data.Dataset):
 
         def read_df(fp: Path) -> pl.DataFrame:
             schema = pq.read_schema(fp)
-            label_cols = [*required_cols, self.LABEL_COL] if self.LABEL_COL in schema.names else required_cols
+            extras = []
+            for extra_col in [self.LABEL_COL, "occurs", "query"]:
+                if extra_col in schema.names:
+                    extras.append(extra_col)
+            label_cols = [*required_cols, *extras]
             return pl.read_parquet(fp, columns=label_cols, use_pyarrow=True)
 
         logger.info(f"Reading tasks from {self.config.task_labels_fps}")
@@ -261,6 +275,10 @@ class EveryQueryPytorchDataset(torch.utils.data.Dataset):
 
         if self.has_task_labels:
             out[self.LABEL_COL] = self.labels[idx]
+        if getattr(self, "has_occurs", False):
+            out["occurs"] = self.occurs[idx]
+        if getattr(self, "has_query", False):
+            out["query"] = self.query[idx]
 
         return out
 
@@ -354,6 +372,17 @@ class EveryQueryPytorchDataset(torch.utils.data.Dataset):
 
         if self.has_task_labels:
             out[self.LABEL_COL] = torch.Tensor([item[self.LABEL_COL] for item in batch]).bool()
+        if getattr(self, "has_occurs", False):
+            out["occurs"] = torch.Tensor([item["occurs"] for item in batch]).bool()
+        if getattr(self, "has_query", False):
+            # Encode query using the canonical code vocabulary mapping
+            def encode_query(q: str) -> int:
+                try:
+                    return int(self.code_to_index.get(q, MEDSTorchBatch.PAD_INDEX))
+                except Exception:
+                    return MEDSTorchBatch.PAD_INDEX
+            query_ids = [encode_query(item["query"]) for item in batch]
+            out["query"] = torch.as_tensor(query_ids).long()
 
         return MEDSTorchBatch(**out)
 
