@@ -31,17 +31,20 @@ class EveryQueryBatch(MEDSTorchBatch):
     """
 
     # Extra task annotations (subject-level)
+    censor: torch.BoolTensor | None = None
     occurs: torch.BoolTensor | None = None
     query: torch.LongTensor | None = None
 
     # Include new annotations in label tensor names for display
-    LABEL_TENSOR_NAMES: ClassVar[tuple[str]] = ("boolean_value", "occurs", "query")
+    LABEL_TENSOR_NAMES: ClassVar[tuple[str]] = ("boolean_value", "censor", "occurs", "query")
 
     def __post_init__(self):
         # Run base validations
         super().__post_init__()
 
         # Validate optional per-sample annotation shapes, if provided
+        if self.censor is not None:
+            self._MEDSTorchBatch__check_shape("censor", (self.batch_size,))
         if self.occurs is not None:
             self._MEDSTorchBatch__check_shape("occurs", (self.batch_size,))
         if self.query is not None:
@@ -200,6 +203,8 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
 
     def collate(self, batch: list[dict]) -> EveryQueryBatch:
         out = dict(super().collate(batch).items()) # out is MEDSTorchBatch
+        if self.has_task_labels:
+            out["censor"] = out[self.LABEL_COL]
         if getattr(self, "has_occurs", False):
             out["occurs"] = torch.Tensor([item["occurs"] for item in batch]).bool()
         if getattr(self, "has_query", False):
