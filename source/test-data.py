@@ -14,7 +14,8 @@ def main(cfg: DictConfig) -> float | None:
     loader = dm.train_dataloader()
     for batch in loader:
         print(batch)
-        outputs = model(batch)
+        loss, outputs = model(batch)
+        print(loss)
         print(outputs)
         print('Success')
         break

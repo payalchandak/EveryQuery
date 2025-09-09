@@ -32,6 +32,24 @@ def _val(tensor: torch.Tensor) -> int | bool | float:
     """
     return tensor.detach().cpu().item()
 
+class MLP(torch.nn.Module):
+    def __init__(self, layers, dropout_prob):
+        super().__init__()
+        modules = []
+        for i in range(len(layers)-1):
+            modules.append(torch.nn.Linear(layers[i], layers[i+1])) 
+            modules.append(torch.nn.ReLU()) 
+            if i < len(layers) - 2:
+                modules.append(torch.nn.Dropout(dropout_prob))
+        modules.pop(-1) # we don't want an activation after the final layer
+        self.model = torch.nn.Sequential(*modules) 
+
+    def forward(self, x):
+        return self.model(x)
+    
+    def append(self, module): 
+        self.model = self.model.append(module)
+        return self 
 
 class Model(torch.nn.Module):
 
@@ -74,6 +92,9 @@ class Model(torch.nn.Module):
                 )
 
         self.HF_model = ModernBertModel._from_config(self.HF_model_config, **extra_kwargs)
+        self.censor_mlp = MLP(layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout)
+        self.occurs_mlp = MLP(layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout)
+        self.criterion = torch.nn.BCEWithLogitsLoss()
 
         self.do_demo = do_demo
         if self.do_demo:
@@ -341,8 +362,18 @@ class Model(torch.nn.Module):
 
     def _forward(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         outputs = self.HF_model(**self._hf_inputs(batch))
-        embeddings = outputs.last_hidden_state
-        loss = None
+        embeddings = outputs.last_hidden_state # (batch_size, seq_len + query_len, hidden_size)
+        query_embed = embeddings[:, 0, :] # 0 is query_index (batch_size, hidden_size)
 
+        censor_logits = self.censor_mlp(query_embed)
+        censor_loss = self.criterion(censor_logits, batch.censor.float().unsqueeze(1))
+        
+        # if future is censored then don't apply loss on whether query occurs
+        mask = ~batch.censor
+        occurs_logits = self.occurs_mlp(query_embed)
+        occurs_loss = self.criterion(occurs_logits[mask], batch.occurs.float().unsqueeze(1)[mask])
+        
+        loss = censor_loss + occurs_loss
+        
         return loss, outputs
 
