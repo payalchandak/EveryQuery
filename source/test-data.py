@@ -13,15 +13,10 @@ def main(cfg: DictConfig) -> float | None:
     dm = hydra.utils.instantiate(cfg.datamodule)
     loader = dm.train_dataloader()
     for batch in loader:
-        hf_inputs = {
-            "input_ids": batch.code,
-            "attention_mask": (batch.code != batch.PAD_INDEX),
-        }
-        #outputs = model(**hf_inputs)
+        print(batch)
         outputs = model(batch)
         print(outputs)
         print('Success')
-        # ipdb.set_trace()
         break
 
 if __name__ == "__main__":

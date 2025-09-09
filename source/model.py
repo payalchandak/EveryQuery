@@ -3,10 +3,10 @@ from typing import ClassVar
 
 import torch
 import torch.nn.functional as F
-from meds_torchdata import MEDSTorchBatch
 from omegaconf import DictConfig, OmegaConf
 from transformers import AutoConfig, ModernBertConfig, ModernBertModel
 from transformers.modeling_outputs import BaseModelOutput
+from dataset import EveryQueryBatch
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ class Model(torch.nn.Module):
         """The vocabulary size of the model."""
         return self.HF_model_config.vocab_size
 
-    def _check_inputs(self, batch: MEDSTorchBatch):
+    def _check_inputs(self, batch: EveryQueryBatch):
         """Checks the inputs for various validity properties.
 
         Validity checks:
@@ -291,8 +291,8 @@ class Model(torch.nn.Module):
         if nan_count > 0:
             logger.warning(f"Embeddings contains {nan_count}/{embeddings.numel()} nan values.")
 
-    def _hf_inputs(self, batch: MEDSTorchBatch) -> dict[str, torch.Tensor]:
-        """Converts the MEDSTorchBatch to a dictionary of inputs for the Hugging Face model.
+    def _hf_inputs(self, batch: EveryQueryBatch) -> dict[str, torch.Tensor]:
+        """Converts the EveryQueryBatch to a dictionary of inputs for the Hugging Face model.
 
         HF relevant input keys:
             - input_ids: The input sequence of token IDs. Captured in `batch.code`.
@@ -329,7 +329,7 @@ class Model(torch.nn.Module):
             "attention_mask": (batch.code != batch.PAD_INDEX),
         }
 
-    def _forward_demo(self, batch: MEDSTorchBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
+    def _forward_demo(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         """A demo forward pass that adds more checks and assertions."""
 
         self._check_inputs(batch)
@@ -339,7 +339,7 @@ class Model(torch.nn.Module):
 
         return out
 
-    def _forward(self, batch: MEDSTorchBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
+    def _forward(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         outputs = self.HF_model(**self._hf_inputs(batch))
         embeddings = outputs.last_hidden_state
         loss = None
