@@ -1,5 +1,6 @@
 import logging
-from typing import NamedTuple
+from dataclasses import dataclass
+from typing import ClassVar, NamedTuple
 from functools import cached_property
 from pathlib import Path
 
@@ -15,6 +16,37 @@ from meds_torchdata.config import MEDSTorchDataConfig, StaticInclusionMode
 from meds_torchdata.types import BatchMode, MEDSTorchBatch, StaticData, SubsequenceSamplingStrategy
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class EveryQueryBatch(MEDSTorchBatch):
+    """MEDS batch with EveryQuery-specific annotations.
+
+    Applies only the outlined changes on top of MEDSTorchBatch:
+      - Adds optional per-sample annotations `occurs` and `query`.
+      - Extends `LABEL_TENSOR_NAMES` to include them for printing.
+      - Validates their shapes in `__post_init__` if provided.
+
+    All other behavior is inherited unchanged.
+    """
+
+    # Extra task annotations (subject-level)
+    occurs: torch.BoolTensor | None = None
+    query: torch.LongTensor | None = None
+
+    # Include new annotations in label tensor names for display
+    LABEL_TENSOR_NAMES: ClassVar[tuple[str]] = ("boolean_value", "occurs", "query")
+
+    def __post_init__(self):
+        # Run base validations
+        super().__post_init__()
+
+        # Validate optional per-sample annotation shapes, if provided
+        if self.occurs is not None:
+            self._MEDSTorchBatch__check_shape("occurs", (self.batch_size,))
+        if self.query is not None:
+            self._MEDSTorchBatch__check_shape("query", (self.batch_size,))
+
 
 class QueryData(NamedTuple):
     """Simple data structure to hold query data, capturing codes.
@@ -146,9 +178,9 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         """Encode query using the canonical code vocabulary mapping
         """
         try:
-            return int(self.code_to_index.get(code_name, MEDSTorchBatch.PAD_INDEX))
+            return int(self.code_to_index.get(code_name, EveryQueryBatch.PAD_INDEX))
         except Exception:
-            return MEDSTorchBatch.PAD_INDEX
+            return EveryQueryBatch.PAD_INDEX
 
     def _seeded_getitem(self, idx: int, seed: int | None = None) -> dict[str, torch.Tensor]:
         
@@ -166,11 +198,11 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
 
         return out
 
-    def collate(self, batch: list[dict]) -> MEDSTorchBatch:
-        out = dict(super().collate(batch).items())
+    def collate(self, batch: list[dict]) -> EveryQueryBatch:
+        out = dict(super().collate(batch).items()) # out is MEDSTorchBatch
         if getattr(self, "has_occurs", False):
             out["occurs"] = torch.Tensor([item["occurs"] for item in batch]).bool()
         if getattr(self, "has_query", False):
             query_ids = [self.encode_query(item["query"]) for item in batch]
             out["query"] = torch.as_tensor(query_ids).long()
-        return MEDSTorchBatch(**out)
+        return EveryQueryBatch(**out)
