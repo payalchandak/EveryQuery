@@ -360,18 +360,25 @@ class Model(torch.nn.Module):
 
         return out
 
+    def _get_loss(self, logits, target, mask=None):
+        target = target.float().unsqueeze(1)
+        if mask is not None:
+            logits = logits[mask]
+            target = target[mask]
+        assert logits.shape == target.shape, f"logits: {logits.shape}, target: {target.shape}"
+        return self.criterion(logits, target)
+
     def _forward(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         outputs = self.HF_model(**self._hf_inputs(batch))
         embeddings = outputs.last_hidden_state # (batch_size, seq_len + query_len, hidden_size)
         query_embed = embeddings[:, 0, :] # 0 is query_index (batch_size, hidden_size)
 
         censor_logits = self.censor_mlp(query_embed)
-        censor_loss = self.criterion(censor_logits, batch.censor.float().unsqueeze(1))
-        
+        censor_loss = self._get_loss(censor_logits, batch.censor, mask=None)
+
         # if future is censored then don't apply loss on whether query occurs
-        mask = ~batch.censor
         occurs_logits = self.occurs_mlp(query_embed)
-        occurs_loss = self.criterion(occurs_logits[mask], batch.occurs.float().unsqueeze(1)[mask])
+        occurs_loss = self._get_loss(occurs_logits, batch.occurs, mask=~batch.censor)
         
         loss = censor_loss + occurs_loss
         
