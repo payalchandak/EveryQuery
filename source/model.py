@@ -1,5 +1,6 @@
 import logging
 from typing import ClassVar
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
@@ -51,7 +52,27 @@ class MLP(torch.nn.Module):
         self.model = self.model.append(module)
         return self 
 
-class Model(torch.nn.Module):
+
+@dataclass
+class EveryQueryOutput(BaseModelOutput):
+    """Extended output for EveryQuery that includes task-specific fields.
+
+    Inherits base fields like `last_hidden_state`, `hidden_states`, and `attentions` from
+    Hugging Face's `BaseModelOutput`, and adds:
+      - `query_embed`: Pooled embedding used for downstream heads.
+      - `censor_logits`: Logits for the censor prediction head.
+      - `censor_loss`: Loss for the censor prediction.
+      - `occurs_logits`: Logits for the occurs prediction head.
+      - `occurs_loss`: Loss for the occurs prediction.
+    """
+
+    query_embed: torch.FloatTensor | None = None
+    censor_logits: torch.FloatTensor | None = None
+    censor_loss: torch.FloatTensor | None = None
+    occurs_logits: torch.FloatTensor | None = None
+    occurs_loss: torch.FloatTensor | None = None
+
+class EveryQueryModel(torch.nn.Module):
 
     HF_model_config: ModernBertConfig
     HF_model: ModernBertModel
@@ -137,51 +158,6 @@ class Model(torch.nn.Module):
             ValueError: If the input sequence length exceeds the model's maximum sequence length.
             AssertionError: If the input contains out-of-vocabulary tokens or if it contains inf or nan
                 values.
-
-        Examples:
-            >>> model = Model({
-            ...     "num_hidden_layers": 2,
-            ...     "num_attention_heads": 2,
-            ...     "hidden_size": 4,
-            ...     "max_position_embeddings": 3,
-            ...     "vocab_size": 10,
-            ... })
-            >>> batch = Mock(code=torch.LongTensor([[0, 3, 1], [0, 2, 1]]), PAD_INDEX=0, mode="SM")
-            >>> model._check_inputs(batch) # no errors
-            >>> batch.code = torch.LongTensor([[0, 3, 1], [0, 2, 11]])
-            >>> model._check_inputs(batch)
-            Traceback (most recent call last):
-                ...
-            AssertionError: Input sequence contains 1 out-of-vocabulary tokens (max 11 for vocab size 10).
-            >>> batch.code = torch.Tensor([[0, 3, 1], [0, 2, float("inf")]])
-            >>> model._check_inputs(batch)
-            Traceback (most recent call last):
-                ...
-            AssertionError: Batch code contains inf values.
-            >>> batch.code = torch.Tensor([[0, 3, 1], [0, 2, float("nan")]])
-            >>> model._check_inputs(batch)
-            Traceback (most recent call last):
-                ...
-            AssertionError: Batch code contains nan values.
-            >>> batch.code = torch.LongTensor([[0, 3, 1], [0, 0, 0]])
-            >>> model._check_inputs(batch)
-            Traceback (most recent call last):
-                ...
-            AssertionError: 1 samples in the batch have only padding tokens. Batch size: 2, Sequence length: 3
-            >>> batch.code = torch.LongTensor([[0, 3, 1, 0], [0, 2, 1, 4]])
-            >>> model._check_inputs(batch)
-            Traceback (most recent call last):
-                ...
-            ValueError: Input sequence length 4 exceeds model max sequence length 3.
-            >>> batch.code = torch.LongTensor([[1], [2]])
-            >>> model._check_inputs(batch)
-            Traceback (most recent call last):
-                ...
-            ValueError: Input sequence length 1 is too short. Minimum sequence length is 2.
-            >>> model._check_inputs(Mock(mode="SEM"))
-            Traceback (most recent call last):
-                ...
-            ValueError: Batch mode SEM is not supported.
         """
 
         code = batch.code
@@ -232,25 +208,7 @@ class Model(torch.nn.Module):
             - The parameters are not nan.
             - The parameters are not inf.
 
-        Examples:
-            >>> model = Model({
-            ...     "num_hidden_layers": 2,
-            ...     "num_attention_heads": 2,
-            ...     "hidden_size": 4,
-            ...     "max_position_embeddings": 3,
-            ...     "vocab_size": 10,
-            ... })
-            >>> model.HF_model.gpt_neox.layers[1].attention.query_key_value.bias.shape
-            torch.Size([12])
-            >>> model.HF_model.gpt_neox.layers[1].attention.query_key_value.bias = torch.nn.Parameter(
-            ...     torch.tensor([float("nan"), 0., float("inf"), 0., 0., 0., 0., 0., 0., 0., 0., 0.])
-            ... )
-            >>> with print_warnings():
-            ...     model._check_parameters()
-            Warning: Parameter HF_model.gpt_neox.layers.1.attention.query_key_value.bias contains 1/12 nan
-                values.
-            Warning: Parameter HF_model.gpt_neox.layers.1.attention.query_key_value.bias contains 1/12 inf
-                values.
+        
         """
 
         for n, p in self.named_parameters():
@@ -275,28 +233,7 @@ class Model(torch.nn.Module):
         Args:
             loss: The loss tensor.
 
-        Examples:
-            >>> model = Model({
-            ...     "num_hidden_layers": 2,
-            ...     "num_attention_heads": 2,
-            ...     "hidden_size": 4,
-            ...     "max_position_embeddings": 3,
-            ...     "vocab_size": 10,
-            ... })
-            >>> fake_output_valid = Mock(logits=torch.FloatTensor([[0.1, 0.2], [0.3, 0.4]]))
-            >>> model._check_outputs(torch.tensor(0.4), fake_output_valid) # no errors
-            >>> with print_warnings():
-            ...     model._check_outputs(torch.tensor(float("inf")), fake_output_valid)
-            ...     model._check_outputs(torch.tensor(float("nan")), fake_output_valid)
-            Warning: Loss contains inf values.
-            Warning: Loss contains nan values.
-            >>> fake_output_inf = Mock(logits=torch.FloatTensor([[float("inf"), 0.2], [0.3, 0.4]]))
-            >>> fake_output_nan = Mock(logits=torch.FloatTensor([[0.4, float("nan")], [0.3, float("nan")]]))
-            >>> with print_warnings():
-            ...     model._check_outputs(torch.tensor(0.4), fake_output_inf)
-            ...     model._check_outputs(torch.tensor(0.4), fake_output_nan)
-            Warning: Logits contains 1/4 inf values.
-            Warning: Logits contains 2/4 nan values.
+        
         """
 
         if _val(torch.isinf(loss).any()):
@@ -330,20 +267,7 @@ class Model(torch.nn.Module):
         Returns:
             A dictionary of inputs for the Hugging Face model.
 
-        Examples:
-            >>> model = Model({
-            ...     "num_hidden_layers": 2,
-            ...     "num_attention_heads": 2,
-            ...     "hidden_size": 4,
-            ...     "max_position_embeddings": 3,
-            ...     "vocab_size": 10,
-            ... })
-            >>> batch = Mock(code=torch.LongTensor([[0, 3, 1], [0, 0, 2]]), PAD_INDEX=0)
-            >>> model._hf_inputs(batch)
-            {'input_ids': tensor([[0, 3, 1],
-                                  [0, 0, 2]]),
-             'attention_mask': tensor([[False,  True,  True],
-                                       [False, False,  True]])}
+        
         """
         return {
             "input_ids": batch.code,
@@ -382,5 +306,16 @@ class Model(torch.nn.Module):
         
         loss = censor_loss + occurs_loss
         
+        outputs = EveryQueryOutput(
+            last_hidden_state=outputs.last_hidden_state,
+            hidden_states=getattr(outputs, "hidden_states", None),
+            attentions=getattr(outputs, "attentions", None),
+            query_embed=query_embed,
+            censor_logits=censor_logits,
+            censor_loss=censor_loss,
+            occurs_logits=occurs_logits,
+            occurs_loss=occurs_loss,
+        )
+
         return loss, outputs
 

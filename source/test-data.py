@@ -3,9 +3,9 @@ from dataset import EveryQueryPytorchDataset
 from meds_torchdata import MEDSPytorchDataset, MEDSTorchBatch, MEDSTorchDataConfig
 from omegaconf import DictConfig
 import hydra, ipdb
-from model import Model
+from model import EveryQueryModel
 
-model = Model()
+model = EveryQueryModel()
 
 @hydra.main(version_base="1.3", config_path='', config_name='config.yaml')
 def main(cfg: DictConfig) -> float | None:
