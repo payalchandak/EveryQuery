@@ -1,9 +1,8 @@
 import ipdb, os
 import polars as pl 
 
-duration = { "minutes": 0, "hours": 0, "days": 30, "weeks": 0 }
+
 min_context_per_subject = 50
-query_codes = ["MEDS_DEATH","ED_OUT"]
 
 read_dir = "/Users/payal/Desktop/EveryQuery/mimic/MEDS_intermediate/"
 write_dir = "/Users/payal/Desktop/EveryQuery/mimic/MEDS_tasks/"
@@ -19,9 +18,11 @@ for file in os.listdir(f"{read_dir}/data/train"):
         ["subject_id", "time"]
     )
     df.append(df_shard)
-df = pl.concat(df)
+df = pl.concat(df) # subject, time, code
 
-task_df = df.with_columns(
+duration = { "minutes": 0, "hours": 0, "days": 30, "weeks": 0 }
+
+censor_df = df.with_columns(
     pl.col("time").cum_count().over("subject_id").alias("context_cumsum")
 ).filter(
     pl.col("context_cumsum") >= min_context_per_subject # we want at least min_context_per_subject context events
@@ -46,9 +47,24 @@ task_df = df.with_columns(
     ["subject_id","prediction_time","censored"]
 )
 
+query_codes = df.select("code").unique().to_series().to_list()
+
+censor_true = censor_df.filter(
+    pl.col("censored") == True
+).with_columns(
+    [pl.lit(None).alias(query).cast(pl.Int32) for query in query_codes]
+)
+
+censor_false = censor_df.filter(pl.col("censored") == False)
+
+query_occurs_dfs = [censor_false]
+
+censor_false_time = censor_false.drop("censored").with_row_index()
+censor_false_index = censor_false_time.select("index")
+
 for query in query_codes:
 
-    query_occurs = task_df.join(
+    query_occurs = censor_false_time.join(
         df.filter(
             pl.col("code") == query
         ).drop(
@@ -63,24 +79,28 @@ for query in query_codes:
     ).filter(
         pl.col(f"{query}_time") < (pl.col("prediction_time") + pl.duration(**duration))
     ).select(
-        ["subject_id","prediction_time"]
+        ["index"]
     ).unique(
     ).with_columns(
         pl.lit(1).alias(query)
-    )
-
-    task_df = task_df.join(
-        query_occurs,
-        on=["subject_id","prediction_time"],
-        how="left"
+    ).join(
+        censor_false_index,
+        on="index",
+        how="right"
     ).with_columns(
-        # if not censored and query occurred then retain 1
-        # if not censored and query did not occur (NULL) then set to 0
-        # if censored then retain NULL
-        pl.when(pl.col("censored")==False & pl.col(query).is_null()
-        ).then(0).otherwise(pl.col(query)).alias(query)
+        pl.col(query).fill_null(0)
+    ).select(
+        [query]
     )
+    query_occurs_dfs.append(query_occurs)
 
+censor_false = pl.concat(query_occurs_dfs, how='horizontal')
+assert sum(censor_false.null_count()).item() == 0
+
+task_df = pl.concat([censor_true, censor_false], how='vertical').sample(fraction=1,shuffle=True)
+task_df.write_parquet(f"/Users/payal/Desktop/EveryQuery/mimic/MEDS_all_tasks.parquet")
+
+query_codes = ["MEDS_DEATH","ED_OUT"]
 final = []
 for query in query_codes:
     x = task_df.select(
@@ -92,9 +112,6 @@ for query in query_codes:
     )
     final.append(x)
 final = pl.concat(final).sample(fraction=1,shuffle=True)
-final = final.rename({'censored':'boolean_value'})
-final = final.with_columns(pl.col('occurs').fill_null(-1)) # -1 for censored to avoid null errors 
+final = final.rename({'censored':'boolean_value'}).with_columns(pl.col('occurs').fill_null(-1)) # -1 for censored to avoid null errors 
 os.makedirs(write_dir, exist_ok=True)
 final.write_parquet(f"{write_dir}/task_df.parquet")
-
-# ipdb.set_trace()
