@@ -32,7 +32,7 @@ class EveryQueryBatch(MEDSTorchBatch):
 
     # Extra task annotations (subject-level)
     censor: torch.BoolTensor | None = None
-    occurs: torch.BoolTensor | None = None
+    occurs: torch.LongTensor | None = None
     query: torch.LongTensor | None = None
 
     # Include new annotations in label tensor names for display
@@ -206,7 +206,7 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         if self.has_task_labels:
             out["censor"] = out[self.LABEL_COL]
         if getattr(self, "has_occurs", False):
-            out["occurs"] = torch.Tensor([item["occurs"] for item in batch]).bool()
+            out["occurs"] = torch.Tensor([item["occurs"] for item in batch]).long()
         if getattr(self, "has_query", False):
             query_ids = [self.encode_query(item["query"]) for item in batch]
             out["query"] = torch.as_tensor(query_ids).long()

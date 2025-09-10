@@ -74,7 +74,11 @@ for query in query_codes:
         on=["subject_id","prediction_time"],
         how="left"
     ).with_columns(
-        pl.col(query).fill_null(0)
+        # if not censored and query occurred then retain 1
+        # if not censored and query did not occur (NULL) then set to 0
+        # if censored then retain NULL
+        pl.when(pl.col("censored")==False & pl.col(query).is_null()
+        ).then(0).otherwise(pl.col(query)).alias(query)
     )
 
 final = []
@@ -89,6 +93,7 @@ for query in query_codes:
     final.append(x)
 final = pl.concat(final).sample(fraction=1,shuffle=True)
 final = final.rename({'censored':'boolean_value'})
+final = final.with_columns(pl.col('occurs').fill_null(-1)) # -1 for censored to avoid null errors 
 os.makedirs(write_dir, exist_ok=True)
 final.write_parquet(f"{write_dir}/task_df.parquet")
 
