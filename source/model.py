@@ -1,4 +1,5 @@
 import logging
+import textwrap
 from typing import ClassVar
 from dataclasses import dataclass
 
@@ -19,6 +20,8 @@ try:
 except ImportError:
     HAS_FLASH_ATTN = False
 
+
+BRANCH = "│ "
 
 def _val(tensor: torch.Tensor) -> int | bool | float:
     """Returns the value of a scalar-tensor as a Python scalar.
@@ -71,6 +74,115 @@ class EveryQueryOutput(BaseModelOutput):
     censor_loss: torch.FloatTensor | None = None
     occurs_logits: torch.FloatTensor | None = None
     occurs_loss: torch.FloatTensor | None = None
+
+    def __shape_str_lines(self) -> list[str]:
+        """Generates the lines for the shape block."""
+
+        shape_lines: list[str] = ["Shape:"]
+
+        if self.last_hidden_state is not None:
+            try:
+                batch_size, seq_len, hidden_size = self.last_hidden_state.shape
+                shape_lines.append(f"{BRANCH}Batch size: {batch_size}")
+                shape_lines.append(f"{BRANCH}Sequence length: {seq_len}")
+                shape_lines.append(f"{BRANCH}Hidden size: {hidden_size}")
+            except Exception:
+                shape_lines.append(f"{BRANCH}last_hidden_state: {tuple(self.last_hidden_state.shape)}")
+
+        if self.query_embed is not None:
+            shape_lines.append(f"{BRANCH}Query embedding: {tuple(self.query_embed.shape)}")
+
+        if self.hidden_states is not None:
+            try:
+                num_layers = len(self.hidden_states)
+                example_shape = tuple(self.hidden_states[0].shape)
+                shape_lines.append(f"{BRANCH}Hidden states: {num_layers} layers × {example_shape}")
+            except Exception:
+                shape_lines.append(f"{BRANCH}Hidden states: {type(self.hidden_states)}")
+
+        if self.attentions is not None:
+            try:
+                num_layers = len(self.attentions)
+                example_shape = tuple(self.attentions[0].shape)
+                shape_lines.append(f"{BRANCH}Attentions: {num_layers} layers × {example_shape}")
+            except Exception:
+                shape_lines.append(f"{BRANCH}Attentions: {type(self.attentions)}")
+
+        return shape_lines
+
+    @staticmethod
+    def __str_tensor_val(tensor: torch.Tensor) -> str:
+        """Strips the `tensor(` prefix, `)` suffix, leading/trailing , and newlines."""
+
+        tensor_str = str(tensor).replace("tensor(", "       ").replace(")", "")
+        tensor_str = "\n".join([x for x in tensor_str.splitlines() if x.strip()])
+        tensor_str = textwrap.dedent(tensor_str).strip()
+        return tensor_str
+
+    def __str_tensor_list(self, header: str, tensors: list[str]) -> list[str]:
+        """Gets string representation lines for the requested tensors (by attribute name)."""
+        out: list[str] = [f"{header}:"]
+        for tensor_n in tensors:
+            tensor = getattr(self, tensor_n, None)
+            if tensor is None:
+                continue
+
+            dtype = getattr(tensor, "dtype", None)
+            dtype_str = f" ({dtype})" if dtype is not None else ""
+
+            out.append(f"{BRANCH}{tensor_n}{dtype_str}:")
+            try:
+                tensor_str = self.__str_tensor_val(tensor)
+            except Exception:
+                tensor_str = str(tensor)
+            out.extend(textwrap.indent(tensor_str, BRANCH + BRANCH).splitlines())
+
+        return out
+
+    def __data_str_lines(self) -> list[str]:
+        """Generates the lines for the data block."""
+        data_lines: list[str] = ["Data:"]
+
+        core = self.__str_tensor_list("Core", [
+            "last_hidden_state",
+            "query_embed",
+        ])
+        if len(core) > 1:
+            data_lines.extend([f"{BRANCH}{line}" for line in core])
+
+        heads = self.__str_tensor_list("Heads", [
+            "censor_logits",
+            "occurs_logits",
+        ])
+        if len(heads) > 1:
+            data_lines.append(BRANCH)
+            data_lines.extend([f"{BRANCH}{line}" for line in heads])
+
+        losses = self.__str_tensor_list("Losses", [
+            "censor_loss",
+            "occurs_loss",
+        ])
+        if len(losses) > 1:
+            data_lines.append(BRANCH)
+            data_lines.extend([f"{BRANCH}{line}" for line in losses])
+
+        return data_lines
+
+    def __str__(self) -> str:
+        """Human-readable string representation (for debugging and doctests)."""
+
+        lines: list[str] = [f"{self.__class__.__name__}:"]
+
+        torch.set_printoptions(precision=2, threshold=5, edgeitems=2)
+
+        lines.extend([f"{BRANCH}{line}" for line in self.__shape_str_lines()])
+        lines.append(BRANCH)
+        lines.extend([f"{BRANCH}{line}" for line in self.__data_str_lines()])
+
+        torch.set_printoptions(profile="default")
+
+        lines = [line.rstrip() for line in lines]
+        return "\n".join(lines)
 
 class EveryQueryModel(torch.nn.Module):
 
