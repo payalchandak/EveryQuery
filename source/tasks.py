@@ -1,21 +1,19 @@
 import ipdb, os
 import polars as pl 
-
+import time
 
 min_context_per_subject = 50
 
-read_dir = "/Users/payal/Desktop/EveryQuery/mimic/MEDS_intermediate/"
+read_dir = "/Users/payal/Desktop/EveryQuery/mimic/MEDS_intermediate"
 write_dir = "/Users/payal/Desktop/EveryQuery/mimic/MEDS_tasks/"
 
 df = []
 for file in os.listdir(f"{read_dir}/data/train"):
-    df_shard = pl.read_parquet(
-        f"{read_dir}/data/train/{file}"
-    ).select(
-        ['subject_id','time','code']
-    ).unique(
-    ).sort(
-        ["subject_id", "time"]
+    df_shard = (
+        pl.read_parquet(f"{read_dir}/data/train/{file}")
+        .select(['subject_id','time','code'])
+        .unique()
+        .sort(["subject_id", "time"])
     )
     df.append(df_shard)
 df = pl.concat(df) # subject, time, code
@@ -38,11 +36,8 @@ censor_df = (
     .select(["subject_id","prediction_time","censored"])
 )
 
-
-query_codes = df.select("code").unique().to_series().to_list() # read from metadata instead
-# call it code_metadata_df 
-# function to take this as input will work for meds-trasforms 
-# https://github.com/mmcdermott/MEDS_transforms/blob/main/src/MEDS_transforms/stages/filter_measurements/filter_measurements.py#L12
+code_metadata_df = pl.read_parquet(f"{read_dir}/metadata/codes.parquet")
+query_codes = code_metadata_df.select("code").unique().to_series().to_list() 
 
 censor_true = (
     censor_df.filter(pl.col("censored") == True)
@@ -56,8 +51,22 @@ query_occurs_dfs = [censor_false]
 censor_false_time = censor_false.drop("censored").with_row_index()
 censor_false_index = censor_false_time.select("index")
 
-for query in query_codes:
+start_time = time.time()
+x = (
+    censor_false.drop("censored")
+    .join(df.rename({'time': f'query_time'}), on="subject_id", how="left")
+    .filter((pl.col(f"query_time") > pl.col("prediction_time")) & (pl.col(f"query_time") < (pl.col("prediction_time") + pl.duration(**duration))))
+    .drop("query_time")
+    .unique(['subject_id', 'prediction_time', 'code'])
+    .with_columns(pl.lit(1).alias('occurs').cast(pl.Boolean))
+    .pivot(on='code', index=['subject_id', 'prediction_time'], values='occurs')
+)
+end_time = time.time()
+print(f"Timing for x computation: {end_time - start_time:.2f} seconds")
+# single join works but 30x slower than the loop! 
 
+start_loop_time = time.time()
+for query in query_codes:
     # do one big join here and then loop over the query codes
     # or group by query code and then check whether it occurs in time window
     query_occurs = (
@@ -71,6 +80,8 @@ for query in query_codes:
         .select([query])
     )
     query_occurs_dfs.append(query_occurs)
+end_loop_time = time.time()
+print(f"Timing for query_codes loop: {end_loop_time - start_loop_time:.2f} seconds")
 
 censor_false = pl.concat(query_occurs_dfs, how='horizontal')
 assert sum(censor_false.null_count()).item() == 0
@@ -79,18 +90,12 @@ task_df = pl.concat([censor_true, censor_false], how='vertical')
 task_df.write_parquet(f"/Users/payal/Desktop/EveryQuery/mimic/MEDS_all_tasks.parquet")
 
 query_codes = ["MEDS_DEATH","ED_OUT"]
-final = []
-# unpivot 
-# https://docs.pola.rs/api/python/stable/reference/dataframe/api/polars.DataFrame.unpivot.html
-for query in query_codes:
-    x = (
-        task_df.select(["subject_id","prediction_time","censored",query])
-        .with_columns(pl.lit(query).alias('query'),)
-        .rename({query:'occurs'})
-    )
-    final.append(x)
-final = pl.concat(final)
-final = final.rename({'censored':'boolean_value'}).with_columns(pl.col('occurs').fill_null(False)) 
+final = (
+    task_df.select(["subject_id","prediction_time","censored"] + query_codes)
+    .unpivot(index=['subject_id', 'prediction_time', 'censored'], variable_name="query", value_name="occurs")
+    .rename({'censored':'boolean_value'})
+    .with_columns(pl.col('occurs').fill_null(False)) 
+)
 # sample N times per subject 
 os.makedirs(write_dir, exist_ok=True)
 final.write_parquet(f"{write_dir}/task_df.parquet")
