@@ -22,37 +22,31 @@ df = pl.concat(df) # subject, time, code
 
 duration = { "minutes": 0, "hours": 0, "days": 30, "weeks": 0 }
 
-censor_df = df.with_columns(
-    pl.col("time").cum_count().over("subject_id").alias("context_cumsum")
-).filter(
-    pl.col("context_cumsum") >= min_context_per_subject # we want at least min_context_per_subject context events
-).select(
-    ["subject_id","time"]
-).unique(
-).rename(
-    {"time": "prediction_time"}
-).join(
-    df.group_by(
-        ["subject_id"]
-    ).agg(
-        pl.col("time").last().alias("record_end_time")
-    ),
-    on="subject_id",
-    how="left"
-).with_columns(
-    (pl.col("record_end_time") - pl.col("prediction_time")).alias("future_duration")
-).with_columns(
-    (pl.col("future_duration") < pl.duration(**duration)).alias("censored")
-).select(
-    ["subject_id","prediction_time","censored"]
+'''
+functions, so you can parellize over shards
+'''
+
+censor_df = (
+    df.with_columns(pl.col("time").cum_count().over("subject_id").alias("context_cumsum"))
+    .filter(pl.col("context_cumsum") >= min_context_per_subject) # we want at least min_context_per_subject context tokens)
+    .select(["subject_id","time"])
+    .unique()
+    .rename({"time": "prediction_time"})
+    .join(df.group_by(["subject_id"]).agg(pl.col("time").last().alias("record_end_time")), on="subject_id", how="left",)
+    .with_columns((pl.col("record_end_time") - pl.col("prediction_time")).alias("future_duration"))
+    .with_columns((pl.col("future_duration") < pl.duration(**duration)).alias("censored"))
+    .select(["subject_id","prediction_time","censored"])
 )
 
-query_codes = df.select("code").unique().to_series().to_list()
 
-censor_true = censor_df.filter(
-    pl.col("censored") == True
-).with_columns(
-    [pl.lit(None).alias(query).cast(pl.Int32) for query in query_codes]
+query_codes = df.select("code").unique().to_series().to_list() # read from metadata instead
+# call it code_metadata_df 
+# function to take this as input will work for meds-trasforms 
+# https://github.com/mmcdermott/MEDS_transforms/blob/main/src/MEDS_transforms/stages/filter_measurements/filter_measurements.py#L12
+
+censor_true = (
+    censor_df.filter(pl.col("censored") == True)
+    .with_columns([pl.lit(None).alias(query).cast(pl.Boolean) for query in query_codes])
 )
 
 censor_false = censor_df.filter(pl.col("censored") == False)
@@ -64,54 +58,39 @@ censor_false_index = censor_false_time.select("index")
 
 for query in query_codes:
 
-    query_occurs = censor_false_time.join(
-        df.filter(
-            pl.col("code") == query
-        ).drop(
-            "code",
-        ).rename(
-            {'time': f'{query}_time'}
-        ),
-        on="subject_id",
-        how="left"
-    ).filter(
-        pl.col(f"{query}_time") > pl.col("prediction_time")
-    ).filter(
-        pl.col(f"{query}_time") < (pl.col("prediction_time") + pl.duration(**duration))
-    ).select(
-        ["index"]
-    ).unique(
-    ).with_columns(
-        pl.lit(1).alias(query)
-    ).join(
-        censor_false_index,
-        on="index",
-        how="right"
-    ).with_columns(
-        pl.col(query).fill_null(0)
-    ).select(
-        [query]
+    # do one big join here and then loop over the query codes
+    # or group by query code and then check whether it occurs in time window
+    query_occurs = (
+        censor_false_time.join(df.filter(pl.col("code") == query).drop("code",).rename({'time': f'{query}_time'}), on="subject_id", how="left")
+        .filter((pl.col(f"{query}_time") > pl.col("prediction_time")) & (pl.col(f"{query}_time") < (pl.col("prediction_time") + pl.duration(**duration))))
+        .select(["index"])
+        .unique()
+        .with_columns(pl.lit(True).alias(query))
+        .join(censor_false_index, on="index", how="right",)
+        .with_columns(pl.col(query).fill_null(False))
+        .select([query])
     )
     query_occurs_dfs.append(query_occurs)
 
 censor_false = pl.concat(query_occurs_dfs, how='horizontal')
 assert sum(censor_false.null_count()).item() == 0
 
-task_df = pl.concat([censor_true, censor_false], how='vertical').sample(fraction=1,shuffle=True)
+task_df = pl.concat([censor_true, censor_false], how='vertical')
 task_df.write_parquet(f"/Users/payal/Desktop/EveryQuery/mimic/MEDS_all_tasks.parquet")
 
 query_codes = ["MEDS_DEATH","ED_OUT"]
 final = []
+# unpivot 
+# https://docs.pola.rs/api/python/stable/reference/dataframe/api/polars.DataFrame.unpivot.html
 for query in query_codes:
-    x = task_df.select(
-        ["subject_id","prediction_time","censored",query]
-    ).with_columns(
-        pl.lit(query).alias('query'),
-    ).rename(
-        {query:'occurs'}
+    x = (
+        task_df.select(["subject_id","prediction_time","censored",query])
+        .with_columns(pl.lit(query).alias('query'),)
+        .rename({query:'occurs'})
     )
     final.append(x)
-final = pl.concat(final).sample(fraction=1,shuffle=True)
-final = final.rename({'censored':'boolean_value'}).with_columns(pl.col('occurs').fill_null(-1)) # -1 for censored to avoid null errors 
+final = pl.concat(final)
+final = final.rename({'censored':'boolean_value'}).with_columns(pl.col('occurs').fill_null(False)) 
+# sample N times per subject 
 os.makedirs(write_dir, exist_ok=True)
 final.write_parquet(f"{write_dir}/task_df.parquet")
