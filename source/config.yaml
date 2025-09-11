@@ -1,4 +1,4 @@
-output_dir: /Users/payal/Desktop/EveryQuery/outputs/
+output_dir: /Users/payal/Desktop/EveryQuery/${hydra:run.dir}/
 do_overwrite: false
 do_resume: false
 

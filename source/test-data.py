@@ -140,6 +140,9 @@ def main(cfg: DictConfig) -> float | None:
     best_ckpt_path = Path(trainer.checkpoint_callback.best_model_path)
     if not best_ckpt_path.is_file():
         raise ValueError("No best checkpoint reported.")
+    else:
+        for log in trainer.loggers:
+            log.log_hyperparams({'best_ckpt_path':best_ckpt_path})
 
     output_fp = Path(cfg.output_dir) / "best_model.ckpt"
     shutil.copyfile(best_ckpt_path, output_fp)
