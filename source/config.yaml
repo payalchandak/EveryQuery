@@ -1,4 +1,6 @@
 output_dir: /Users/payal/Desktop/EveryQuery/outputs/
+do_overwrite: false
+do_resume: false
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule

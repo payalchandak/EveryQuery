@@ -6,22 +6,147 @@ import hydra, ipdb
 from model import EveryQueryModel
 from lightning_module import EveryQueryLightningModule
 from typing import Any
+from pathlib import Path
+import shutil
+import torch
+from hydra.utils import instantiate
+import logging 
+from lightning.pytorch import seed_everything
+
+logger = logging.getLogger(__name__)
 
 def values_as_list(**kwargs) -> list[Any]:
     return list(kwargs.values())
 
+def save_resolved_config(cfg: DictConfig, fp: Path) -> bool:
+    try:
+        # Create a copy and resolve all interpolations
+        resolved_cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+        OmegaConf.save(resolved_cfg, fp)
+        return True
+    except Exception as e:
+        logger.warning(f"Could not save resolved config: {e}")
+        return False
+
+def validate_resume_directory(output_dir: Path, cfg: DictConfig):
+
+    old_cfg_fp = output_dir / "config.yaml"
+    if not old_cfg_fp.is_file():
+        raise FileNotFoundError(f"Configuration file {old_cfg_fp} does not exist in the output directory.")
+
+    old_cfg = OmegaConf.load(old_cfg_fp)
+
+    old_cfg = OmegaConf.to_container(old_cfg, resolve=True)
+    new_cfg = OmegaConf.to_container(cfg, resolve=True)
+
+    differences = diff_configs(new_cfg, old_cfg)
+
+    err_lines = []
+    for key, diff in differences.items():
+        if key in ALLOWED_DIFFERENCE_KEYS:
+            continue
+        err_lines.append(f"  - key '{key}' {diff}")
+
+    if err_lines:
+        err_lines_str = "\n".join(err_lines)
+        raise ValueError(
+            f"The configuration in the output directory does not match the input:\n{err_lines_str}"
+        )
+
+def find_checkpoint_path(output_dir: Path) -> Path | None:
+
+    checkpoints_dir = output_dir / "checkpoints"
+
+    if checkpoints_dir.is_file():
+        raise NotADirectoryError(f"Checkpoints directory {checkpoints_dir} is a file, not a directory.")
+    elif not checkpoints_dir.exists():
+        return None
+
+    last_ckpt = checkpoints_dir / "last.ckpt"
+    if last_ckpt.is_file():
+        return last_ckpt
+
+    checkpoint_fps = list(checkpoints_dir.glob("epoch=*-step=*.ckpt"))
+    if not checkpoint_fps:
+        return None
+
+    def get_epoch(fp: Path) -> int:
+        return int(fp.stem.split("-")[0].split("=")[1])
+
+    def get_step(fp: Path) -> int:
+        return int(fp.stem.split("-")[1].split("=")[1])
+
+    sorted_checkpoints = sorted(checkpoint_fps, key=lambda fp: (get_epoch(fp), get_step(fp)))
+
+    return sorted_checkpoints[-1] if sorted_checkpoints else None
+
 @hydra.main(version_base="1.3", config_path='', config_name='config.yaml')
 def main(cfg: DictConfig) -> float | None:
+
     # keep the run tiny for testing
     cfg.trainer.max_steps = 3
     cfg.trainer.limit_val_batches = 1
 
-    dm = hydra.utils.instantiate(cfg.datamodule)
-    module = hydra.utils.instantiate(cfg.lightning_module)
-    trainer = hydra.utils.instantiate(cfg.trainer)
+    if cfg.do_overwrite and cfg.do_resume:
+        logger.warning(
+            "Both `do_overwrite` and `do_resume` are set to True. "
+            "Only `do_overwrite` will be used, and the output directory will be cleared."
+        )
 
-    trainer.fit(model=module, datamodule=dm)
-    print('Success')
+    output_dir = Path(cfg.output_dir)
+
+    if output_dir.is_file():
+        raise NotADirectoryError(f"Output directory {output_dir} is a file, not a directory.")
+
+    cfg_path = output_dir / "config.yaml"
+
+    ckpt_path = None
+
+    if cfg_path.exists():
+        if cfg.do_overwrite:
+            logger.info(f"Overwriting existing output directory {output_dir}.")
+            shutil.rmtree(output_dir, ignore_errors=True)
+        elif cfg.do_resume:
+            validate_resume_directory(output_dir, cfg)
+            ckpt_path = find_checkpoint_path(output_dir)
+        else:
+            raise FileExistsError(
+                f"Output directory {output_dir} already exists and is populated. "
+                "Use `do_overwrite` or `do_resume` to proceed."
+            )
+    else:
+        OmegaConf.save(cfg, output_dir / "config.yaml")
+        save_resolved_config(cfg, output_dir / "resolved_config.yaml")
+
+    logger.info("Setting torch float32 matmul precision to 'medium'.")
+    torch.set_float32_matmul_precision("medium")
+
+    D = instantiate(cfg.datamodule)
+
+    M = hydra.utils.instantiate(cfg.lightning_module)
+
+    if M.model.do_demo or cfg.get("seed", None):
+        seed_everything(cfg.get("seed", 1), workers=True)
+
+    trainer = instantiate(cfg.trainer)
+
+    trainer_kwargs = {"model": M, "datamodule": D}
+    if ckpt_path:
+        logger.info(f"Trying to resume training from checkpoint {ckpt_path}.")
+        trainer_kwargs["ckpt_path"] = ckpt_path
+
+    trainer.fit(**trainer_kwargs)
+
+    best_ckpt_path = Path(trainer.checkpoint_callback.best_model_path)
+    if not best_ckpt_path.is_file():
+        raise ValueError("No best checkpoint reported.")
+
+    output_fp = Path(cfg.output_dir) / "best_model.ckpt"
+    shutil.copyfile(best_ckpt_path, output_fp)
+
+    best_score = trainer.checkpoint_callback.best_model_score
+
+    logger.info(f"Best checkpoint (with score {best_score:.2f}) copied to {output_fp!s}.")
 
 if __name__ == "__main__":
     main()
