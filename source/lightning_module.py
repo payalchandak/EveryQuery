@@ -11,7 +11,8 @@ from meds import held_out_split, train_split, tuning_split
 
 import torch
 import torch.nn.parameter
-from model import EveryQueryModel
+from model import EveryQueryModel, EveryQueryOutput
+from dataset import EveryQueryBatch
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ def _factory_to_dict(factory: partial | None) -> dict[str, Any] | None:
     return {"_target_": target, **kwargs}
 
 
-def _dict_to_factory(d: dict[str, Any] | None) -> partial:
+def _dict_to_factory(d: dict[str, Any] | None) -> partial | None:
     """Reconstructs a partial function from a dictionary.
 
     This is actually just a wrapper around `hydra.utils.instantiate` that sets the `_partial_` flag to True,
@@ -204,23 +205,23 @@ class EveryQueryLightningModule(L.LightningModule):
                 if preds.numel() > 0 and target.unique().numel() == 2:
                     self._update_metric(name="occurs_auc", split=split, preds=preds, target=target)
 
-    def training_step(self, batch):
+    def training_step(self, batch: EveryQueryBatch) -> torch.Tensor:
         loss, outputs = self.model(batch)
         self._log_metrics(loss, outputs, batch, train_split)
         return loss
 
-    def validation_step(self, batch):
+    def validation_step(self, batch: EveryQueryBatch) -> torch.Tensor:
         loss, outputs = self.model(batch)
         self._log_metrics(loss, outputs, batch, tuning_split)
         return loss
 
-    def test_step(self, batch):
+    def test_step(self, batch: EveryQueryBatch) -> torch.Tensor:
         loss, outputs = self.model(batch)
         self._log_metrics(loss, outputs, batch, held_out_split)
         return loss
 
-    def predict_step(self, batch):
-        loss, outputs = self.model(batch)
+    def predict_step(self, batch: EveryQueryBatch) -> EveryQueryOutput:
+        _, outputs = self.model(batch)
         return outputs
 
     @staticmethod
