@@ -45,31 +45,11 @@ censor_true = (
 )
 
 censor_false = censor_df.filter(pl.col("censored") == False)
-
-query_occurs_dfs = [censor_false]
-
 censor_false_time = censor_false.drop("censored").with_row_index()
 censor_false_index = censor_false_time.select("index")
-
-start_time = time.time()
-x = (
-    censor_false.drop("censored")
-    .join(df.rename({'time': f'query_time'}), on="subject_id", how="left")
-    .filter((pl.col(f"query_time") > pl.col("prediction_time")) & (pl.col(f"query_time") < (pl.col("prediction_time") + pl.duration(**duration))))
-    .drop("query_time")
-    .unique(['subject_id', 'prediction_time', 'code'])
-    .with_columns(pl.lit(1).alias('occurs').cast(pl.Boolean))
-    .pivot(on='code', index=['subject_id', 'prediction_time'], values='occurs')
-)
-end_time = time.time()
-print(f"Timing for x computation: {end_time - start_time:.2f} seconds")
-# single join works but 30x slower than the loop! 
-
-start_loop_time = time.time()
+censor_false_dfs = [censor_false]
 for query in query_codes:
-    # do one big join here and then loop over the query codes
-    # or group by query code and then check whether it occurs in time window
-    query_occurs = (
+    censor_false_dfs.append(
         censor_false_time.join(df.filter(pl.col("code") == query).drop("code",).rename({'time': f'{query}_time'}), on="subject_id", how="left")
         .filter((pl.col(f"{query}_time") > pl.col("prediction_time")) & (pl.col(f"{query}_time") < (pl.col("prediction_time") + pl.duration(**duration))))
         .select(["index"])
@@ -79,11 +59,7 @@ for query in query_codes:
         .with_columns(pl.col(query).fill_null(False))
         .select([query])
     )
-    query_occurs_dfs.append(query_occurs)
-end_loop_time = time.time()
-print(f"Timing for query_codes loop: {end_loop_time - start_loop_time:.2f} seconds")
-
-censor_false = pl.concat(query_occurs_dfs, how='horizontal')
+censor_false = pl.concat(censor_false_dfs, how='horizontal')
 assert sum(censor_false.null_count()).item() == 0
 
 task_df = pl.concat([censor_true, censor_false], how='vertical')
