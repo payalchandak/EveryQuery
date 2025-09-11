@@ -2,14 +2,18 @@ from torchmetrics.classification import BinaryAUROC
 import hydra
 import lightning as L
 import copy
+import logging
 import re
 from collections.abc import Callable, Iterator
 from functools import partial
 from typing import Any, Literal
+from meds import held_out_split, train_split, tuning_split
 
 import torch
 import torch.nn.parameter
 from model import EveryQueryModel
+
+logger = logging.getLogger(__name__)
 
 def _factory_to_dict(factory: partial | None) -> dict[str, Any] | None:
     """Extracts a sufficient dictionary for reconstructing the optimizer or LR scheduler.
@@ -121,12 +125,12 @@ class EveryQueryLightningModule(L.LightningModule):
         self.LR_scheduler_factory = LR_scheduler
 
         self.metrics = {
-            "train": {},
-            "val": {
+            train_split: {},
+            tuning_split: {
                 "censor_auc": BinaryAUROC(),
                 "occurs_auc": BinaryAUROC(),
             },
-            "test": {
+            held_out_split: {
                 "censor_auc": BinaryAUROC(),
                 "occurs_auc": BinaryAUROC(),
             },
@@ -156,25 +160,33 @@ class EveryQueryLightningModule(L.LightningModule):
             metric.reset()
 
     def on_validation_epoch_end(self):
-        self._on_epoch_end("val")
+        self._on_epoch_end(tuning_split)
 
     def on_test_epoch_end(self):
-        self._on_epoch_end("test")
+        self._on_epoch_end(held_out_split)
 
     def on_train_epoch_end(self):
         pass
 
-    def _step(self, batch, split: Literal["train", "val", "test", "predict"]):
-        loss, outputs = self.model(batch)
+    def _log_metrics(
+        self,
+        loss: torch.Tensor,
+        outputs: EveryQueryOutput,
+        batch: EveryQueryBatch,
+        split: Literal[train_split, tuning_split, held_out_split],
+    ):
+    
+        batch_size = batch.batch_size
+        is_train = split == train_split
+        sync_dist = not is_train and torch.distributed.is_available() and torch.distributed.is_initialized()
 
-        is_train = split == "train"
-        self.log(f"{split}/loss", loss, on_step=is_train, on_epoch=True, prog_bar=True, batch_size=batch.batch_size)
+        self.log(f"{split}/loss", loss, on_step=is_train, on_epoch=True, prog_bar=True, batch_size=batch_size, sync_dist=sync_dist)
         if getattr(outputs, "censor_loss", None) is not None:
-            self.log(f"{split}/censor_loss", outputs.censor_loss, on_step=is_train, on_epoch=not is_train, batch_size=batch.batch_size)
+            self.log(f"{split}/censor_loss", outputs.censor_loss, on_step=is_train, on_epoch=not is_train, batch_size=batch_size, sync_dist=sync_dist)
         if getattr(outputs, "occurs_loss", None) is not None:
-            self.log(f"{split}/occurs_loss", outputs.occurs_loss, on_step=is_train, on_epoch=not is_train, batch_size=batch.batch_size)
+            self.log(f"{split}/occurs_loss", outputs.occurs_loss, on_step=is_train, on_epoch=not is_train, batch_size=batch_size, sync_dist=sync_dist)
 
-        if split in {"val", "test", "predict"}:
+        if not is_train:
             if getattr(outputs, "censor_logits", None) is not None and getattr(batch, "censor", None) is not None:
                 self._update_metric(
                     name="censor_auc",
@@ -192,19 +204,24 @@ class EveryQueryLightningModule(L.LightningModule):
                 if preds.numel() > 0 and target.unique().numel() == 2:
                     self._update_metric(name="occurs_auc", split=split, preds=preds, target=target)
 
-        return (loss if split != "predict" else outputs)
-
     def training_step(self, batch):
-        return self._step(batch, "train")
+        loss, outputs = self.model(batch)
+        self._log_metrics(loss, outputs, batch, train_split)
+        return loss
 
     def validation_step(self, batch):
-        return self._step(batch, "val")
+        loss, outputs = self.model(batch)
+        self._log_metrics(loss, outputs, batch, tuning_split)
+        return loss
 
     def test_step(self, batch):
-        return self._step(batch, "test")
+        loss, outputs = self.model(batch)
+        self._log_metrics(loss, outputs, batch, held_out_split)
+        return loss
 
     def predict_step(self, batch):
-        return self._step(batch, "predict")
+        loss, outputs = self.model(batch)
+        return outputs
 
     @staticmethod
     def _is_norm_bias_param(n: str) -> bool:
@@ -252,13 +269,25 @@ class EveryQueryLightningModule(L.LightningModule):
             return optimizer
 
         scheduler = self.LR_scheduler_factory(optimizer)
-        LR_config = {"scheduler": scheduler, "frequency": 1}
+
+        LR_config = {
+            "scheduler": scheduler,
+            "frequency": 1,
+        }
+
         if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-            LR_config["monitor"] = "val/loss"
+            # ReduceLROnPlateau requires observing stable trends to make a conclusion about LR decay, so an
+            # epcoh level interval is more appropriate.
+
+            LR_config["monitor"] = "tuning/loss"
             LR_config["strict"] = True
             LR_config["interval"] = "epoch"
         else:
+            # All other schedulers operate at a step level as they do not monitor the loss to make a
+            # conclusion about LR decay.
+
             LR_config["interval"] = "step"
+
         return {"optimizer": optimizer, "lr_scheduler": LR_config}
 
     @classmethod
