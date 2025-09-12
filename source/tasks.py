@@ -96,8 +96,8 @@ def build_task_label_matrix(
 
 if __name__ == "__main__":
     
-    read_dir = "/Users/payal/Desktop/EveryQuery/mimic/MEDS_intermediate"
-    write_dir = "/Users/payal/Desktop/EveryQuery/mimic/MEDS_tasks/all/"
+    read_dir = '/n/data1/hms/dbmi/zaklab/payal/mimic/MEDS_intermediate'
+    write_dir = '/n/data1/hms/dbmi/zaklab/payal/mimic/MEDS_tasks/all/'
     min_context_per_subject = 50
     duration =  {"minutes": 0, "hours": 0, "days": 30, "weeks": 0}
     

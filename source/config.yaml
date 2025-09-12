@@ -1,9 +1,9 @@
-output_dir: /Users/payal/Desktop/EveryQuery/${hydra:run.dir}/
+output_dir: ${oc.env:OUTPUT_DIR}/${hydra:run.dir}/
 do_overwrite: false
 do_resume: false
 
 query:
-  task_dir: /Users/payal/Desktop/EveryQuery/mimic/MEDS_tasks/
+  task_dir: ${oc.env:DATA_DIR}/MEDS_tasks/
   sample_times_per_subject: 1000
   codes:
     - MEDS_DEATH
@@ -14,7 +14,7 @@ datamodule:
   data_class: dataset.EveryQueryPytorchDataset
   config: 
     _target_: meds_torchdata.MEDSTorchDataConfig
-    tensorized_cohort_dir: /Users/payal/Desktop/EveryQuery/mimic/MEDS_final
+    tensorized_cohort_dir: ${oc.env:FINAL_DATA_DIR}
     task_labels_dir: ???
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
