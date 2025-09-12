@@ -157,7 +157,28 @@ class EveryQueryLightningModule(L.LightningModule):
 
     def _on_epoch_end(self, split: str):
         for metric_name, metric in self.metrics.get(split, {}).items():
-            self.log(f"{split}/{metric_name}", metric.compute(), sync_dist=True)
+            try:
+                preds_state = getattr(metric, "preds", None)
+                target_state = getattr(metric, "target", None)
+                has_state = (
+                    isinstance(preds_state, list)
+                    and isinstance(target_state, list)
+                    and len(preds_state) > 0
+                    and len(target_state) > 0
+                )
+
+                all_targets = torch.cat([t.detach().to(torch.int64).flatten() for t in target_state], dim=0)
+                has_both_classes = (
+                    all_targets.numel() >= 1
+                    and all_targets.unique().numel() >= 2
+                )
+                
+                if has_state and has_both_classes:
+                    self.log(f"{split}/{metric_name}", metric.compute(), sync_dist=True)
+
+            except Exception:
+                pass
+
             metric.reset()
 
     def on_validation_epoch_end(self):

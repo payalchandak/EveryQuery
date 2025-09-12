@@ -1,13 +1,17 @@
 from meds import DataSchema
 from dataset import EveryQueryPytorchDataset
 from meds_torchdata import MEDSTorchDataConfig
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, ListConfig
 import hydra, ipdb
 from model import EveryQueryModel
 from lightning_module import EveryQueryLightningModule
 from typing import Any
 from pathlib import Path
 import shutil
+import hashlib
+import polars as pl
+import os
+from meds import train_split, tuning_split, held_out_split
 import torch
 from hydra.utils import instantiate
 import logging 
@@ -80,12 +84,47 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
 
     return sorted_checkpoints[-1] if sorted_checkpoints else None
 
+def collate_tasks(cfg: DictConfig) -> None:
+
+    read_dir = f"{cfg.query.task_dir}/all/"
+
+    task_str = f"{"|".join(sorted(cfg.query.codes))}_{cfg.query.sample_times_per_subject}"
+    hash_hex = hashlib.md5(task_str.encode()).hexdigest()
+    write_dir = f"{cfg.query.task_dir}/collated/{hash_hex}/"
+    
+    if os.path.exists(write_dir):
+        logger.info(f"Tasks already collated at {hash_hex}. Skipping.")
+    else:
+        for split in [train_split, tuning_split, held_out_split]:
+            os.makedirs(f"{write_dir}/{split}", exist_ok=True)
+            for file_name in os.listdir(f"{read_dir}/{split}"):
+                shard = (
+                    pl.read_parquet(source=f"{read_dir}/{split}/{file_name}", columns=['subject_id', 'prediction_time', 'censored'] + cfg.query.codes)
+                    .unpivot(index=['subject_id', 'prediction_time', 'censored'], variable_name="query", value_name="occurs")
+                    .rename({'censored':'boolean_value'})
+                    .with_columns(pl.col('occurs').fill_null(False)) 
+                    .sample(fraction=1, shuffle=True)
+                    .group_by('subject_id')
+                    .head(cfg.query.sample_times_per_subject)
+                )
+                shard.write_parquet(f"{write_dir}/{split}/{file_name}")
+            logger.info(f"Tasks collated for {split} and written to {hash_hex}.")
+
+    return write_dir    
+
+
 @hydra.main(version_base="1.3", config_path='', config_name='config.yaml')
 def main(cfg: DictConfig) -> float | None:
 
     # keep the run tiny for testing
     cfg.trainer.max_steps = 3
     cfg.trainer.limit_val_batches = 1
+
+    if not isinstance(cfg.query.codes, ListConfig):
+        raise ValueError("query.codes must be a list")
+    
+    task_dir = collate_tasks(cfg)
+    cfg.datamodule.config.task_labels_dir = task_dir
 
     if cfg.do_overwrite and cfg.do_resume:
         logger.warning(
