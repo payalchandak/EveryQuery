@@ -1,77 +1,116 @@
-import ipdb, os
-import polars as pl 
-import time
+import os
+from typing import Dict, List
+from meds import train_split, tuning_split, held_out_split
+import polars as pl
 
-min_context_per_subject = 50
 
-read_dir = "/Users/payal/Desktop/EveryQuery/mimic/MEDS_intermediate"
-write_dir = "/Users/payal/Desktop/EveryQuery/mimic/MEDS_tasks/"
+def read_event_shard(file_path: str) -> pl.DataFrame:
+    """Read a single shard parquet file and return processed events.
 
-df = []
-for file in os.listdir(f"{read_dir}/data/train"):
-    df_shard = (
-        pl.read_parquet(f"{read_dir}/data/train/{file}")
-        .select(['subject_id','time','code'])
+    Returns DataFrame with columns: subject_id, time, code. Rows are unique and sorted by subject_id, time.
+    """
+    return (
+        pl.read_parquet(file_path)
+        .select(["subject_id", "time", "code"])
         .unique()
         .sort(["subject_id", "time"])
     )
-    df.append(df_shard)
-df = pl.concat(df) # subject, time, code
 
-duration = { "minutes": 0, "hours": 0, "days": 30, "weeks": 0 }
 
-'''
-functions, so you can parellize over shards
-'''
+def compute_censor_dataframe(
+    events_df: pl.DataFrame,
+    min_context_per_subject: int,
+    duration: Dict[str, int],
+) -> pl.DataFrame:
+    """Compute per-subject prediction times and whether they are censored.
 
-censor_df = (
-    df.with_columns(pl.col("time").cum_count().over("subject_id").alias("context_cumsum"))
-    .filter(pl.col("context_cumsum") >= min_context_per_subject) # we want at least min_context_per_subject context tokens)
-    .select(["subject_id","time"])
-    .unique()
-    .rename({"time": "prediction_time"})
-    .join(df.group_by(["subject_id"]).agg(pl.col("time").last().alias("record_end_time")), on="subject_id", how="left",)
-    .with_columns((pl.col("record_end_time") - pl.col("prediction_time")).alias("future_duration"))
-    .with_columns((pl.col("future_duration") < pl.duration(**duration)).alias("censored"))
-    .select(["subject_id","prediction_time","censored"])
-)
-
-code_metadata_df = pl.read_parquet(f"{read_dir}/metadata/codes.parquet")
-query_codes = code_metadata_df.select("code").unique().to_series().to_list() 
-
-censor_true = (
-    censor_df.filter(pl.col("censored") == True)
-    .with_columns([pl.lit(None).alias(query).cast(pl.Boolean) for query in query_codes])
-)
-
-censor_false = censor_df.filter(pl.col("censored") == False)
-censor_false_time = censor_false.drop("censored").with_row_index()
-censor_false_index = censor_false_time.select("index")
-censor_false_dfs = [censor_false]
-for query in query_codes:
-    censor_false_dfs.append(
-        censor_false_time.join(df.filter(pl.col("code") == query).drop("code",).rename({'time': f'{query}_time'}), on="subject_id", how="left")
-        .filter((pl.col(f"{query}_time") > pl.col("prediction_time")) & (pl.col(f"{query}_time") < (pl.col("prediction_time") + pl.duration(**duration))))
-        .select(["index"])
+    Censoring is defined as having less than <duration> of future data after prediction_time.
+    Retain at least min_context_per_subject context tokens (not times) before the first prediction_time.
+    """
+    return (
+        events_df.with_columns(pl.col("time").cum_count().over("subject_id").alias("context_cumsum"))
+        .filter(pl.col("context_cumsum") >= min_context_per_subject)
+        .select(["subject_id", "time"])  # candidate prediction times
         .unique()
-        .with_columns(pl.lit(True).alias(query))
-        .join(censor_false_index, on="index", how="right",)
-        .with_columns(pl.col(query).fill_null(False))
-        .select([query])
+        .rename({"time": "prediction_time"})
+        .join(
+            events_df.group_by(["subject_id"]).agg(pl.col("time").last().alias("record_end_time")),
+            on="subject_id",
+            how="left",
+        )
+        .with_columns((pl.col("record_end_time") - pl.col("prediction_time")).alias("future_duration"))
+        .with_columns((pl.col("future_duration") < pl.duration(**duration)).alias("censored"))
+        .select(["subject_id", "prediction_time", "censored"])
     )
-censor_false = pl.concat(censor_false_dfs, how='horizontal')
-assert sum(censor_false.null_count()).item() == 0
 
-task_df = pl.concat([censor_true, censor_false], how='vertical')
-task_df.write_parquet(f"/Users/payal/Desktop/EveryQuery/mimic/MEDS_all_tasks.parquet")
 
-query_codes = ["MEDS_DEATH","ED_OUT"]
-final = (
-    task_df.select(["subject_id","prediction_time","censored"] + query_codes)
-    .unpivot(index=['subject_id', 'prediction_time', 'censored'], variable_name="query", value_name="occurs")
-    .rename({'censored':'boolean_value'})
-    .with_columns(pl.col('occurs').fill_null(False)) 
-)
-# sample N times per subject 
-os.makedirs(write_dir, exist_ok=True)
-final.write_parquet(f"{write_dir}/task_df.parquet")
+def read_query_codes(read_dir: str) -> List[str]:
+    """Read the universe of possible query codes from metadata/codes.parquet."""
+    codes_df = pl.read_parquet(f"{read_dir}/metadata/codes.parquet")
+    return codes_df.select("code").unique().to_series().to_list()
+
+
+def build_task_label_matrix(
+    events_df: pl.DataFrame,
+    censor_df: pl.DataFrame,
+    query_codes: List[str],
+    duration: Dict[str, int],
+) -> pl.DataFrame:
+    """Create a wide task label matrix.
+
+    - For censored rows: label columns for each query are null (Boolean).
+    - For uncensored rows: label is True if the query event occurs within (prediction_time, prediction_time + duration), else False.
+    """
+    censor_true = censor_df.filter(pl.col("censored") == True)
+    censor_true_wide = censor_true.with_columns([pl.lit(None).alias(query).cast(pl.Boolean) for query in query_codes])
+
+    censor_false = censor_df.filter(pl.col("censored") == False)
+    censor_false_time = censor_false.drop("censored").with_row_index()
+    censor_false_index = censor_false_time.select("index")
+
+    pieces: List[pl.DataFrame] = [censor_false]
+    for query in query_codes:
+        pieces.append(
+            censor_false_time
+            .join(
+                events_df.filter(pl.col("code") == query).drop("code").rename({"time": f"{query}_time"}),
+                on="subject_id",
+                how="left",
+            )
+            .filter(
+                (pl.col(f"{query}_time") > pl.col("prediction_time"))
+              & (pl.col(f"{query}_time") < (pl.col("prediction_time") + pl.duration(**duration)))
+            )
+            .select(["index"])
+            .unique()
+            .with_columns(pl.lit(True).alias(query))
+            .join(censor_false_index, on="index", how="right")
+            .with_columns(pl.col(query).fill_null(False))
+            .select([query])
+        )
+
+    censor_false_wide = pl.concat(pieces, how="horizontal")
+    assert sum(censor_false_wide.null_count()).item() == 0 # Ensure no label nulls remain on uncensored rows
+
+    return pl.concat([censor_true_wide, censor_false_wide], how="vertical")
+
+if __name__ == "__main__":
+    
+    read_dir = "/Users/payal/Desktop/EveryQuery/mimic/MEDS_intermediate"
+    write_dir = "/Users/payal/Desktop/EveryQuery/mimic/MEDS_tasks/all/"
+    min_context_per_subject = 50
+    duration =  {"minutes": 0, "hours": 0, "days": 30, "weeks": 0}
+    
+    for split in [train_split, tuning_split, held_out_split]:
+        shard_directory = f"{read_dir}/data/{split}"
+        write_directory = f"{write_dir}/{split}"
+        os.makedirs(write_directory, exist_ok=True)
+        for file_name in os.listdir(shard_directory):
+            if not file_name.endswith(".parquet"):
+                continue   
+            events_df = read_event_shard(f"{shard_directory}/{file_name}")
+            censor_df = compute_censor_dataframe(events_df, min_context_per_subject, duration)
+            query_codes = read_query_codes(read_dir)
+            task_df = build_task_label_matrix(events_df, censor_df, query_codes, duration)
+            task_df.write_parquet(f"{write_directory}/{file_name}")
+
