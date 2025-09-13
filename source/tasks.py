@@ -2,7 +2,7 @@ import os
 from typing import Dict, List
 from meds import train_split, tuning_split, held_out_split
 import polars as pl
-
+from tqdm import tqdm
 from dotenv import load_dotenv; load_dotenv()
 
 def read_event_shard(file_path: str) -> pl.DataFrame:
@@ -70,7 +70,7 @@ def build_task_label_matrix(
     censor_false_index = censor_false_time.select("index")
 
     pieces: List[pl.DataFrame] = [censor_false]
-    for query in query_codes:
+    for query in tqdm(query_codes):
         pieces.append(
             censor_false_time
             .join(
