@@ -3,6 +3,7 @@ from typing import Dict, List
 from meds import train_split, tuning_split, held_out_split
 import polars as pl
 
+from dotenv import load_dotenv; load_dotenv()
 
 def read_event_shard(file_path: str) -> pl.DataFrame:
     """Read a single shard parquet file and return processed events.
