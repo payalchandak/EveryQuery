@@ -96,8 +96,8 @@ def build_task_label_matrix(
 
 if __name__ == "__main__":
     
-    read_dir = '/n/data1/hms/dbmi/zaklab/payal/mimic/MEDS_intermediate'
-    write_dir = '/n/data1/hms/dbmi/zaklab/payal/mimic/MEDS_tasks/all/'
+    read_dir = os.environ.get("INTERMEDIATE_DIR")
+    write_dir = f'{os.environ.get("TASK_DIR")}/all/'
     min_context_per_subject = 50
     duration =  {"minutes": 0, "hours": 0, "days": 30, "weeks": 0}
     
@@ -109,8 +109,12 @@ if __name__ == "__main__":
             if not file_name.endswith(".parquet"):
                 continue   
             events_df = read_event_shard(f"{shard_directory}/{file_name}")
+            print(f"Completed read_event_shard")
             censor_df = compute_censor_dataframe(events_df, min_context_per_subject, duration)
+            print(f"Completed compute_censor_dataframe")
             query_codes = read_query_codes(read_dir)
+            print(f"Completed read_query_codes")
             task_df = build_task_label_matrix(events_df, censor_df, query_codes, duration)
+            print(f"Completed build_task_label_matrix")
             task_df.write_parquet(f"{write_directory}/{file_name}")
 
