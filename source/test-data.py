@@ -86,29 +86,29 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
 
 def collate_tasks(cfg: DictConfig) -> None:
 
-    read_dir = f"{cfg.query.task_dir}/all/"
+    read_dir = f"{cfg.query.task_dir}/all"
 
     task_str = f"{"|".join(sorted(cfg.query.codes))}_{cfg.query.sample_times_per_subject}"
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
     write_dir = f"{cfg.query.task_dir}/collated/{hash_hex}/"
     
-    if os.path.exists(write_dir):
-        logger.info(f"Tasks already collated at {hash_hex}. Skipping.")
-    else:
-        for split in [train_split, tuning_split, held_out_split]:
-            os.makedirs(f"{write_dir}/{split}", exist_ok=True)
-            for file_name in os.listdir(f"{read_dir}/{split}"):
-                shard = (
-                    pl.read_parquet(source=f"{read_dir}/{split}/{file_name}", columns=['subject_id', 'prediction_time', 'censored'] + cfg.query.codes)
-                    .unpivot(index=['subject_id', 'prediction_time', 'censored'], variable_name="query", value_name="occurs")
-                    .rename({'censored':'boolean_value'})
-                    .with_columns(pl.col('occurs').fill_null(False)) 
-                    .sample(fraction=1, shuffle=True)
-                    .group_by('subject_id')
-                    .head(cfg.query.sample_times_per_subject)
-                )
-                shard.write_parquet(f"{write_dir}/{split}/{file_name}")
-            logger.info(f"Tasks collated for {split} and written to {hash_hex}.")
+    for split in [train_split, tuning_split, held_out_split]:
+        os.makedirs(f"{write_dir}/{split}", exist_ok=True)
+        for file_name in os.listdir(f"{read_dir}/{split}"):
+            f = f"{write_dir}/{split}/{file_name}"
+            if os.path.exists(f):
+                logger.info(f"Skipping shard. Already collated at {f}.")
+            shard = (
+                pl.read_parquet(source=f"{read_dir}/{split}/{file_name}", columns=['subject_id', 'prediction_time', 'censored'] + cfg.query.codes)
+                .unpivot(index=['subject_id', 'prediction_time', 'censored'], variable_name="query", value_name="occurs")
+                .rename({'censored':'boolean_value'})
+                .with_columns(pl.col('occurs').fill_null(False)) 
+                .sample(fraction=1, shuffle=True)
+                .group_by('subject_id')
+                .head(cfg.query.sample_times_per_subject)
+            )
+            shard.write_parquet(f)
+        logger.info(f"Tasks collated for {split} and written to {hash_hex}.")
 
     return write_dir    
 

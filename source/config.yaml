@@ -3,7 +3,7 @@ do_overwrite: false
 do_resume: false
 
 query:
-  task_dir: ${oc.env:DATA_DIR}/MEDS_tasks/
+  task_dir: ${oc.env:TASK_DIR}
   sample_times_per_subject: 1000
   codes:
     - MEDS_DEATH
