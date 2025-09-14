@@ -107,8 +107,12 @@ if __name__ == "__main__":
         write_directory = f"{write_dir}/{split}"
         os.makedirs(write_directory, exist_ok=True)
         for file_name in os.listdir(shard_directory):
+            f = f"{write_directory}/{file_name}"
             if not file_name.endswith(".parquet"):
                 continue   
+            if os.path.exists(f): 
+                print('Skipping {f}. Already exists.')
+                continue
             events_df = read_event_shard(f"{shard_directory}/{file_name}")
             print(f"Completed read_event_shard")
             censor_df = compute_censor_dataframe(events_df, min_context_per_subject, duration)
@@ -117,5 +121,5 @@ if __name__ == "__main__":
             print(f"Completed read_query_codes")
             task_df = build_task_label_matrix(events_df, censor_df, query_codes, duration)
             print(f"Completed build_task_label_matrix")
-            task_df.write_parquet(f"{write_directory}/{file_name}")
+            task_df.write_parquet(f)
 
