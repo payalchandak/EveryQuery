@@ -90,7 +90,7 @@ def collate_tasks(cfg: DictConfig) -> None:
 
     task_str = f"{"|".join(sorted(cfg.query.codes))}_{cfg.query.sample_times_per_subject}"
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
-    write_dir = f"{cfg.query.task_dir}/collated/{hash_hex}/"
+    write_dir = f"{cfg.query.task_dir}/collated/{hash_hex}"
     
     for split in [train_split, tuning_split, held_out_split]:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)
@@ -133,14 +133,12 @@ def main(cfg: DictConfig) -> float | None:
         )
 
     output_dir = Path(cfg.output_dir)
-
     if output_dir.is_file():
         raise NotADirectoryError(f"Output directory {output_dir} is a file, not a directory.")
+    os.makedirs(output_dir, exist_ok=True)
 
     cfg_path = output_dir / "config.yaml"
-
     ckpt_path = None
-
     if cfg_path.exists():
         if cfg.do_overwrite:
             logger.info(f"Overwriting existing output directory {output_dir}.")
