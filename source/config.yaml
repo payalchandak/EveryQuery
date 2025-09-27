@@ -1,13 +1,17 @@
 output_dir: ${oc.env:OUTPUT_DIR}/${hydra:run.dir}/
 do_overwrite: false
 do_resume: false
+seed: 140799 
 
 query:
   task_dir: ${oc.env:TASK_DIR}
-  sample_times_per_subject: 1000
+  sample_times_per_subject: 20 # epochs worth of data
   codes:
-    - MEDS_DEATH
-    - ED_OUT
+    - DIAGNOSIS//ICD//10//D509
+    - LAB//228309//UNK
+    - HOSPITAL_DISCHARGE//REHAB
+    - PROCEDURE//START//225459
+    - MEDICATION//STOP//Clonazepam
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
@@ -19,7 +23,7 @@ datamodule:
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
     max_seq_len: 10
-  batch_size: 3
+  batch_size: 512
   num_workers: 1
 
 lightning_module:
@@ -76,14 +80,14 @@ trainer:
   default_root_dir: ${output_dir}
   min_epochs: 1 # prevents early stopping
   max_epochs: null # We don't control the max epochs, we control the max steps.
-  max_steps: 200000
+  max_steps: 1000000
   accelerator: "auto"
   devices: "auto"
   accumulate_grad_batches: 1 # set to 1 for no gradient accumulation, >1 for gradient accumulation
   log_every_n_steps: 50
   # perform a validation loop every N training epochs
   check_val_every_n_epoch: 1
-  val_check_interval: 0.05 # validate 20 times per epoch
+  val_check_interval: 0.005 # validate 10 times per epoch
   limit_val_batches: 500 # use only up to N validation batches to speed up training
   # set True to to ensure deterministic results
   # makes training slower but gives more reproducibility than just setting seeds

@@ -103,7 +103,7 @@ def collate_tasks(cfg: DictConfig) -> None:
                 .unpivot(index=['subject_id', 'prediction_time', 'censored'], variable_name="query", value_name="occurs")
                 .rename({'censored':'boolean_value'})
                 .with_columns(pl.col('occurs').fill_null(False)) 
-                .sample(fraction=1, shuffle=True)
+                .sample(fraction=1, shuffle=True, seed=cfg.get("seed", 1))
                 .group_by('subject_id')
                 .head(cfg.query.sample_times_per_subject)
             )
@@ -115,10 +115,6 @@ def collate_tasks(cfg: DictConfig) -> None:
 
 @hydra.main(version_base="1.3", config_path='', config_name='config.yaml')
 def main(cfg: DictConfig) -> float | None:
-
-    # keep the run tiny for testing
-    cfg.trainer.max_steps = 3
-    cfg.trainer.limit_val_batches = 1
 
     if not isinstance(cfg.query.codes, ListConfig):
         raise ValueError("query.codes must be a list")
@@ -159,6 +155,7 @@ def main(cfg: DictConfig) -> float | None:
     torch.set_float32_matmul_precision("medium")
 
     D = instantiate(cfg.datamodule)
+    logger.info(f"Train dataloader contains {len(D.train_dataloader())} datapoints")
 
     M = hydra.utils.instantiate(cfg.lightning_module)
 
@@ -190,3 +187,5 @@ def main(cfg: DictConfig) -> float | None:
 
 if __name__ == "__main__":
     main()
+
+# set -a; . ./.env; set +a; python source/test-data.py
