@@ -188,4 +188,3 @@ def main(cfg: DictConfig) -> float | None:
 if __name__ == "__main__":
     main()
 
-# set -a; . ./.env; set +a; python source/test-data.py
