@@ -190,8 +190,10 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         out = super()._seeded_getitem(idx, seed)
 
         dynamic_data = out["dynamic"]
+        schema = dynamic_data.schema
+        schema['code'] = np.int16
         query_data = QueryData(code=[self.encode_query(self.query[idx])])
-        query_as_JNRT = query_data.to_JNRT(self.config.batch_mode, dynamic_data.schema)
+        query_as_JNRT = query_data.to_JNRT(self.config.batch_mode, schema)
         out["dynamic"] = JointNestedRaggedTensorDict.concatenate([query_as_JNRT, dynamic_data])
 
         if getattr(self, "has_occurs", False):
