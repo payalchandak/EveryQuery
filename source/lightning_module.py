@@ -128,16 +128,16 @@ class EveryQueryLightningModule(L.LightningModule):
         self.metrics = {
             train_split: {},
             tuning_split: {
-                "censor_auc": BinaryAUROC(),
-                "occurs_auc": BinaryAUROC(),
+                "censor_auc": BinaryAUROC().cpu(),
+                "occurs_auc": BinaryAUROC().cpu(),
             },
             held_out_split: {
-                "censor_auc": BinaryAUROC(),
-                "occurs_auc": BinaryAUROC(),
+                "censor_auc": BinaryAUROC().cpu(),
+                "occurs_auc": BinaryAUROC().cpu(),
             },
             "predict": {
-                "censor_auc": BinaryAUROC(),
-                "occurs_auc": BinaryAUROC(),
+                "censor_auc": BinaryAUROC().cpu(),
+                "occurs_auc": BinaryAUROC().cpu(),
             },
         }
 
@@ -149,11 +149,28 @@ class EveryQueryLightningModule(L.LightningModule):
             }
         )
 
+    def setup(self, stage=None):
+        # keep metrics on CPU even if model moves to GPU
+        for split in (tuning_split, held_out_split, "predict"):
+            for m in self.metrics.get(split, {}).values():
+                m.to("cpu")
+
+
     def _update_metric(self, name: str, split: str, **kwargs):
         metric = self.metrics.get(split, {}).get(name)
         if metric is None:
             return
-        metric.update(**kwargs)
+        safe = {}
+        for k, v in kwargs.items():
+            if isinstance(v, torch.Tensor):
+                v = v.detach().cpu()
+                if k == "preds":
+                    v = v.float()
+                elif k == "target":
+                    v = v.long()
+            safe[k] = v
+        metric.update(**safe)
+
 
     def _on_epoch_end(self, split: str):
         for metric_name, metric in self.metrics.get(split, {}).items():
@@ -167,14 +184,14 @@ class EveryQueryLightningModule(L.LightningModule):
                     and len(target_state) > 0
                 )
 
-                all_targets = torch.cat([t.detach().to(torch.int64).flatten() for t in target_state], dim=0)
+                all_targets = torch.cat([t.flatten() for t in target_state], dim=0)
                 has_both_classes = (
                     all_targets.numel() >= 1
                     and all_targets.unique().numel() >= 2
                 )
                 
                 if has_state and has_both_classes:
-                    self.log(f"{split}/{metric_name}", metric.compute(), sync_dist=True)
+                    self.log(f"{split}/{metric_name}", float(metric.compute()), sync_dist=True)
 
             except Exception:
                 pass
@@ -202,24 +219,24 @@ class EveryQueryLightningModule(L.LightningModule):
         is_train = split == train_split
         sync_dist = not is_train and torch.distributed.is_available() and torch.distributed.is_initialized()
 
-        self.log(f"{split}/loss", loss, on_step=is_train, on_epoch=True, prog_bar=True, batch_size=batch_size, sync_dist=sync_dist)
+        self.log(f"{split}/loss", loss.item(), on_step=is_train, on_epoch=True, prog_bar=True, batch_size=batch_size, sync_dist=sync_dist)
         if getattr(outputs, "censor_loss", None) is not None:
-            self.log(f"{split}/censor_loss", outputs.censor_loss, on_step=is_train, on_epoch=not is_train, batch_size=batch_size, sync_dist=sync_dist)
+            self.log(f"{split}/censor_loss", float(outputs.censor_loss.detach().cpu()), on_step=is_train, on_epoch=not is_train, batch_size=batch_size, sync_dist=sync_dist)
         if getattr(outputs, "occurs_loss", None) is not None:
-            self.log(f"{split}/occurs_loss", outputs.occurs_loss, on_step=is_train, on_epoch=not is_train, batch_size=batch_size, sync_dist=sync_dist)
+            self.log(f"{split}/occurs_loss", float(outputs.occurs_loss.detach().cpu()), on_step=is_train, on_epoch=not is_train, batch_size=batch_size, sync_dist=sync_dist)
 
         if not is_train:
             if getattr(outputs, "censor_logits", None) is not None and getattr(batch, "censor", None) is not None:
                 self._update_metric(
                     name="censor_auc",
                     split=split,
-                    preds=outputs.censor_logits.squeeze(1).sigmoid(),
-                    target=batch.censor.long(),
+                    preds=outputs.censor_logits.detach().cpu().squeeze(1).sigmoid().float(),
+                    target=batch.censor.detach().cpu().long(),
                 )
             if getattr(outputs, "occurs_logits", None) is not None and getattr(batch, "occurs", None) is not None:
-                mask = ~batch.censor if hasattr(batch, "censor") else None
-                preds = outputs.occurs_logits.squeeze(1).sigmoid()
-                target = batch.occurs.long()
+                mask = (~batch.censor).detach().cpu().bool() if hasattr(batch, "censor") else None
+                preds = outputs.occurs_logits.detach().cpu().squeeze(1).sigmoid().float()
+                target = batch.occurs.detach().cpu().long()
                 if mask is not None:
                     preds = preds[mask]
                     target = target[mask]
@@ -231,16 +248,19 @@ class EveryQueryLightningModule(L.LightningModule):
         self._log_metrics(loss, outputs, batch, train_split)
         return loss
 
+    @torch.no_grad()
     def validation_step(self, batch: EveryQueryBatch) -> torch.Tensor:
         loss, outputs = self.model(batch)
         self._log_metrics(loss, outputs, batch, tuning_split)
         return loss
 
+    @torch.no_grad()
     def test_step(self, batch: EveryQueryBatch) -> torch.Tensor:
         loss, outputs = self.model(batch)
         self._log_metrics(loss, outputs, batch, held_out_split)
         return loss
 
+    @torch.no_grad()
     def predict_step(self, batch: EveryQueryBatch) -> EveryQueryOutput:
         _, outputs = self.model(batch)
         return outputs
