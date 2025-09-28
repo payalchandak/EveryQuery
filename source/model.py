@@ -223,8 +223,15 @@ class EveryQueryModel(torch.nn.Module):
                     "Flash Attention 2.0 is only supported for precision '16-true', 'bf16-true', "
                     f"'transformer-engine', '16-mixed' and 'bf16-mixed'. Using {precision} may cause errors."
                 )
+        
+        self.HF_model_config.output_hidden_states = False
+        self.HF_model_config.output_attentions = False
+        self.HF_model_config.use_cache = False
 
         self.HF_model = ModernBertModel._from_config(self.HF_model_config, **extra_kwargs)
+        if hasattr(self.HF_model, "gradient_checkpointing_enable"):
+            self.HF_model.gradient_checkpointing_enable()
+
         self.censor_mlp = MLP(layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout)
         self.occurs_mlp = MLP(layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout)
         self.criterion = torch.nn.BCEWithLogitsLoss()
@@ -419,15 +426,15 @@ class EveryQueryModel(torch.nn.Module):
         loss = censor_loss + occurs_loss
         
         outputs = EveryQueryOutput(
-            last_hidden_state=outputs.last_hidden_state,
-            hidden_states=getattr(outputs, "hidden_states", None),
-            attentions=getattr(outputs, "attentions", None),
+            last_hidden_state=outputs.last_hidden_state if self.do_demo else None,
+            hidden_states=outputs.hidden_states if self.do_demo else None,
+            attentions=outputs.attentions if self.do_demo else None,
             query_embed=query_embed,
             censor_logits=censor_logits,
             censor_loss=censor_loss,
             occurs_logits=occurs_logits,
             occurs_loss=occurs_loss,
         )
-
+        
         return loss, outputs
 

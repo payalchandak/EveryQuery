@@ -155,7 +155,7 @@ def main(cfg: DictConfig) -> float | None:
     torch.set_float32_matmul_precision("medium")
 
     D = instantiate(cfg.datamodule)
-    logger.info(f"Train dataloader contains {len(D.train_dataloader())} datapoints")
+    logger.info(f"Train dataset contains {len(D.train_dataloader().dataset)} datapoints")
 
     M = hydra.utils.instantiate(cfg.lightning_module)
 
