@@ -51,10 +51,6 @@ class MLP(torch.nn.Module):
     def forward(self, x):
         return self.model(x)
     
-    def append(self, module): 
-        self.model = self.model.append(module)
-        return self 
-
 
 @dataclass
 class EveryQueryOutput(BaseModelOutput):
@@ -189,6 +185,7 @@ class EveryQueryModel(torch.nn.Module):
     HF_model_config: ModernBertConfig
     HF_model: ModernBertModel
     do_demo: bool
+    do_grad_ckpt: bool
     precision: str
 
     PRECISION_TO_MODEL_WEIGHTS_DTYPE: ClassVar[dict[str, torch.dtype]] = {
@@ -200,7 +197,7 @@ class EveryQueryModel(torch.nn.Module):
         "transformer-engine": torch.bfloat16,
     }
 
-    def __init__(self, precision: str = "32-true", do_demo: bool = False):
+    def __init__(self, precision: str = "32-true", do_demo: bool = False, do_grad_ckpt: bool = False):
         super().__init__()
 
         self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained("answerdotai/ModernBERT-base")
@@ -230,6 +227,7 @@ class EveryQueryModel(torch.nn.Module):
 
         self.HF_model = ModernBertModel._from_config(self.HF_model_config, **extra_kwargs)
         
+        self.do_grad_ckpt = do_grad_ckpt
         if self.do_grad_ckpt and hasattr(self.HF_model, "gradient_checkpointing_enable"):
             self.HF_model.gradient_checkpointing_enable()
             # https://huggingface.co/docs/transformers/v4.20.1/en/perf_train_gpu_one
