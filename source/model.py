@@ -203,7 +203,7 @@ class EveryQueryModel(torch.nn.Module):
     def __init__(self, precision: str = "32-true", do_demo: bool = False):
         super().__init__()
 
-        self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained("answerdotai/ModernBERT-large")
+        self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained("answerdotai/ModernBERT-base")
 
         extra_kwargs = {"torch_dtype": self.PRECISION_TO_MODEL_WEIGHTS_DTYPE.get(precision)}
 
@@ -229,8 +229,10 @@ class EveryQueryModel(torch.nn.Module):
         self.HF_model_config.use_cache = False
 
         self.HF_model = ModernBertModel._from_config(self.HF_model_config, **extra_kwargs)
-        if hasattr(self.HF_model, "gradient_checkpointing_enable"):
+        
+        if self.do_grad_ckpt and hasattr(self.HF_model, "gradient_checkpointing_enable"):
             self.HF_model.gradient_checkpointing_enable()
+            # https://huggingface.co/docs/transformers/v4.20.1/en/perf_train_gpu_one
 
         self.censor_mlp = MLP(layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout)
         self.occurs_mlp = MLP(layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout)

@@ -18,16 +18,18 @@ datamodule:
     task_labels_dir: ???
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
-    max_seq_len: 512
-  batch_size: 256
+    max_seq_len: 256
+  batch_size: 160
   num_workers: 1
+  pin_memory: True  
 
 lightning_module:
   _target_: lightning_module.EveryQueryLightningModule
   model:
     _target_: model.EveryQueryModel
-    precision: "32-true"
+    precision: "16-mixed"
     do_demo: false
+    do_grad_ckpt: false
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true
@@ -83,8 +85,8 @@ trainer:
   log_every_n_steps: 50
   # perform a validation loop every N training epochs
   check_val_every_n_epoch: 1
-  val_check_interval: 0.005 # validate 10 times per epoch
-  limit_val_batches: 500 # use only up to N validation batches to speed up training
+  val_check_interval: 0.05 # validate 10 times per epoch
+  limit_val_batches: 100 # use only up to N validation batches to speed up training
   # set True to to ensure deterministic results
   # makes training slower but gives more reproducibility than just setting seeds
   deterministic: False
