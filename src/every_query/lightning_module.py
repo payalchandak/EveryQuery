@@ -1,20 +1,22 @@
-from torchmetrics.classification import BinaryAUROC
-import hydra
-import lightning as L
 import copy
 import logging
 import re
 from collections.abc import Callable, Iterator
 from functools import partial
 from typing import Any, Literal
-from meds import held_out_split, train_split, tuning_split
 
+import hydra
+import lightning as L
 import torch
 import torch.nn.parameter
-from model import EveryQueryModel, EveryQueryOutput
-from dataset import EveryQueryBatch
+from meds import held_out_split, train_split, tuning_split
+from torchmetrics.classification import BinaryAUROC
+
+from .dataset import EveryQueryBatch
+from .model import EveryQueryModel, EveryQueryOutput
 
 logger = logging.getLogger(__name__)
+
 
 def _factory_to_dict(factory: partial | None) -> dict[str, Any] | None:
     """Extracts a sufficient dictionary for reconstructing the optimizer or LR scheduler.
@@ -155,7 +157,6 @@ class EveryQueryLightningModule(L.LightningModule):
             for m in self.metrics.get(split, {}).values():
                 m.to("cpu")
 
-
     def _update_metric(self, name: str, split: str, **kwargs):
         metric = self.metrics.get(split, {}).get(name)
         if metric is None:
@@ -171,7 +172,6 @@ class EveryQueryLightningModule(L.LightningModule):
             safe[k] = v
         metric.update(**safe)
 
-
     def _on_epoch_end(self, split: str):
         for metric_name, metric in self.metrics.get(split, {}).items():
             try:
@@ -185,11 +185,8 @@ class EveryQueryLightningModule(L.LightningModule):
                 )
 
                 all_targets = torch.cat([t.flatten() for t in target_state], dim=0)
-                has_both_classes = (
-                    all_targets.numel() >= 1
-                    and all_targets.unique().numel() >= 2
-                )
-                
+                has_both_classes = all_targets.numel() >= 1 and all_targets.unique().numel() >= 2
+
                 if has_state and has_both_classes:
                     self.log(f"{split}/{metric_name}", float(metric.compute()), sync_dist=True)
 
@@ -214,26 +211,53 @@ class EveryQueryLightningModule(L.LightningModule):
         batch: EveryQueryBatch,
         split: Literal[train_split, tuning_split, held_out_split],
     ):
-    
         batch_size = batch.batch_size
         is_train = split == train_split
         sync_dist = not is_train and torch.distributed.is_available() and torch.distributed.is_initialized()
 
-        self.log(f"{split}/loss", loss.item(), on_step=is_train, on_epoch=True, prog_bar=True, batch_size=batch_size, sync_dist=sync_dist)
+        self.log(
+            f"{split}/loss",
+            loss.item(),
+            on_step=is_train,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=batch_size,
+            sync_dist=sync_dist,
+        )
         if getattr(outputs, "censor_loss", None) is not None:
-            self.log(f"{split}/censor_loss", float(outputs.censor_loss.detach().cpu()), on_step=is_train, on_epoch=not is_train, batch_size=batch_size, sync_dist=sync_dist)
+            self.log(
+                f"{split}/censor_loss",
+                float(outputs.censor_loss.detach().cpu()),
+                on_step=is_train,
+                on_epoch=not is_train,
+                batch_size=batch_size,
+                sync_dist=sync_dist,
+            )
         if getattr(outputs, "occurs_loss", None) is not None:
-            self.log(f"{split}/occurs_loss", float(outputs.occurs_loss.detach().cpu()), on_step=is_train, on_epoch=not is_train, batch_size=batch_size, sync_dist=sync_dist)
+            self.log(
+                f"{split}/occurs_loss",
+                float(outputs.occurs_loss.detach().cpu()),
+                on_step=is_train,
+                on_epoch=not is_train,
+                batch_size=batch_size,
+                sync_dist=sync_dist,
+            )
 
         if not is_train:
-            if getattr(outputs, "censor_logits", None) is not None and getattr(batch, "censor", None) is not None:
+            if (
+                getattr(outputs, "censor_logits", None) is not None
+                and getattr(batch, "censor", None) is not None
+            ):
                 self._update_metric(
                     name="censor_auc",
                     split=split,
                     preds=outputs.censor_logits.detach().cpu().squeeze(1).sigmoid().float(),
                     target=batch.censor.detach().cpu().long(),
                 )
-            if getattr(outputs, "occurs_logits", None) is not None and getattr(batch, "occurs", None) is not None:
+            if (
+                getattr(outputs, "occurs_logits", None) is not None
+                and getattr(batch, "occurs", None) is not None
+            ):
                 mask = (~batch.censor).detach().cpu().bool() if hasattr(batch, "censor") else None
                 preds = outputs.occurs_logits.detach().cpu().squeeze(1).sigmoid().float()
                 target = batch.occurs.detach().cpu().long()
@@ -286,7 +310,9 @@ class EveryQueryLightningModule(L.LightningModule):
         return _factory_to_dict(self.optimizer_factory).get("weight_decay", None)
 
     @property
-    def optimizer_no_decay_factory(self) -> Callable[[Iterator[torch.nn.parameter.Parameter]], torch.optim.Optimizer]:
+    def optimizer_no_decay_factory(
+        self,
+    ) -> Callable[[Iterator[torch.nn.parameter.Parameter]], torch.optim.Optimizer]:
         new_factory = copy.deepcopy(self.optimizer_factory)
         if new_factory is None:
             raise ValueError("Optimizer factory is not set. Cannot configure optimizers.")
@@ -341,7 +367,11 @@ class EveryQueryLightningModule(L.LightningModule):
             if k not in hparams:
                 raise KeyError(f"Checkpoint does not contain {k} hyperparameters. Got {list(hparams.keys())}")
 
-        model = EveryQueryModel(**hparams["model"]) if isinstance(hparams.get("model"), dict) else EveryQueryModel()
+        model = (
+            EveryQueryModel(**hparams["model"])
+            if isinstance(hparams.get("model"), dict)
+            else EveryQueryModel()
+        )
         optimizer = _dict_to_factory(hparams["optimizer"])  # type: ignore[arg-type]
         LR_scheduler = _dict_to_factory(hparams["LR_scheduler"])  # type: ignore[arg-type]
 
@@ -351,4 +381,3 @@ class EveryQueryLightningModule(L.LightningModule):
             optimizer=optimizer,
             LR_scheduler=LR_scheduler,
         )
-

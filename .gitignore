@@ -4,7 +4,7 @@ mgb_ecg_pt/
 mgb/
 mimic/
 results/
-meds-torch/ 
+meds-torch/
 data-test/
 figures/
 logs/*

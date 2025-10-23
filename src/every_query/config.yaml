@@ -1,7 +1,7 @@
 output_dir: ${oc.env:OUTPUT_DIR}/${hydra:run.dir}/
 do_overwrite: false
 do_resume: false
-seed: 140799 
+seed: 140799
 
 query:
   task_dir: ${oc.env:TASK_DIR}
@@ -12,7 +12,7 @@ query:
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
   data_class: dataset.EveryQueryPytorchDataset
-  config: 
+  config:
     _target_: meds_torchdata.MEDSTorchDataConfig
     tensorized_cohort_dir: ${oc.env:FINAL_DATA_DIR}
     task_labels_dir: ???
@@ -21,7 +21,7 @@ datamodule:
     max_seq_len: 256
   batch_size: 160
   num_workers: 1
-  pin_memory: True  
+  pin_memory: True
 
 lightning_module:
   _target_: lightning_module.EveryQueryLightningModule
@@ -60,7 +60,7 @@ trainer:
     project: EveryQuery
     log_model: False # upload lightning ckpts
     prefix: "" # a string to put at the beginning of metric keys
-    entity: "payalchandak" 
+    entity: "payalchandak"
   callbacks:
     _target_: __main__.values_as_list
     learning_rate_monitor:
@@ -69,12 +69,12 @@ trainer:
       _target_: lightning.pytorch.callbacks.ModelCheckpoint
       dirpath: ${trainer.default_root_dir}/checkpoints
       monitor: "tuning/loss"
-      verbose: False 
+      verbose: False
       save_last: True # additionally always save an exact copy of the last checkpoint to a file last.ckpt
       save_top_k: 5 # save k best models (determined by above metric)
       mode: "min"
       save_weights_only: False
-      every_n_train_steps: 1000 
+      every_n_train_steps: 1000
   default_root_dir: ${output_dir}
   min_epochs: 1 # prevents early stopping
   max_epochs: null # We don't control the max epochs, we control the max steps.

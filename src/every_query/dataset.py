@@ -1,19 +1,17 @@
 import logging
 from dataclasses import dataclass
-from typing import ClassVar, NamedTuple
-from functools import cached_property
 from pathlib import Path
+from typing import ClassVar, NamedTuple
 
 import numpy as np
 import polars as pl
 import pyarrow.parquet as pq
 import torch
 from meds import DataSchema, LabelSchema
-from nested_ragged_tensors.ragged_numpy import JointNestedRaggedTensorDict
-
 from meds_torchdata import MEDSPytorchDataset
-from meds_torchdata.config import MEDSTorchDataConfig, StaticInclusionMode
-from meds_torchdata.types import BatchMode, MEDSTorchBatch, StaticData, SubsequenceSamplingStrategy
+from meds_torchdata.config import MEDSTorchDataConfig
+from meds_torchdata.types import BatchMode, MEDSTorchBatch
+from nested_ragged_tensors.ragged_numpy import JointNestedRaggedTensorDict
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +85,8 @@ class QueryData(NamedTuple):
 
         return JointNestedRaggedTensorDict(query_dict, schema=schema)
 
-class EveryQueryPytorchDataset(MEDSPytorchDataset):
 
+class EveryQueryPytorchDataset(MEDSPytorchDataset):
     @classmethod
     def get_task_seq_bounds_and_labels(cls, label_df: pl.DataFrame, schema_df: pl.DataFrame) -> pl.DataFrame:
         """Returns the event-level allowed input sequence boundaries and labels for each task sample.
@@ -148,18 +146,21 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         self.query = self.schema_df["query"] if self.has_query else None
         # Load code vocabulary mapping (string code -> integer vocab index) for encoding queries
         try:
-            code_meta = pl.read_parquet(self.config.code_metadata_fp, columns=["code", "code/vocab_index"], use_pyarrow=True)
+            code_meta = pl.read_parquet(
+                self.config.code_metadata_fp, columns=["code", "code/vocab_index"], use_pyarrow=True
+            )
             codes = code_meta["code"].to_list()
             vocab_indices = code_meta["code/vocab_index"].to_list()
-            self.code_to_index: dict[str, int] = {c: int(i) for c, i in zip(codes, vocab_indices, strict=False)}
+            self.code_to_index: dict[str, int] = {
+                c: int(i) for c, i in zip(codes, vocab_indices, strict=False)
+            }
         except Exception as e:
             logger.warning(f"Failed to load code metadata for query encoding: {e}")
             self.code_to_index = {}
 
     @property
     def labels_df(self) -> pl.DataFrame:
-        """Returns the task labels as a DataFrame, in the MEDS Label schema, or `None` if there is no task.
-        """
+        """Returns the task labels as a DataFrame, in the MEDS Label schema, or `None` if there is no task."""
         if not self.has_task_index:
             return None
 
@@ -178,20 +179,18 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         return pl.concat([read_df(fp) for fp in self.config.task_labels_fps], how="vertical")
 
     def encode_query(self, code_name: str) -> int:
-        """Encode query using the canonical code vocabulary mapping
-        """
+        """Encode query using the canonical code vocabulary mapping."""
         try:
             return int(self.code_to_index.get(code_name, EveryQueryBatch.PAD_INDEX))
         except Exception:
             return EveryQueryBatch.PAD_INDEX
 
     def _seeded_getitem(self, idx: int, seed: int | None = None) -> dict[str, torch.Tensor]:
-        
         out = super()._seeded_getitem(idx, seed)
 
         dynamic_data = out["dynamic"]
         schema = dynamic_data.schema
-        schema['code'] = np.int16
+        schema["code"] = np.int16
         query_data = QueryData(code=[self.encode_query(self.query[idx])])
         query_as_JNRT = query_data.to_JNRT(self.config.batch_mode, schema)
         out["dynamic"] = JointNestedRaggedTensorDict.concatenate([query_as_JNRT, dynamic_data])
@@ -204,7 +203,7 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         return out
 
     def collate(self, batch: list[dict]) -> EveryQueryBatch:
-        out = dict(super().collate(batch).items()) # out is MEDSTorchBatch
+        out = dict(super().collate(batch).items())  # out is MEDSTorchBatch
         if self.has_task_labels:
             out["censor"] = out[self.LABEL_COL]
         if getattr(self, "has_occurs", False):

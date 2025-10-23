@@ -1,14 +1,13 @@
 import logging
 import textwrap
-from typing import ClassVar
 from dataclasses import dataclass
+from typing import ClassVar
 
 import torch
-import torch.nn.functional as F
-from omegaconf import DictConfig, OmegaConf
 from transformers import AutoConfig, ModernBertConfig, ModernBertModel
 from transformers.modeling_outputs import BaseModelOutput
-from dataset import EveryQueryBatch
+
+from .dataset import EveryQueryBatch
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +22,7 @@ except ImportError:
 
 BRANCH = "│ "
 
+
 def _val(tensor: torch.Tensor) -> int | bool | float:
     """Returns the value of a scalar-tensor as a Python scalar.
 
@@ -36,21 +36,22 @@ def _val(tensor: torch.Tensor) -> int | bool | float:
     """
     return tensor.detach().cpu().item()
 
+
 class MLP(torch.nn.Module):
     def __init__(self, layers, dropout_prob):
         super().__init__()
         modules = []
-        for i in range(len(layers)-1):
-            modules.append(torch.nn.Linear(layers[i], layers[i+1])) 
-            modules.append(torch.nn.ReLU()) 
+        for i in range(len(layers) - 1):
+            modules.append(torch.nn.Linear(layers[i], layers[i + 1]))
+            modules.append(torch.nn.ReLU())
             if i < len(layers) - 2:
                 modules.append(torch.nn.Dropout(dropout_prob))
-        modules.pop(-1) # we don't want an activation after the final layer
-        self.model = torch.nn.Sequential(*modules) 
+        modules.pop(-1)  # we don't want an activation after the final layer
+        self.model = torch.nn.Sequential(*modules)
 
     def forward(self, x):
         return self.model(x)
-    
+
 
 @dataclass
 class EveryQueryOutput(BaseModelOutput):
@@ -92,7 +93,7 @@ class EveryQueryOutput(BaseModelOutput):
             try:
                 num_layers = len(self.hidden_states)
                 example_shape = tuple(self.hidden_states[0].shape)
-                shape_lines.append(f"{BRANCH}Hidden states: {num_layers} layers × {example_shape}")
+                shape_lines.append(f"{BRANCH}Hidden states: {num_layers} layers by {example_shape}")
             except Exception:
                 shape_lines.append(f"{BRANCH}Hidden states: {type(self.hidden_states)}")
 
@@ -100,7 +101,7 @@ class EveryQueryOutput(BaseModelOutput):
             try:
                 num_layers = len(self.attentions)
                 example_shape = tuple(self.attentions[0].shape)
-                shape_lines.append(f"{BRANCH}Attentions: {num_layers} layers × {example_shape}")
+                shape_lines.append(f"{BRANCH}Attentions: {num_layers} layers by {example_shape}")
             except Exception:
                 shape_lines.append(f"{BRANCH}Attentions: {type(self.attentions)}")
 
@@ -139,25 +140,34 @@ class EveryQueryOutput(BaseModelOutput):
         """Generates the lines for the data block."""
         data_lines: list[str] = ["Data:"]
 
-        core = self.__str_tensor_list("Core", [
-            "last_hidden_state",
-            "query_embed",
-        ])
+        core = self.__str_tensor_list(
+            "Core",
+            [
+                "last_hidden_state",
+                "query_embed",
+            ],
+        )
         if len(core) > 1:
             data_lines.extend([f"{BRANCH}{line}" for line in core])
 
-        heads = self.__str_tensor_list("Heads", [
-            "censor_logits",
-            "occurs_logits",
-        ])
+        heads = self.__str_tensor_list(
+            "Heads",
+            [
+                "censor_logits",
+                "occurs_logits",
+            ],
+        )
         if len(heads) > 1:
             data_lines.append(BRANCH)
             data_lines.extend([f"{BRANCH}{line}" for line in heads])
 
-        losses = self.__str_tensor_list("Losses", [
-            "censor_loss",
-            "occurs_loss",
-        ])
+        losses = self.__str_tensor_list(
+            "Losses",
+            [
+                "censor_loss",
+                "occurs_loss",
+            ],
+        )
         if len(losses) > 1:
             data_lines.append(BRANCH)
             data_lines.extend([f"{BRANCH}{line}" for line in losses])
@@ -180,8 +190,8 @@ class EveryQueryOutput(BaseModelOutput):
         lines = [line.rstrip() for line in lines]
         return "\n".join(lines)
 
-class EveryQueryModel(torch.nn.Module):
 
+class EveryQueryModel(torch.nn.Module):
     HF_model_config: ModernBertConfig
     HF_model: ModernBertModel
     do_demo: bool
@@ -220,20 +230,24 @@ class EveryQueryModel(torch.nn.Module):
                     "Flash Attention 2.0 is only supported for precision '16-true', 'bf16-true', "
                     f"'transformer-engine', '16-mixed' and 'bf16-mixed'. Using {precision} may cause errors."
                 )
-        
+
         self.HF_model_config.output_hidden_states = False
         self.HF_model_config.output_attentions = False
         self.HF_model_config.use_cache = False
 
         self.HF_model = ModernBertModel._from_config(self.HF_model_config, **extra_kwargs)
-        
+
         self.do_grad_ckpt = do_grad_ckpt
         if self.do_grad_ckpt and hasattr(self.HF_model, "gradient_checkpointing_enable"):
             self.HF_model.gradient_checkpointing_enable()
             # https://huggingface.co/docs/transformers/v4.20.1/en/perf_train_gpu_one
 
-        self.censor_mlp = MLP(layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout)
-        self.occurs_mlp = MLP(layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout)
+        self.censor_mlp = MLP(
+            layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout
+        )
+        self.occurs_mlp = MLP(
+            layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout
+        )
         self.criterion = torch.nn.BCEWithLogitsLoss()
 
         self.do_demo = do_demo
@@ -284,7 +298,7 @@ class EveryQueryModel(torch.nn.Module):
         if batch.mode != "SM":
             raise ValueError(f"Batch mode {batch.mode} is not supported.")
 
-        batch_size, seq_len = code.shape
+        _batch_size, seq_len = code.shape
 
         if seq_len > self.max_seq_len:
             raise ValueError(
@@ -326,8 +340,6 @@ class EveryQueryModel(torch.nn.Module):
         Validity checks:
             - The parameters are not nan.
             - The parameters are not inf.
-
-        
         """
 
         for n, p in self.named_parameters():
@@ -351,8 +363,6 @@ class EveryQueryModel(torch.nn.Module):
 
         Args:
             loss: The loss tensor.
-
-        
         """
 
         if _val(torch.isinf(loss).any()):
@@ -385,8 +395,6 @@ class EveryQueryModel(torch.nn.Module):
 
         Returns:
             A dictionary of inputs for the Hugging Face model.
-
-        
         """
         return {
             "input_ids": batch.code,
@@ -413,8 +421,8 @@ class EveryQueryModel(torch.nn.Module):
 
     def _forward(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         outputs = self.HF_model(**self._hf_inputs(batch))
-        embeddings = outputs.last_hidden_state # (batch_size, seq_len + query_len, hidden_size)
-        query_embed = embeddings[:, 0, :] # 0 is query_index (batch_size, hidden_size)
+        embeddings = outputs.last_hidden_state  # (batch_size, seq_len + query_len, hidden_size)
+        query_embed = embeddings[:, 0, :]  # 0 is query_index (batch_size, hidden_size)
 
         censor_logits = self.censor_mlp(query_embed)
         censor_loss = self._get_loss(censor_logits, batch.censor, mask=None)
@@ -422,9 +430,9 @@ class EveryQueryModel(torch.nn.Module):
         # if future is censored then don't apply loss on whether query occurs
         occurs_logits = self.occurs_mlp(query_embed)
         occurs_loss = self._get_loss(occurs_logits, batch.occurs, mask=~batch.censor)
-        
+
         loss = censor_loss + occurs_loss
-        
+
         outputs = EveryQueryOutput(
             last_hidden_state=outputs.last_hidden_state if self.do_demo else None,
             hidden_states=outputs.hidden_states if self.do_demo else None,
@@ -435,6 +443,5 @@ class EveryQueryModel(torch.nn.Module):
             occurs_logits=occurs_logits,
             occurs_loss=occurs_loss,
         )
-        
-        return loss, outputs
 
+        return loss, outputs

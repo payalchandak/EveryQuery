@@ -1,26 +1,24 @@
-from meds import DataSchema
-from dataset import EveryQueryPytorchDataset
-from meds_torchdata import MEDSTorchDataConfig
-from omegaconf import DictConfig, OmegaConf, ListConfig
-import hydra, ipdb
-from model import EveryQueryModel
-from lightning_module import EveryQueryLightningModule
-from typing import Any
-from pathlib import Path
-import shutil
 import hashlib
-import polars as pl
+import logging
 import os
-from meds import train_split, tuning_split, held_out_split
+import shutil
+from pathlib import Path
+from typing import Any
+
+import hydra
+import polars as pl
 import torch
 from hydra.utils import instantiate
-import logging 
 from lightning.pytorch import seed_everything
+from meds import held_out_split, train_split, tuning_split
+from omegaconf import DictConfig, ListConfig, OmegaConf
 
 logger = logging.getLogger(__name__)
 
+
 def values_as_list(**kwargs) -> list[Any]:
     return list(kwargs.values())
+
 
 def save_resolved_config(cfg: DictConfig, fp: Path) -> bool:
     try:
@@ -32,33 +30,8 @@ def save_resolved_config(cfg: DictConfig, fp: Path) -> bool:
         logger.warning(f"Could not save resolved config: {e}")
         return False
 
-def validate_resume_directory(output_dir: Path, cfg: DictConfig):
-
-    old_cfg_fp = output_dir / "config.yaml"
-    if not old_cfg_fp.is_file():
-        raise FileNotFoundError(f"Configuration file {old_cfg_fp} does not exist in the output directory.")
-
-    old_cfg = OmegaConf.load(old_cfg_fp)
-
-    old_cfg = OmegaConf.to_container(old_cfg, resolve=True)
-    new_cfg = OmegaConf.to_container(cfg, resolve=True)
-
-    differences = diff_configs(new_cfg, old_cfg)
-
-    err_lines = []
-    for key, diff in differences.items():
-        if key in ALLOWED_DIFFERENCE_KEYS:
-            continue
-        err_lines.append(f"  - key '{key}' {diff}")
-
-    if err_lines:
-        err_lines_str = "\n".join(err_lines)
-        raise ValueError(
-            f"The configuration in the output directory does not match the input:\n{err_lines_str}"
-        )
 
 def find_checkpoint_path(output_dir: Path) -> Path | None:
-
     checkpoints_dir = output_dir / "checkpoints"
 
     if checkpoints_dir.is_file():
@@ -84,14 +57,14 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
 
     return sorted_checkpoints[-1] if sorted_checkpoints else None
 
-def collate_tasks(cfg: DictConfig) -> None:
 
+def collate_tasks(cfg: DictConfig) -> None:
     read_dir = f"{cfg.query.task_dir}/all"
 
-    task_str = f"{"|".join(sorted(cfg.query.codes))}_{cfg.query.sample_times_per_subject}"
+    task_str = f"{'|'.join(sorted(cfg.query.codes))}_{cfg.query.sample_times_per_subject}"
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
     write_dir = f"{cfg.query.task_dir}/collated/{hash_hex}"
-    
+
     for split in [train_split, tuning_split, held_out_split]:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)
         for file_name in os.listdir(f"{read_dir}/{split}"):
@@ -99,26 +72,32 @@ def collate_tasks(cfg: DictConfig) -> None:
             if os.path.exists(f):
                 logger.info(f"Skipping shard. Already collated at {f}.")
             shard = (
-                pl.read_parquet(source=f"{read_dir}/{split}/{file_name}", columns=['subject_id', 'prediction_time', 'censored'] + cfg.query.codes)
-                .unpivot(index=['subject_id', 'prediction_time', 'censored'], variable_name="query", value_name="occurs")
-                .rename({'censored':'boolean_value'})
-                .with_columns(pl.col('occurs').fill_null(False)) 
+                pl.read_parquet(
+                    source=f"{read_dir}/{split}/{file_name}",
+                    columns=["subject_id", "prediction_time", "censored", *cfg.query.codes],
+                )
+                .unpivot(
+                    index=["subject_id", "prediction_time", "censored"],
+                    variable_name="query",
+                    value_name="occurs",
+                )
+                .rename({"censored": "boolean_value"})
+                .with_columns(pl.col("occurs").fill_null(False))
                 .sample(fraction=1, shuffle=True, seed=cfg.get("seed", 1))
-                .group_by('subject_id')
+                .group_by("subject_id")
                 .head(cfg.query.sample_times_per_subject)
             )
             shard.write_parquet(f)
         logger.info(f"Tasks collated for {split} and written to {hash_hex}.")
 
-    return write_dir    
+    return write_dir
 
 
-@hydra.main(version_base="1.3", config_path='', config_name='config.yaml')
+@hydra.main(version_base="1.3", config_path="", config_name="config.yaml")
 def main(cfg: DictConfig) -> float | None:
-
     if not isinstance(cfg.query.codes, ListConfig):
         raise ValueError("query.codes must be a list")
-    
+
     task_dir = collate_tasks(cfg)
     cfg.datamodule.config.task_labels_dir = task_dir
 
@@ -140,7 +119,7 @@ def main(cfg: DictConfig) -> float | None:
             logger.info(f"Overwriting existing output directory {output_dir}.")
             shutil.rmtree(output_dir, ignore_errors=True)
         elif cfg.do_resume:
-            validate_resume_directory(output_dir, cfg)
+            logger.info(f"Resuming training in existing output directory {output_dir}.")
             ckpt_path = find_checkpoint_path(output_dir)
         else:
             raise FileExistsError(
@@ -176,7 +155,7 @@ def main(cfg: DictConfig) -> float | None:
         raise ValueError("No best checkpoint reported.")
     else:
         for log in trainer.loggers:
-            log.log_hyperparams({'best_ckpt_path':best_ckpt_path})
+            log.log_hyperparams({"best_ckpt_path": best_ckpt_path})
 
     output_fp = Path(cfg.output_dir) / "best_model.ckpt"
     shutil.copyfile(best_ckpt_path, output_fp)
@@ -185,6 +164,6 @@ def main(cfg: DictConfig) -> float | None:
 
     logger.info(f"Best checkpoint (with score {best_score:.2f}) copied to {output_fp!s}.")
 
+
 if __name__ == "__main__":
     main()
-
