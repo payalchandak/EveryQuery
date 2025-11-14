@@ -15,3 +15,8 @@ run for processing data
 ```
 MEICAR_process_data input_dir="$RAW" intermediate_dir="$INTERMEDIATE" output_dir="$PROCESSED"
 ```
+
+run for training
+```
+set -a; . ./.env; set +a; python source/train.py
+```
