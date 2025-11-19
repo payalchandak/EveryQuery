@@ -71,7 +71,7 @@ def build_task_label_matrix(
         [pl.lit(None).alias(query).cast(pl.Boolean) for query in query_codes]
     )
 
-    censor_false = censor_df.filter(not pl.col("censored"))
+    censor_false = censor_df.filter(pl.col("censored") == False)
     censor_false_time = censor_false.drop("censored").with_row_index()
     censor_false_index = censor_false_time.select("index")
 

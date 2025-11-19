@@ -15,7 +15,7 @@ datamodule:
   config:
     _target_: meds_torchdata.MEDSTorchDataConfig
     tensorized_cohort_dir: ${oc.env:FINAL_DATA_DIR}
-    task_labels_dir: MEDS_DEATH_only_epochs=20
+    task_labels_dir: ???
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
     max_seq_len: 256
