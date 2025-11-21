@@ -147,7 +147,7 @@ def main(cfg: DictConfig) -> float | None:
     if ckpt_path:
         logger.info(f"Trying to resume training from checkpoint {ckpt_path}.")
         trainer_kwargs["ckpt_path"] = ckpt_path
-
+    print("fitting model")
     trainer.fit(**trainer_kwargs)
 
     best_ckpt_path = Path(trainer.checkpoint_callback.best_model_path)

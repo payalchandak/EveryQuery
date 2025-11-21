@@ -7,7 +7,24 @@ query:
   task_dir: ${oc.env:TASK_DIR}
   sample_times_per_subject: 20 # epochs worth of data
   codes:
-    - MEDS_DEATH
+    - LAB//50957//mmol/L//value_[-inf,0.3)
+    - MEDICATION//PredniSONE//Not Given
+    - LAB//225312//mmHg//value_[69.0,71.0)
+    - LAB//50926//mIU/mL//value_[7.4,10.0)
+    - LAB//50910//IU/L//value_[880.0,inf)
+    - HOSPITAL_ADMISSION//EU OBSERVATION//PHYSICIAN REFERRAL
+    - DIAGNOSIS//ICD//10//K760
+    - LAB//50895//Ratio//value_[0.97,1.01)
+    - DRG//APR//304//DORSAL AND LUMBAR FUSION PROCEDURE EXCEPT FOR CURVATURE OF BACK
+    - SUBJECT_FLUID_OUTPUT//226627//mL//value_[80.0,150.0)
+    - DRG//HCFA//292//HEART FAILURE & SHOCK W CC
+    - LAB//225312//mmHg//value_[96.0,inf)
+    - LAB//227465//sec//value_[16.6,19.2)
+    - LAB//224688//insp/min//value_[22.0,24.0)
+    - LAB//51146//%//value_[0.3,0.4)
+    - MEDICATION//Atenolol//Administered
+    - LAB//229102//UNK
+    - DIAGNOSIS//ICD//10//E890
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
@@ -19,14 +36,14 @@ datamodule:
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
     max_seq_len: 256
-  batch_size: 160
+  batch_size: 120
   num_workers: 1
   pin_memory: True
 
 lightning_module:
-  _target_: lightning_module.EveryQueryLightningModule
+  _target_: every_query.lightning_module.EveryQueryLightningModule
   model:
-    _target_: model.EveryQueryModel
+    _target_: every_query.model.EveryQueryModel
     precision: "16-mixed"
     do_demo: false
     do_grad_ckpt: false
@@ -60,7 +77,7 @@ trainer:
     project: EveryQuery
     log_model: False # upload lightning ckpts
     prefix: "" # a string to put at the beginning of metric keys
-    entity: ":gregkondas9"
+    entity: "gregkondas9-columbia-university"
   callbacks:
     _target_: __main__.values_as_list
     learning_rate_monitor:
