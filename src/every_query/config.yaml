@@ -7,24 +7,26 @@ query:
   task_dir: ${oc.env:TASK_DIR}
   sample_times_per_subject: 20 # epochs worth of data
   codes:
-    - LAB//50957//mmol/L//value_[-inf,0.3)
-    - MEDICATION//PredniSONE//Not Given
-    - LAB//225312//mmHg//value_[69.0,71.0)
-    - LAB//50926//mIU/mL//value_[7.4,10.0)
-    - LAB//50910//IU/L//value_[880.0,inf)
-    - HOSPITAL_ADMISSION//EU OBSERVATION//PHYSICIAN REFERRAL
-    - DIAGNOSIS//ICD//10//K760
-    - LAB//50895//Ratio//value_[0.97,1.01)
-    - DRG//APR//304//DORSAL AND LUMBAR FUSION PROCEDURE EXCEPT FOR CURVATURE OF BACK
-    - SUBJECT_FLUID_OUTPUT//226627//mL//value_[80.0,150.0)
-    - DRG//HCFA//292//HEART FAILURE & SHOCK W CC
-    - LAB//225312//mmHg//value_[96.0,inf)
-    - LAB//227465//sec//value_[16.6,19.2)
-    - LAB//224688//insp/min//value_[22.0,24.0)
-    - LAB//51146//%//value_[0.3,0.4)
-    - MEDICATION//Atenolol//Administered
-    - LAB//229102//UNK
-    - DIAGNOSIS//ICD//10//E890
+    - PROCEDURE//ICD//10//0B9M3ZZ
+    - DIAGNOSIS//ICD//10//G114
+    - DIAGNOSIS//ICD//9//4233
+    - PROCEDURE//ICD//10//0DP643Z
+    - DIAGNOSIS//ICD//10//C8233
+    - DIAGNOSIS//ICD//10//I69190
+    - DIAGNOSIS//ICD//10//A363
+    - DIAGNOSIS//ICD//10//I87092
+    - PROCEDURE//ICD//10//0RSD0ZZ
+    - DIAGNOSIS//ICD//10//S92342D
+    - DIAGNOSIS//ICD//10//M80822A
+    - DIAGNOSIS//ICD//10//K7030
+    - DIAGNOSIS//ICD//10//S70921S
+    - DIAGNOSIS//ICD//10//Z90721
+    - PROCEDURE//ICD//9//8151
+    - PROCEDURE//ICD//10//BD11YZZ
+    - PROCEDURE//ICD//9//731
+    - PROCEDURE//ICD//10//0T903ZX
+    - PROCEDURE//ICD//9//5051
+    - PROCEDURE//ICD//9//5662
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
