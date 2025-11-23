@@ -7,26 +7,26 @@ query:
   task_dir: ${oc.env:TASK_DIR}
   sample_times_per_subject: 20 # epochs worth of data
   codes:
-    - PROCEDURE//ICD//10//0B9M3ZZ
-    - DIAGNOSIS//ICD//10//G114
-    - DIAGNOSIS//ICD//9//4233
-    - PROCEDURE//ICD//10//0DP643Z
-    - DIAGNOSIS//ICD//10//C8233
-    - DIAGNOSIS//ICD//10//I69190
-    - DIAGNOSIS//ICD//10//A363
-    - DIAGNOSIS//ICD//10//I87092
-    - PROCEDURE//ICD//10//0RSD0ZZ
-    - DIAGNOSIS//ICD//10//S92342D
-    - DIAGNOSIS//ICD//10//M80822A
-    - DIAGNOSIS//ICD//10//K7030
-    - DIAGNOSIS//ICD//10//S70921S
-    - DIAGNOSIS//ICD//10//Z90721
-    - PROCEDURE//ICD//9//8151
-    - PROCEDURE//ICD//10//BD11YZZ
-    - PROCEDURE//ICD//9//731
-    - PROCEDURE//ICD//10//0T903ZX
-    - PROCEDURE//ICD//9//5051
-    - PROCEDURE//ICD//9//5662
+    - LAB//224418//mL//value_[9.0,inf)
+    - LAB//51279//m/uL//value_[2.63,2.92)
+    - LAB//228010//UNK
+    - MEDICATION//STOP//Lidocaine 1% (For PICC/Midline Insertions)
+    - LAB//51627//mg/L//value_[3.8,7.8)
+    - LAB//227121//UNK
+    - INFUSION_START//228316//value_[86.53846,100.00001)
+    - INFUSION_END//221906//value_[0.28061,0.41872713)
+    - TRANSFER_TO//admit//Cardiology
+    - LAB//50915//ng/mL//value_[-inf,205.0)
+    - SUBJECT_FLUID_OUTPUT//226633//mL//value_[1400.0,inf)
+    - INFUSION_END//225835//value_[15.0,17.0)
+    - LAB//51068//mg/24hr//value_[384.0,660.0)
+    - DRG//APR//190//ACUTE MYOCARDIAL INFARCTION
+    - LAB//52020//UNK//value_[-46.0,-41.0)
+    - INFUSION_END//226369//value_[199.0,211.0)
+    - LAB//223791//UNK//value_[3.0,4.0)
+    - LAB//224754//mA//value_[4.0,5.0)
+    - LAB//52075//K/uL//value_[5.28,6.32)
+    - DIAGNOSIS//ICD//10//Z23
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
@@ -38,7 +38,7 @@ datamodule:
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
     max_seq_len: 256
-  batch_size: 120
+  batch_size: 160
   num_workers: 1
   pin_memory: True
 
