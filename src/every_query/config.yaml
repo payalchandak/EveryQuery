@@ -69,7 +69,7 @@ trainer:
   _target_: lightning.pytorch.trainer.Trainer
   logger:
     _target_: pytorch_lightning.loggers.wandb.WandbLogger
-    name: "queries=${list_len:query.codes}_${now:%Y%m%d_%H%M%S}"
+    name: "queries=${list_len:${query.codes}}_${now:%Y%m%d_%H%M%S}"
     save_dir: "${trainer.default_root_dir}/loggers"
     offline: False
     id: null # pass correct id to resume experiment!
@@ -80,7 +80,7 @@ trainer:
     entity: "gregkondas9-columbia-university"
     config:
       query_codes: ${query.codes}
-      num_query_codes: ${list_len:query.codes}
+      num_query_codes: ${list_len:${query.codes}}
   callbacks:
     _target_: __main__.values_as_list
     learning_rate_monitor:
