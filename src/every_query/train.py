@@ -4,6 +4,7 @@ import os
 import shutil
 from pathlib import Path
 from typing import Any
+import builtins
 
 import hydra
 import polars as pl
@@ -12,9 +13,27 @@ from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
 from meds import held_out_split, train_split, tuning_split
 from omegaconf import DictConfig, ListConfig, OmegaConf
+from MEDS_transforms.configs.utils import OmegaConfResolver
 
 logger = logging.getLogger(__name__)
 
+@OmegaConfResolver
+def list_len(x):
+    return builtins.len(x)
+
+@OmegaConfResolver
+def int_prod(x: int, y: int) -> int:
+    """Returns the closest integer to the product of x and y (available as an OmegaConf resolver).
+
+    Examples:
+        >>> int_prod(2, 3)
+        6
+        >>> int_prod(2, 3.5)
+        7
+        >>> int_prod(2.49, 3)
+        7
+    """
+    return round(x * y)
 
 def values_as_list(**kwargs) -> list[Any]:
     return list(kwargs.values())
