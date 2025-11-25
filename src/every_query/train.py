@@ -90,6 +90,7 @@ def collate_tasks(cfg: DictConfig) -> None:
             f = f"{write_dir}/{split}/{file_name}"
             if os.path.exists(f):
                 logger.info(f"Skipping shard. Already collated at {f}.")
+                continue
             shard = (
                 pl.read_parquet(
                     source=f"{read_dir}/{split}/{file_name}",
