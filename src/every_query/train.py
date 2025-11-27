@@ -1,10 +1,11 @@
+import builtins
 import hashlib
 import logging
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
-import builtins
 
 import hydra
 import polars as pl
@@ -12,14 +13,16 @@ import torch
 from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
 from meds import held_out_split, train_split, tuning_split
-from omegaconf import DictConfig, ListConfig, OmegaConf
 from MEDS_transforms.configs.utils import OmegaConfResolver
+from omegaconf import DictConfig, ListConfig, OmegaConf
 
 logger = logging.getLogger(__name__)
+
 
 @OmegaConfResolver
 def list_len(x):
     return builtins.len(x)
+
 
 @OmegaConfResolver
 def int_prod(x: int, y: int) -> int:
@@ -34,6 +37,7 @@ def int_prod(x: int, y: int) -> int:
         7
     """
     return round(x * y)
+
 
 def values_as_list(**kwargs) -> list[Any]:
     return list(kwargs.values())
@@ -119,6 +123,10 @@ def main(cfg: DictConfig) -> float | None:
         raise ValueError("query.codes must be a list")
 
     task_dir = collate_tasks(cfg)
+    if cfg.only_preprocess:
+        print("Collate tasks complete. Exiting.")
+        sys.exit(0)
+
     cfg.datamodule.config.task_labels_dir = task_dir
 
     if cfg.do_overwrite and cfg.do_resume:

@@ -1,32 +1,17 @@
+defaults:
+  - _self_
+  - query_codes: all_mimic_codes
+
 output_dir: ${oc.env:OUTPUT_DIR}/${hydra:run.dir}/
 do_overwrite: false
 do_resume: false
 seed: 140799
+only_preprocess: true
 
 query:
   task_dir: ${oc.env:TASK_DIR}
   sample_times_per_subject: 20 # epochs worth of data
-  codes:
-    - LAB//50976//g/dL//value_[7.2,7.4)
-    - LAB//51276//U/g/Hb
-    - LAB//223972//UNK
-    - DIAGNOSIS//ICD//10//E871
-    - DIAGNOSIS//ICD//9//7843
-    - INFUSION_END//223258//value_[6.998357,9.703441)
-    - LAB//224733//UNK
-    - LAB//226534//mEq/L//value_[136.0,138.0)
-    - LAB//51383//#/uL
-    - LAB//227751//UNK
-    - SUBJECT_FLUID_OUTPUT//226631//mL//value_[2875.0,inf)
-    - LAB//51478//mg/dL//value_[70.0,100.0)
-    - LAB//223940//UNK
-    - DIAGNOSIS//ICD//10//K5900
-    - LAB//224696//cmH2O//value_[23.0,25.0)
-    - MEDICATION//START//Acetaminophen (Liquid)
-    - LAB//51008//ug/mL//value_[69.0,77.0)
-    - LAB//51662//UNK//value_[0.254,0.266)
-    - MEDICATION//START//Cyclobenzaprine
-    - LAB//50874//N/A
+  codes: ${query_codes.codes}
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
@@ -52,7 +37,7 @@ lightning_module:
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true
-    lr: 5.0e-3 # starting point (common LR for transformers)
+    lr: 1.0e-4 # starting point (common LR for transformers)
     weight_decay: 0.01 # recommended for regularization
     eps: 1.0e-8 # default epsilon
     betas: [0.9, 0.999] # default betas (standard)
