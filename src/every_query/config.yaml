@@ -1,12 +1,12 @@
 defaults:
   - _self_
-  - query_codes: all_mimic_codes
+  - query_codes: "0_10000"
 
 output_dir: ${oc.env:OUTPUT_DIR}/${hydra:run.dir}/
 do_overwrite: false
 do_resume: false
 seed: 140799
-only_preprocess: true
+only_preprocess: false
 
 query:
   task_dir: ${oc.env:TASK_DIR}
@@ -80,8 +80,20 @@ trainer:
       mode: "min"
       save_weights_only: False
       every_n_train_steps: 1000
+    early_stopping:
+      _target_: lightning.pytorch.callbacks.EarlyStopping
+      monitor: "tuning/loss" # quantity to be monitored, must be specified !!!
+      min_delta: 5.0e-5 # minimum change in the monitored quantity to qualify as an improvement
+      patience: 3 # number of checks with no improvement after which training will be stopped
+      verbose: False # verbosity mode
+      mode: "min" # "max" means higher metric value is better, can be also "min"
+      strict: True # whether to crash the training if monitor is not found in the validation metrics
+      check_finite: True # when set True, stops training when the monitor becomes NaN or infinite
+      stopping_threshold: null # stop training immediately once the monitored quantity reaches this
+      divergence_threshold: null # stop training as soon as the monitored quantity becomes worse than this
+      check_on_train_epoch_end: false # set to false so that early stopping is checked after each validation loop
   default_root_dir: ${output_dir}
-  min_epochs: 1 # prevents early stopping
+  min_epochs: 0 # prevents early stopping
   max_epochs: null # We don't control the max epochs, we control the max steps.
   max_steps: 1000000
   accelerator: "auto"
