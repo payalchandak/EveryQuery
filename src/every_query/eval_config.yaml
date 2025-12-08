@@ -1,0 +1,14 @@
+defaults:
+  - _self_
+  - query_codes: "0_10000"
+
+run_dir:
+do_overwrite: false
+do_resume: false
+seed: 140799
+only_preprocess: false
+
+query:
+  task_dir: ${oc.env:TASK_DIR}
+  sample_times_per_subject: 20 # epochs worth of data
+  codes: ${query_codes.codes}
