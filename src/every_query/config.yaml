@@ -1,16 +1,18 @@
 defaults:
   - _self_
-  - query_codes: "0_10000"
+  - query_codes: "2_10000"
 
 output_dir: ${oc.env:OUTPUT_DIR}/${hydra:run.dir}/
 do_overwrite: false
 do_resume: false
 seed: 140799
 only_preprocess: false
+collate_only_held_out: false
 
 query:
   task_dir: ${oc.env:TASK_DIR}
-  sample_times_per_subject: 20 # epochs worth of data
+  train_val_sample_times_per_subject: 20 # epochs worth of data
+  held_out_sample_times_per_subject: 1
   codes: ${query_codes.codes}
 
 datamodule:
@@ -49,6 +51,7 @@ lightning_module:
     num_warmup_steps: ${int_prod:0.1,${.num_training_steps}} # ~10% of training steps
     num_training_steps: ${trainer.max_steps}
     num_cycles: 0.5
+    query_subset: [1, 2, 3]
 
 trainer:
   _target_: lightning.pytorch.trainer.Trainer
@@ -85,7 +88,7 @@ trainer:
       monitor: "tuning/loss" # quantity to be monitored, must be specified !!!
       min_delta: 5.0e-5 # minimum change in the monitored quantity to qualify as an improvement
       patience: 3 # number of checks with no improvement after which training will be stopped
-      verbose: False # verbosity mode
+      verbose: True # verbosity mode
       mode: "min" # "max" means higher metric value is better, can be also "min"
       strict: True # whether to crash the training if monitor is not found in the validation metrics
       check_finite: True # when set True, stops training when the monitor becomes NaN or infinite

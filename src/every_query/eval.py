@@ -123,13 +123,14 @@ def main(cfg: DictConfig) -> None:
     trainer = instantiate(train_cfg.trainer)
 
     # Find checkpoint from this run and run test (held_out split = test)
-    best_ckpt_path = find_best_checkpoint(run_dir)
-    logger.info(f"Evaluating checkpoint: {best_ckpt_path}")
+    # best_ckpt_path = find_best_checkpoint(run_dir)
+
+    logger.info("Evaluating checkpoint")
 
     results = trainer.test(
         model=M,
         datamodule=D,
-        ckpt_path=str(best_ckpt_path),
+        ckpt_path=cfg.ckpt_path,
     )
 
     # Print clean summary to stdout

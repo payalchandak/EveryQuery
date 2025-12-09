@@ -1,14 +1,17 @@
 defaults:
   - _self_
-  - query_codes: "0_10000"
+  - query_codes: "2_10000"
 
-run_dir:
+run_dir: /users/gbk2114/EveryQuery/results/outputs/2025-12-03/18-05-44
 do_overwrite: false
 do_resume: false
 seed: 140799
-only_preprocess: false
+only_preprocess: true
+ckpt_path: "last"
+collate_only_held_out: true
 
 query:
   task_dir: ${oc.env:TASK_DIR}
-  sample_times_per_subject: 20 # epochs worth of data
+  train_val_sample_times_per_subject: 20
+  held_out_sample_times_per_subject: 1
   codes: ${query_codes.codes}
