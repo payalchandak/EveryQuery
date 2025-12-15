@@ -1,110 +1,35 @@
-import json
 import logging
-import sys
 from pathlib import Path
 from typing import Any
 
 import hydra
+import polars as pl
 import torch
 from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
 from omegaconf import DictConfig, OmegaConf
-from train import collate_tasks
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-def values_as_list(**kwargs: Any) -> list[Any]:
+def values_as_list(**kwargs) -> list[Any]:
     return list(kwargs.values())
-
-
-def load_run_config(run_dir: Path):
-    """Load the resolved config from a finished training run.
-
-    Prefers resolved_config.yaml (all interpolations resolved). Falls back to config.yaml if needed.
-    """
-    resolved_cfg_path = run_dir / "resolved_config.yaml"
-    cfg_path = run_dir / "config.yaml"
-
-    if resolved_cfg_path.is_file():
-        logger.info(f"Loading resolved config from {resolved_cfg_path}")
-        cfg = OmegaConf.load(resolved_cfg_path)
-    elif cfg_path.is_file():
-        logger.info(f"Loading config from {cfg_path}")
-        cfg = OmegaConf.load(cfg_path)
-    else:
-        raise FileNotFoundError(f"Could not find resolved_config.yaml or config.yaml in {run_dir}")
-
-    return cfg
-
-
-def find_best_checkpoint(run_dir: Path) -> Path:
-    """Use best_model.ckpt if present; otherwise fall back to last.ckpt."""
-    best_model_ckpt = run_dir / "best_model.ckpt"
-    if best_model_ckpt.is_file():
-        return best_model_ckpt
-
-    ckpt_dir = run_dir / "checkpoints"
-    last_ckpt = ckpt_dir / "last.ckpt"
-    if last_ckpt.is_file():
-        return last_ckpt
-
-    raise FileNotFoundError(f"No best_model.ckpt or last.ckpt found in {run_dir}.")
-
-
-def _json_default(obj: Any) -> Any:
-    """Helper to make test results JSON-serializable."""
-    if isinstance(obj, Path):
-        return str(obj)
-    if isinstance(obj, torch.Tensor):
-        # scalar → item, otherwise list
-        return obj.item() if obj.ndim == 0 else obj.tolist()
-    return str(obj)
-
-
-def pretty_print_results(results: list[dict[str, Any]]) -> None:
-    """Print test results in a clean, readable way."""
-    if not results:
-        print("No results returned from trainer.test()")
-        return
-
-    if len(results) == 1:
-        print("\n=== Held-out metrics ===")
-        for k in sorted(results[0].keys()):
-            v = results[0][k]
-            if isinstance(v, int | float):
-                print(f"{k:30s}: {v:.6f}")
-            else:
-                print(f"{k:30s}: {v}")
-        print()
-    else:
-        # Uncommon, but handle multiple test loaders
-        print("\n=== Held-out metrics (multiple loaders) ===")
-        print(json.dumps(results, indent=2, default=_json_default))
-        print()
 
 
 @hydra.main(version_base="1.3", config_path="", config_name="eval_config.yaml")
 def main(cfg: DictConfig) -> None:
-    run_dir = Path(cfg.run_dir)
-    if not run_dir.is_dir():
-        raise NotADirectoryError(f"{run_dir} is not a directory")
-
-    # for OOD: Collate new tasks on held_out split if OOD queries set in eval_config
-    # for ID: Or points to held_out tasks if query list has already been collated from training run
-    task_dir = collate_tasks(cfg)
-    if cfg.only_preprocess:
-        print("Collate tasks complete. Existing.")
-        sys.exit(0)
+    model_run_dir = Path(cfg.model_run_dir)
+    if not model_run_dir.is_dir():
+        raise NotADirectoryError(f"{model_run_dir} is not a directory")
 
     # Load training config
-    train_cfg = OmegaConf.load(run_dir / "resolved_config.yaml")
+    train_cfg = OmegaConf.load(model_run_dir / "resolved_config.yaml")
 
-    # Point the train_fg at the task files created by collate
-    train_cfg.datamodule.config.task_labels_dir = task_dir
+    # Nuke the logger so wandb dashboard is clean
+    train_cfg.trainer.logger = ""
 
-    seed = train_cfg.get("seed", None)
+    seed = train_cfg.get("seed", 42)
     if seed is not None:
         logger.info(f"Seeding with seed={seed}")
         seed_everything(seed, workers=True)
@@ -112,36 +37,58 @@ def main(cfg: DictConfig) -> None:
     logger.info("Setting torch float32 matmul precision to 'medium'.")
     torch.set_float32_matmul_precision("medium")
 
-    # Instantiate datamodule, lightning_module, trainer from saved train_cfg
-    logger.info("Instantiating datamodule...")
-    D = instantiate(train_cfg.datamodule)
-
     logger.info("Instantiating lightning module (architecture only)...")
     M = instantiate(train_cfg.lightning_module)
 
     logger.info("Instantiating trainer...")
     trainer = instantiate(train_cfg.trainer)
 
-    # Find checkpoint from this run and run test (held_out split = test)
-    # best_ckpt_path = find_best_checkpoint(run_dir)
-
-    logger.info("Evaluating checkpoint")
-
-    results = trainer.test(
-        model=M,
-        datamodule=D,
-        ckpt_path=cfg.ckpt_path,
+    task_set_dir = Path(cfg.task_set_dir)
+    manifest_df = (
+        pl.read_parquet(cfg.manifest_path)
+        .select(["bucket", "code", "code_slug"])
+        .unique()
+        .sort(["bucket", "code"])
     )
 
-    # Print clean summary to stdout
-    pretty_print_results(results)
+    rows: list[dict[str, Any]] = []
 
-    # Save full results JSON next to the run
-    out_path = run_dir / "heldout_results.json"
-    with out_path.open("w") as f:
-        json.dump(results, f, indent=2, default=_json_default)
+    split = cfg.split
 
-    logger.info(f"Held-out results saved to {out_path}")
+    for row in manifest_df.iter_rows(named=True):
+        bucket = row["bucket"]
+        code = row["code"]
+        code_slug = row["code_slug"]
+
+        task_labels_dir = str(task_set_dir / bucket / code_slug)
+
+        train_cfg.datamodule.config.task_labels_dir = task_labels_dir
+        D = instantiate(train_cfg.datamodule)
+
+        out = trainer.test(model=M, datamodule=D, ckpt_path=cfg.ckpt_path)
+        m = out[0] if out else {}
+
+        rows.append(
+            {
+                "code": code,
+                "bucket": bucket,
+                "occurs_auc": float(m[f"{split}/occurs_auc"]) if f"{split}/occurs_auc" in m else None,
+                "censor_auc": float(m[f"{split}/censor_auc"]) if f"{split}/censor_auc" in m else None,
+            }
+        )
+
+    auc_df = pl.DataFrame(rows)
+
+    # save
+    out_dir = Path(cfg.output_root)
+    out_fp = out_dir / "all_code_aucs.csv"
+
+    if out_fp.exists() and not cfg.do_overwrite:
+        logger.info(f"Output exists at {out_fp}. Set do_overwrite=true to overwrite.")
+        return
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    auc_df.write_csv(out_fp)
 
 
 if __name__ == "__main__":

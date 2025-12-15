@@ -105,6 +105,8 @@ def collate_tasks(cfg: DictConfig) -> str:
 
         for file_name in os.listdir(f"{read_dir}/{split}"):
             f = f"{write_dir}/{split}/{file_name}"
+            logger.info(f"Collating {f}")
+
             if os.path.exists(f):
                 logger.info(f"Skipping shard. Already collated at {f}.")
                 continue

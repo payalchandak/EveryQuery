@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - query_codes: "2_10000"
+  - query_codes: "2_10000_ID"
 
 output_dir: ${oc.env:OUTPUT_DIR}/${hydra:run.dir}/
 do_overwrite: false
@@ -51,7 +51,6 @@ lightning_module:
     num_warmup_steps: ${int_prod:0.1,${.num_training_steps}} # ~10% of training steps
     num_training_steps: ${trainer.max_steps}
     num_cycles: 0.5
-    query_subset: [1, 2, 3]
 
 trainer:
   _target_: lightning.pytorch.trainer.Trainer
@@ -87,7 +86,7 @@ trainer:
       _target_: lightning.pytorch.callbacks.EarlyStopping
       monitor: "tuning/loss" # quantity to be monitored, must be specified !!!
       min_delta: 5.0e-5 # minimum change in the monitored quantity to qualify as an improvement
-      patience: 3 # number of checks with no improvement after which training will be stopped
+      patience: 20 # number of checks with no improvement after which training will be stopped
       verbose: True # verbosity mode
       mode: "min" # "max" means higher metric value is better, can be also "min"
       strict: True # whether to crash the training if monitor is not found in the validation metrics

@@ -1,17 +1,23 @@
 defaults:
   - _self_
-  - query_codes: "2_10000"
 
-run_dir: /users/gbk2114/EveryQuery/results/outputs/2025-12-03/18-05-44
+# inputs
+model_run_dir: /users/gbk2114/EveryQuery/results/outputs/2025-12-10/17-58-26
+task_parent_dir: /users/gbk2114/eq_stuff/tasks/manual
+task_set_name: cde742daabc4ddc5e79f29102ea14107
+eval_code_idx: 0
+split: held_out
+ckpt_path: last
+
+
+# derived paths
+task_set_dir: ${task_parent_dir}/${task_set_name}/${split}/${eval_code_idx}
+manifest_path: ${task_set_dir}/manifest.parquet
+# where to save eval outputs (outside hydra run dir if you want)
+output_root: ${model_run_dir}/eval/${task_set_name}/${split}/${eval_code_idx}
+
+
 do_overwrite: false
 do_resume: false
 seed: 140799
-only_preprocess: true
-ckpt_path: "last"
-collate_only_held_out: true
-
-query:
-  task_dir: ${oc.env:TASK_DIR}
-  train_val_sample_times_per_subject: 20
-  held_out_sample_times_per_subject: 1
-  codes: ${query_codes.codes}
+only_preprocess: false
