@@ -42,26 +42,26 @@ def main(cfg: DictConfig) -> None:
 
     logger.info("Instantiating trainer...")
     trainer = instantiate(train_cfg.trainer)
-
+    
     task_set_dir = Path(cfg.task_set_dir)
-    manifest_df = (
-        pl.read_parquet(cfg.manifest_path)
-        .select(["bucket", "code", "code_slug"])
-        .unique()
-        .sort(["bucket", "code"])
-    )
+    if not task_set_dir.is_dir():
+        raise NotADirectoryError(f"{task_set_dir} is not a directory")
+
+    codes = list(map(str, cfg.codes))
+    if not codes:
+        raise ValueError("cfg.codes is empty")
 
     rows: list[dict[str, Any]] = []
 
-    split = cfg.split
+    for code in codes:
+        slug = code_slug(code)
+        task_labels_dir = str(task_set_dir / slug)
 
-    for row in manifest_df.iter_rows(named=True):
-        bucket = row["bucket"]
-        code = row["code"]
-        code_slug = row["code_slug"]
+        if not Path(task_labels_dir).is_dir():
+            logger.warning(f"Missing task_labels_dir for code={code}: {task_labels_dir} (skipping)")
+            continue
 
-        task_labels_dir = str(task_set_dir / bucket / code_slug)
-
+        # Point datamodule at this code’s task dfs
         train_cfg.datamodule.config.task_labels_dir = task_labels_dir
         D = instantiate(train_cfg.datamodule)
 
@@ -71,11 +71,16 @@ def main(cfg: DictConfig) -> None:
         rows.append(
             {
                 "code": code,
-                "bucket": bucket,
-                "occurs_auc": float(m[f"{split}/occurs_auc"]) if f"{split}/occurs_auc" in m else None,
-                "censor_auc": float(m[f"{split}/censor_auc"]) if f"{split}/censor_auc" in m else None,
+                "code_slug": slug,
+                "bucket": str(cfg.bucket) if cfg.get("bucket") is not None else None,
+                "occurs_auc": float(m.get(f"{split}/occurs_auc")) if m.get(f"{split}/occurs_auc") is not None else None,
+                "censor_auc": float(m.get(f"{split}/censor_auc")) if m.get(f"{split}/censor_auc") is not None else None,
             }
         )
+
+
+
+
 
     auc_df = pl.DataFrame(rows)
 
