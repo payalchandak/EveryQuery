@@ -1,0 +1,17 @@
+
+
+
+index_hash: a13e2a7e64ac80319b8ebd84a40d0257
+
+paths:
+  index_times_dir: /users/gbk2114/eq_stuff/tasks/eval/index_times/${index_hash}/held_out
+  all_tasks_dir:   /users/gbk2114/eq_stuff/tasks/all/held_out
+  out_root_dir:    /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index
+
+
+query_codes:
+  - "MEDS_DEATH"
+  - "LAB//53100//UNK//value_[0.011,0.014)"
+
+skip_existing: true
+

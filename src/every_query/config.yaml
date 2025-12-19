@@ -11,8 +11,7 @@ collate_only_held_out: false
 
 query:
   task_dir: ${oc.env:TASK_DIR}
-  train_val_sample_times_per_subject: 20 # epochs worth of data
-  held_out_sample_times_per_subject: 1
+  sample_times_per_subject: 20
   codes: ${query_codes.codes}
 
 datamodule:

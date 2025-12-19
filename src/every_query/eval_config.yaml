@@ -1,21 +1,18 @@
 defaults:
   - _self_
+  - eval_codes: 
 
 # inputs
-model_run_dir: /users/gbk2114/EveryQuery/results/outputs/2025-12-10/17-58-26
-task_parent_dir: /users/gbk2114/eq_stuff/tasks/manual
-task_set_name: cde742daabc4ddc5e79f29102ea14107
-eval_code_idx: 0
-split: held_out
+model_run_dir: /users/gbk2114/EveryQuery/results/outputs/2025-12-10/17-59-21
+index_time_hash: cde742daabc4ddc5e79f29102ea14107
+task_dir: /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index/${index_time_hash}/
 ckpt_path: last
 
 
-# derived paths
-task_set_dir: ${task_parent_dir}/${task_set_name}/${split}/${eval_code_idx}
-manifest_path: ${task_set_dir}/manifest.parquet
+eval_codes: ${eval_codes.codes}
+
 # where to save eval outputs (outside hydra run dir if you want)
 output_root: ${model_run_dir}/eval/${task_set_name}/${split}/${eval_code_idx}
-
 
 do_overwrite: false
 do_resume: false

@@ -83,25 +83,14 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
 
 def collate_tasks(cfg: DictConfig) -> str:
     read_dir = f"{cfg.query.task_dir}/all"
-
-    # default held-out value = 1 if not set
-    held_out_n = cfg.query.get("held_out_sample_times_per_subject", 1)
-    train_val_n = cfg.query.train_val_sample_times_per_subject
-
+ 
     task_str = f"{'|'.join(sorted(cfg.query.codes))}_trainval{train_val_n}_heldout{held_out_n}"
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
-    write_dir = f"{cfg.query.task_dir}/collated/{hash_hex}"
-
-    splits = (
-        [held_out_split]
-        if cfg.get("collate_only_held_out", False)
-        else [train_split, tuning_split, held_out_split]
-    )
-
-    for split in splits:
+    write_dir = f"{cfg.query.task_dir}/collated/{hash_hex}" 
+    
+    # Eval tasks generated in separate file
+    for split in [train_split, tuning_split]:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)
-
-        sample_times_per_subject = train_val_n if split in [train_split, tuning_split] else held_out_n
 
         for file_name in os.listdir(f"{read_dir}/{split}"):
             f = f"{write_dir}/{split}/{file_name}"
@@ -124,7 +113,7 @@ def collate_tasks(cfg: DictConfig) -> str:
                 .with_columns(pl.col("occurs").fill_null(False))
                 .sample(fraction=1, shuffle=True, seed=cfg.get("seed", 1))
                 .group_by("subject_id")
-                .head(sample_times_per_subject)
+                .head(cfg.query.sample_times_per_subject)
             )
             shard.write_parquet(f)
         logger.info(f"Tasks collated for {split} and written to {hash_hex}.")
