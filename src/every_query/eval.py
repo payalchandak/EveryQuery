@@ -1,6 +1,8 @@
 import logging
 from pathlib import Path
 from typing import Any
+import hashlib
+import re
 
 import hydra
 import polars as pl
@@ -15,6 +17,13 @@ logging.basicConfig(level=logging.INFO)
 
 def values_as_list(**kwargs) -> list[Any]:
     return list(kwargs.values())
+
+
+def code_slug(code: str, n_hash: int = 10, prefix_len: int = 24) -> str:
+    h = hashlib.sha1(code.encode("utf-8")).hexdigest()[:n_hash]
+    prefix = re.sub(r"[^A-Za-z0-9._-]+", "_", code).strip("_")[:prefix_len]
+    return f"{prefix}__{h}" if prefix else h
+
 
 
 @hydra.main(version_base="1.3", config_path="", config_name="eval_config.yaml")
@@ -47,9 +56,9 @@ def main(cfg: DictConfig) -> None:
     if not task_set_dir.is_dir():
         raise NotADirectoryError(f"{task_set_dir} is not a directory")
 
-    codes = list(map(str, cfg.codes))
+    codes = list(map(str, cfg.eval_codes))
     if not codes:
-        raise ValueError("cfg.codes is empty")
+        raise ValueError("cfg.eval_codes is empty")
 
     rows: list[dict[str, Any]] = []
 

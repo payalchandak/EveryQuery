@@ -22,7 +22,7 @@ def stable_hash_list(items: list[str]) -> str:
     for x in items:
         h.update(x.encode("utf-8"))
         h.update(b"\n")
-    return h.hexdigest()[:12]
+       return h.hexdigest()[:12]
 
 # -------------------
 # Load + filter codes

@@ -1,7 +1,7 @@
 from pathlib import Path
 import hashlib
 import re
-
+from tqdm import tqdm
 import hydra
 import polars as pl
 from omegaconf import DictConfig
@@ -23,7 +23,10 @@ def main(cfg: DictConfig) -> None:
     all_dir = Path(cfg.paths.all_tasks_dir)
     out_root = Path(cfg.paths.out_root_dir)
     index_hash = str(cfg.index_hash)
-    codes = list(cfg.query_codes)
+    id_codes = cfg.id_codes
+    ood_codes = cfg.ood_codes
+    codes = id_codes + ood_codes
+
     skip_existing = bool(cfg.skip_existing)
 
     out_base = out_root / index_hash
@@ -34,13 +37,12 @@ def main(cfg: DictConfig) -> None:
 
     assert [p.name for p in index_shards] == [p.name for p in all_shards]
 
-    for shard_idx, (idx_fp, all_fp) in enumerate(zip(index_shards, all_shards)):
+    for shard_idx, (idx_fp, all_fp) in tqdm(enumerate(zip(index_shards, all_shards)),total=len(index_shards)):
         index_df = pl.read_parquet(idx_fp).select(
             ["subject_id", "prediction_time", "censored"]
         ).rename({"censored": "boolean_value"})
 
         shard_all_df = pl.read_parquet(all_fp)
-
 
         for code in codes:
             slug = code_slug(code)

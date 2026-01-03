@@ -1,9 +1,9 @@
 defaults:
   - _self_
-  - query_codes: "2_10000_ID"
+  - train_codes: "10000_ID__8db2be6fadf8"
 
 output_dir: ${oc.env:OUTPUT_DIR}/${hydra:run.dir}/
-do_overwrite: false
+do_overwrite: true
 do_resume: false
 seed: 140799
 only_preprocess: false
@@ -12,7 +12,7 @@ collate_only_held_out: false
 query:
   task_dir: ${oc.env:TASK_DIR}
   sample_times_per_subject: 20
-  codes: ${query_codes.codes}
+  codes: ${train_codes.codes}
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
@@ -35,11 +35,12 @@ lightning_module:
     precision: "16-mixed"
     do_demo: false
     do_grad_ckpt: false
+    mlp_dropout: 0.1
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true
-    lr: 1.0e-4 # starting point (common LR for transformers)
-    weight_decay: 0.01 # recommended for regularization
+    lr: 2e-5 # starting point (common LR for transformers)
+    weight_decay: 0.05 # recommended for regularization
     eps: 1.0e-8 # default epsilon
     betas: [0.9, 0.999] # default betas (standard)
     amsgrad: false # default amsgrad (standard)
@@ -47,7 +48,7 @@ lightning_module:
   LR_scheduler:
     _target_: transformers.get_cosine_schedule_with_warmup
     _partial_: true
-    num_warmup_steps: ${int_prod:0.1,${.num_training_steps}} # ~10% of training steps
+    num_warmup_steps: ${int_prod:0.05,${.num_training_steps}} # ~10% of training steps
     num_training_steps: ${trainer.max_steps}
     num_cycles: 0.5
 
@@ -65,8 +66,8 @@ trainer:
     prefix: "" # a string to put at the beginning of metric keys
     entity: "gregkondas9-columbia-university"
     config:
-      query_codes: ${query.codes}
-      num_query_codes: ${list_len:${query.codes}}
+      query_codes: ${train_codes.codes}
+      num_query_codes: ${list_len:${train_codes.codes}}
   callbacks:
     _target_: __main__.values_as_list
     learning_rate_monitor:
@@ -77,15 +78,15 @@ trainer:
       monitor: "tuning/loss"
       verbose: False
       save_last: True # additionally always save an exact copy of the last checkpoint to a file last.ckpt
-      save_top_k: 5 # save k best models (determined by above metric)
+      save_top_k: 2 # save k best models (determined by above metric)
       mode: "min"
       save_weights_only: False
-      every_n_train_steps: 1000
+      every_n_train_steps: null
     early_stopping:
       _target_: lightning.pytorch.callbacks.EarlyStopping
       monitor: "tuning/loss" # quantity to be monitored, must be specified !!!
       min_delta: 5.0e-5 # minimum change in the monitored quantity to qualify as an improvement
-      patience: 20 # number of checks with no improvement after which training will be stopped
+      patience: 5 # number of checks with no improvement after which training will be stopped
       verbose: True # verbosity mode
       mode: "min" # "max" means higher metric value is better, can be also "min"
       strict: True # whether to crash the training if monitor is not found in the validation metrics
@@ -96,7 +97,7 @@ trainer:
   default_root_dir: ${output_dir}
   min_epochs: 0 # prevents early stopping
   max_epochs: null # We don't control the max epochs, we control the max steps.
-  max_steps: 1000000
+  max_steps: 40000
   accelerator: "auto"
   devices: "auto"
   accumulate_grad_batches: 1 # set to 1 for no gradient accumulation, >1 for gradient accumulation

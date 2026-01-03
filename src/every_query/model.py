@@ -197,6 +197,7 @@ class EveryQueryModel(torch.nn.Module):
     do_demo: bool
     do_grad_ckpt: bool
     precision: str
+    mlp_dropout: float
 
     PRECISION_TO_MODEL_WEIGHTS_DTYPE: ClassVar[dict[str, torch.dtype]] = {
         "32-true": torch.float32,
@@ -207,7 +208,11 @@ class EveryQueryModel(torch.nn.Module):
         "transformer-engine": torch.bfloat16,
     }
 
-    def __init__(self, precision: str = "32-true", do_demo: bool = False, do_grad_ckpt: bool = False):
+    def __init__(self, precision: str = "32-true", 
+                 do_demo: bool = False, 
+                 do_grad_ckpt: bool = False,
+                 mlp_dropout: float = 0.1
+                 ):
         super().__init__()
 
         self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained("answerdotai/ModernBERT-base")
@@ -234,6 +239,7 @@ class EveryQueryModel(torch.nn.Module):
         self.HF_model_config.output_hidden_states = False
         self.HF_model_config.output_attentions = False
         self.HF_model_config.use_cache = False
+        self.HF_model_config.mlp_dropout = float(mlp_dropout)
 
         self.HF_model = ModernBertModel._from_config(self.HF_model_config, **extra_kwargs)
 
@@ -259,6 +265,7 @@ class EveryQueryModel(torch.nn.Module):
         self.hparams = {
             "precision": precision,
             "do_demo": do_demo,
+            "mlp_dropout": self.HF_model.config.mlp_dropout
         }
 
     @property

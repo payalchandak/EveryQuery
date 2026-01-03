@@ -84,7 +84,7 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
 def collate_tasks(cfg: DictConfig) -> str:
     read_dir = f"{cfg.query.task_dir}/all"
  
-    task_str = f"{'|'.join(sorted(cfg.query.codes))}_trainval{train_val_n}_heldout{held_out_n}"
+    task_str = f"{'|'.join(sorted(cfg.query.codes))}"
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
     write_dir = f"{cfg.query.task_dir}/collated/{hash_hex}" 
     

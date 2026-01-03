@@ -1,6 +1,8 @@
+defaults:
+  - _self_
+  - eval_codes: "10000_ID__8db2be6fadf8"
 
-
-
+#This defines the index times to create task dfs from
 index_hash: a13e2a7e64ac80319b8ebd84a40d0257
 
 paths:
@@ -9,9 +11,8 @@ paths:
   out_root_dir:    /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index
 
 
-query_codes:
-  - "MEDS_DEATH"
-  - "LAB//53100//UNK//value_[0.011,0.014)"
+id_codes: ${eval_codes.id}
+ood_codes: ${eval_codes.ood}
 
 skip_existing: true
 
