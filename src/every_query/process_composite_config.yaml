@@ -1,0 +1,3 @@
+predictions_df_path: /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49/eval/readmiss_30d/readmiss_30d.csv
+
+task_labels_df_path: /users/gbk2114/eic_stuff/make_index_dfs/task_configs/readmiss_30d/held_out
