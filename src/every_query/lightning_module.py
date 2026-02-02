@@ -195,11 +195,24 @@ class EveryQueryLightningModule(L.LightningModule):
 
             metric.reset()
 
+    def on_test_epoch_start(self):
+        self.cache = []
+
     def on_validation_epoch_end(self):
         self._on_epoch_end(tuning_split)
 
     def on_test_epoch_end(self):
         self._on_epoch_end(held_out_split)
+
+        subject_ids = torch.cat([batch_info["subject_id"] for batch_info in self.cache]).numpy()
+        prediction_times = torch.cat([batch_info["prediction_time"] for batch_info in self.cache]).numpy()
+        occurs_probs = torch.cat([batch_info["occurs_probs"] for batch_info in self.cache]).numpy()
+
+        self.test_predictions = {
+            "subject_id": subject_ids,
+            "prediction_time": prediction_times,
+            "occurs_probs": occurs_probs,
+        }
 
     def on_train_epoch_end(self):
         pass
@@ -282,6 +295,19 @@ class EveryQueryLightningModule(L.LightningModule):
     def test_step(self, batch: EveryQueryBatch) -> torch.Tensor:
         loss, outputs = self.model(batch)
         self._log_metrics(loss, outputs, batch, held_out_split)
+
+        # per-row probability of occurs(query)
+        occurs_probs = torch.sigmoid(outputs.occurs_logits).squeeze(-1)  # [B]
+
+        self.cache.append(
+            {
+                "subject_id": batch.subject_id.detach().cpu(),  # [B]
+                "prediction_time": batch.prediction_time.detach().cpu(),  # [B]
+                "occurs_probs": occurs_probs.detach().cpu(),  # [B]
+                "occurs": batch.occurs.detach().cpu() if batch.occurs is not None else None,
+                "censor": batch.censor.detach().cpu() if batch.censor is not None else None,
+            }
+        )
         return loss
 
     @torch.no_grad()

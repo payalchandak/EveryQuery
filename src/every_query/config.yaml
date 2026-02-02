@@ -24,7 +24,7 @@ datamodule:
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
     max_seq_len: 256
-  batch_size: 160
+  batch_size: 128
   num_workers: 1
   pin_memory: True
 
@@ -39,7 +39,7 @@ lightning_module:
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true
-    lr: 2e-5 # starting point (common LR for transformers)
+    lr: 1e-5 # starting point (common LR for transformers)
     weight_decay: 0.05 # recommended for regularization
     eps: 1.0e-8 # default epsilon
     betas: [0.9, 0.999] # default betas (standard)
@@ -86,7 +86,7 @@ trainer:
       _target_: lightning.pytorch.callbacks.EarlyStopping
       monitor: "tuning/loss" # quantity to be monitored, must be specified !!!
       min_delta: 5.0e-5 # minimum change in the monitored quantity to qualify as an improvement
-      patience: 5 # number of checks with no improvement after which training will be stopped
+      patience: 20 # number of checks with no improvement after which training will be stopped
       verbose: True # verbosity mode
       mode: "min" # "max" means higher metric value is better, can be also "min"
       strict: True # whether to crash the training if monitor is not found in the validation metrics

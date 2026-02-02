@@ -178,3 +178,4 @@ cython_debug/
 #.idea/
 
 src/every_query/eval_suite/conf/eval_codes/
+src/every_query/aces_to_eq/query_codes/

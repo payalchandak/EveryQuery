@@ -1,8 +1,8 @@
+import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import Any
-import hashlib
-import re
 
 import hydra
 import polars as pl
@@ -25,8 +25,7 @@ def code_slug(code: str, n_hash: int = 10, prefix_len: int = 24) -> str:
     return f"{prefix}__{h}" if prefix else h
 
 
-
-@hydra.main(version_base="1.3", config_path="", config_name="eval_config.yaml")
+@hydra.main(version_base="1.3", config_path="./eval_suite/conf", config_name="eval_config.yaml")
 def main(cfg: DictConfig) -> None:
     model_run_dir = Path(cfg.model_run_dir)
     if not model_run_dir.is_dir():
@@ -51,14 +50,19 @@ def main(cfg: DictConfig) -> None:
 
     logger.info("Instantiating trainer...")
     trainer = instantiate(train_cfg.trainer)
-    
+
     task_set_dir = Path(cfg.task_set_dir)
     if not task_set_dir.is_dir():
         raise NotADirectoryError(f"{task_set_dir} is not a directory")
 
-    codes = list(map(str, cfg.eval_codes))
-    if not codes:
-        raise ValueError("cfg.eval_codes is empty")
+    codes: list[str] = []
+
+    if cfg.id_codes is not None:
+        codes += cfg.id_codes
+    if cfg.ood_codes is not None:
+        codes += cfg.ood_codes
+    if cfg.manual_codes is not None:
+        codes += cfg.manual_codes
 
     rows: list[dict[str, Any]] = []
 
@@ -70,7 +74,7 @@ def main(cfg: DictConfig) -> None:
             logger.warning(f"Missing task_labels_dir for code={code}: {task_labels_dir} (skipping)")
             continue
 
-        # Point datamodule at this code’s task dfs
+        # Point datamodule at task df for this code
         train_cfg.datamodule.config.task_labels_dir = task_labels_dir
         D = instantiate(train_cfg.datamodule)
 
@@ -81,21 +85,21 @@ def main(cfg: DictConfig) -> None:
             {
                 "code": code,
                 "code_slug": slug,
-                "bucket": str(cfg.bucket) if cfg.get("bucket") is not None else None,
-                "occurs_auc": float(m.get(f"{split}/occurs_auc")) if m.get(f"{split}/occurs_auc") is not None else None,
-                "censor_auc": float(m.get(f"{split}/censor_auc")) if m.get(f"{split}/censor_auc") is not None else None,
+                "bucket": "ood" if code in cfg.ood_codes else "id",
+                "occurs_auc": float(m.get("held_out/occurs_auc"))
+                if m.get("held_out/occurs_auc") is not None
+                else None,
+                "censor_auc": float(m.get("held_out/censor_auc"))
+                if m.get("held_out/censor_auc") is not None
+                else None,
             }
         )
-
-
-
-
 
     auc_df = pl.DataFrame(rows)
 
     # save
     out_dir = Path(cfg.output_root)
-    out_fp = out_dir / "all_code_aucs.csv"
+    out_fp = out_dir / "meds_death_from_discharge.csv"
 
     if out_fp.exists() and not cfg.do_overwrite:
         logger.info(f"Output exists at {out_fp}. Set do_overwrite=true to overwrite.")

@@ -1,8 +1,8 @@
+import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import Any
-import hashlib
-import re
 
 import hydra
 import polars as pl
@@ -23,7 +23,6 @@ def code_slug(code: str, n_hash: int = 10, prefix_len: int = 24) -> str:
     h = hashlib.sha1(code.encode("utf-8")).hexdigest()[:n_hash]
     prefix = re.sub(r"[^A-Za-z0-9._-]+", "_", code).strip("_")[:prefix_len]
     return f"{prefix}__{h}" if prefix else h
-
 
 
 @hydra.main(version_base="1.3", config_path="./eval_suite/conf", config_name="eval_composite_config.yaml")
@@ -51,15 +50,14 @@ def main(cfg: DictConfig) -> None:
 
     logger.info("Instantiating trainer...")
     trainer = instantiate(train_cfg.trainer)
-    
+
     task_set_dir = Path(cfg.task_set_dir)
     if not task_set_dir.is_dir():
         raise NotADirectoryError(f"{task_set_dir} is not a directory")
 
-
-    codes:list[str] = cfg.query_codes
+    codes: list[str] = cfg.query_codes
     rows = []
-    
+
     for code in codes:
         slug = code_slug(code)
         task_labels_dir = str(task_set_dir / slug)
@@ -68,25 +66,23 @@ def main(cfg: DictConfig) -> None:
             logger.warning(f"Missing task_labels_dir for code={code}: {task_labels_dir} (skipping)")
             continue
 
-        # Point datamodule at this code’s task dfs
+        # Point datamodule at this code task df
         train_cfg.datamodule.config.task_labels_dir = task_labels_dir
         D = instantiate(train_cfg.datamodule)
 
-        out = trainer.test(model=M, datamodule=D, ckpt_path=cfg.ckpt_path)
-        m = out[0] if out else {}
+        _ = trainer.test(model=M, datamodule=D, ckpt_path=cfg.ckpt_path)
 
         pred = M.test_predictions
 
-        df = pl.DataFrame({
-            "subject_id": pred["subject_id"],
-            "prediction_time": pred["prediction_time"],
-            "occurs_probs": pred["occurs_probs"],
-        }).with_columns(
-            pl.lit(code).alias("code")
-        )
+        df = pl.DataFrame(
+            {
+                "subject_id": pred["subject_id"],
+                "prediction_time": pred["prediction_time"],
+                "occurs_probs": pred["occurs_probs"],
+            }
+        ).with_columns(pl.lit(code).alias("code"))
 
         rows.append(df)
-
 
     final_df = pl.concat(rows, how="vertical")
 
@@ -100,7 +96,6 @@ def main(cfg: DictConfig) -> None:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     final_df.write_csv(out_fp)
-
 
 
 if __name__ == "__main__":
