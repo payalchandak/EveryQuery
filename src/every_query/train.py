@@ -12,7 +12,7 @@ import polars as pl
 import torch
 from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
-from meds import held_out_split, train_split, tuning_split
+from meds import train_split, tuning_split
 from MEDS_transforms.configs.utils import OmegaConfResolver
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
@@ -83,11 +83,11 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
 
 def collate_tasks(cfg: DictConfig) -> str:
     read_dir = f"{cfg.query.task_dir}/all"
- 
+
     task_str = f"{'|'.join(sorted(cfg.query.codes))}"
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
-    write_dir = f"{cfg.query.task_dir}/collated/{hash_hex}" 
-    
+    write_dir = f"{cfg.query.task_dir}/collated/{hash_hex}"
+
     # Eval tasks generated in separate file
     for split in [train_split, tuning_split]:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)

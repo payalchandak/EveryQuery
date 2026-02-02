@@ -208,11 +208,13 @@ class EveryQueryModel(torch.nn.Module):
         "transformer-engine": torch.bfloat16,
     }
 
-    def __init__(self, precision: str = "32-true", 
-                 do_demo: bool = False, 
-                 do_grad_ckpt: bool = False,
-                 mlp_dropout: float = 0.1
-                 ):
+    def __init__(
+        self,
+        precision: str = "32-true",
+        do_demo: bool = False,
+        do_grad_ckpt: bool = False,
+        mlp_dropout: float = 0.1,
+    ):
         super().__init__()
 
         self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained("answerdotai/ModernBERT-base")
@@ -265,7 +267,7 @@ class EveryQueryModel(torch.nn.Module):
         self.hparams = {
             "precision": precision,
             "do_demo": do_demo,
-            "mlp_dropout": self.HF_model.config.mlp_dropout
+            "mlp_dropout": self.HF_model.config.mlp_dropout,
         }
 
     @property

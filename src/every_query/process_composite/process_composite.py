@@ -86,7 +86,7 @@ def agg_probs(
 
 @hydra.main(version_base="1.3", config_path=".", config_name="process_composite_config.yaml")
 def main(cfg: DictConfig) -> None:
-    joined_df, aucs = agg_probs(
+    _, aucs = agg_probs(
         all_preds_df_fp=cfg.predictions_df_path,
         all_aces_labels_df_fp=cfg.task_labels_df_path,
         agg_type=["max", "or", "sum"],

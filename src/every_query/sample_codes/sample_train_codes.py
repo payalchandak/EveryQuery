@@ -1,7 +1,8 @@
-import polars as pl
-import random
-import os
 import hashlib
+import os
+import random
+
+import polars as pl
 
 # -------------------
 # Config
@@ -9,20 +10,20 @@ import hashlib
 PARQUET_PATH = "/users/gbk2114/data/MIMIC_MEDS/MEDS_cohort/processed/metadata/codes.parquet"
 N_SAMPLES = 10000
 N_REPEATS = 5
-OUT_DIR = f"../train_codes"
+OUT_DIR = "../train_codes"
 SEED = 42
 
 random.seed(SEED)
 
+
 def stable_hash_list(items: list[str]) -> str:
-    """
-    Order-sensitive, deterministic hash for a list of strings.
-    """
+    """Order-sensitive, deterministic hash for a list of strings."""
     h = hashlib.sha256()
     for x in items:
         h.update(x.encode("utf-8"))
         h.update(b"\n")
-       return h.hexdigest()[:12]
+    return h.hexdigest()[:12]
+
 
 # -------------------
 # Load + filter codes
@@ -77,5 +78,3 @@ for _ in range(N_REPEATS):
     #     )
 
 print(f"Done sampling {N_SAMPLES} ID sets and OOD complements for {N_REPEATS} repeats.")
-
-

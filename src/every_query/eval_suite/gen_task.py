@@ -1,10 +1,11 @@
-from pathlib import Path
 import hashlib
 import re
-from tqdm import tqdm
+from pathlib import Path
+
 import hydra
 import polars as pl
 from omegaconf import DictConfig
+from tqdm import tqdm
 
 
 def code_slug(code: str, n_hash: int = 10, prefix_len: int = 24) -> str:
@@ -37,10 +38,14 @@ def main(cfg: DictConfig) -> None:
 
     assert [p.name for p in index_shards] == [p.name for p in all_shards]
 
-    for shard_idx, (idx_fp, all_fp) in tqdm(enumerate(zip(index_shards, all_shards)),total=len(index_shards)):
-        index_df = pl.read_parquet(idx_fp).select(
-            ["subject_id", "prediction_time", "censored"]
-        ).rename({"censored": "boolean_value"})
+    for shard_idx, (idx_fp, all_fp) in tqdm(
+        enumerate(zip(index_shards, all_shards, strict=True)), total=len(index_shards)
+    ):
+        index_df = (
+            pl.read_parquet(idx_fp)
+            .select(["subject_id", "prediction_time", "censored"])
+            .rename({"censored": "boolean_value"})
+        )
 
         shard_all_df = pl.read_parquet(all_fp)
 
@@ -55,8 +60,7 @@ def main(cfg: DictConfig) -> None:
                 continue
 
             df = (
-                index_df
-                .join(
+                index_df.join(
                     shard_all_df.select(["subject_id", "prediction_time", code]),
                     on=["subject_id", "prediction_time"],
                     how="left",
@@ -78,4 +82,3 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     main()
-
