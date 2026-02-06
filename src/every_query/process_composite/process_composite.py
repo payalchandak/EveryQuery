@@ -1,5 +1,6 @@
 import hashlib
 import re
+from pathlib import Path
 from typing import Any
 
 import hydra
@@ -66,6 +67,10 @@ def agg_probs(
         preds.group_by(["subject_id", "prediction_time"]).agg(aggs).sort(["subject_id", "prediction_time"])
     )
 
+    probs_df = probs_df.with_columns(
+        pl.from_epoch(pl.col("prediction_time"), time_unit="us").alias("prediction_time")
+    )
+
     joined_df = probs_df.join(labels, on=["subject_id", "prediction_time"], how="inner")
 
     if not return_auc:
@@ -92,6 +97,14 @@ def main(cfg: DictConfig) -> None:
         agg_type=["max", "or", "sum"],
     )
     print(aucs)
+
+    out_df = pl.DataFrame(aucs)
+    out_fp = Path(cfg.output_path) / f"{cfg.task_name}_final.csv"
+
+    if out_fp.exists() and not cfg.do_overwrite:
+        print(f"Output exists at {out_fp}. Set do_overwrite=true to overwrite.")
+        return
+    out_df.write_csv(out_fp)
 
 
 if __name__ == "__main__":
