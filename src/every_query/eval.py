@@ -1,6 +1,4 @@
-import hashlib
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
@@ -11,18 +9,10 @@ from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
 from omegaconf import DictConfig, OmegaConf
 
+from every_query.utils.codes import code_slug
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-
-
-def values_as_list(**kwargs) -> list[Any]:
-    return list(kwargs.values())
-
-
-def code_slug(code: str, n_hash: int = 10, prefix_len: int = 24) -> str:
-    h = hashlib.sha1(code.encode("utf-8")).hexdigest()[:n_hash]
-    prefix = re.sub(r"[^A-Za-z0-9._-]+", "_", code).strip("_")[:prefix_len]
-    return f"{prefix}__{h}" if prefix else h
 
 
 @hydra.main(version_base="1.3", config_path="./eval_suite/conf", config_name="eval_config.yaml")

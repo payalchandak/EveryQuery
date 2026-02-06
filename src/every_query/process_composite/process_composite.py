@@ -1,22 +1,9 @@
-import hashlib
-import re
 from pathlib import Path
-from typing import Any
 
 import hydra
 import polars as pl
 from omegaconf import DictConfig
 from sklearn.metrics import roc_auc_score
-
-
-def values_as_list(**kwargs) -> list[Any]:
-    return list(kwargs.values())
-
-
-def code_slug(code: str, n_hash: int = 10, prefix_len: int = 24) -> str:
-    h = hashlib.sha1(code.encode("utf-8")).hexdigest()[:n_hash]
-    prefix = re.sub(r"[^A-Za-z0-9._-]+", "_", code).strip("_")[:prefix_len]
-    return f"{prefix}__{h}" if prefix else h
 
 
 def agg_probs(
@@ -99,11 +86,15 @@ def main(cfg: DictConfig) -> None:
     print(aucs)
 
     out_df = pl.DataFrame(aucs)
-    out_fp = Path(cfg.output_path) / f"{cfg.task_name}_final.csv"
+
+    out_dir = Path(cfg.output_path)
+    out_fp = out_dir / f"{cfg.task_name}_final.csv"
 
     if out_fp.exists() and not cfg.do_overwrite:
         print(f"Output exists at {out_fp}. Set do_overwrite=true to overwrite.")
         return
+
+    out_dir.mkdir(parents=True, exist_ok=True)
     out_df.write_csv(out_fp)
 
 
