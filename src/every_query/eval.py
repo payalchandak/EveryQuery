@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
+def values_as_list(**kwargs) -> list[Any]:
+    return list(kwargs.values())
+
+
 @hydra.main(version_base="1.3", config_path="./eval_suite/conf", config_name="eval_config.yaml")
 def main(cfg: DictConfig) -> None:
     model_run_dir = Path(cfg.model_run_dir)

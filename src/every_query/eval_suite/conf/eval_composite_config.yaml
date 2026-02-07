@@ -1,11 +1,12 @@
 defaults:
   - _self_
-  - eval_codes: death
+  - eval_codes: admin_codes
 
 # inputs
 model_run_dir: /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49/
 task_name: readmiss_30d
 task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/aces/${task_name}/held_out
+
 ckpt_path: last
 
 query_codes: ${eval_codes}

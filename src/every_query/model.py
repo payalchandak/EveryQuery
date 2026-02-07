@@ -108,6 +108,22 @@ class EveryQueryOutput(BaseModelOutput):
         return shape_lines
 
     @staticmethod
+    def logits_to_probs(logits: torch.Tensor) -> torch.Tensor:
+        return torch.sigmoid(logits).squeeze()
+
+    @property
+    def occurs_probs(self) -> torch.Tensor | None:
+        if self.occurs_logits is None:
+            return None
+        return self.logits_to_probs(self.occurs_logits)
+
+    @property
+    def censor_probs(self) -> torch.Tensor | None:
+        if self.censor_logits is None:
+            return None
+        return self.logits_to_probs(self.censor_logits)
+
+    @staticmethod
     def __str_tensor_val(tensor: torch.Tensor) -> str:
         """Strips the `tensor(` prefix, `)` suffix, leading/trailing , and newlines."""
 
