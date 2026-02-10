@@ -8,6 +8,7 @@ dynamic = ["version"] # Makes setuptools-scm manage the version
 authors = [
   {name="Payal Chandak", email="payal.chandak@gmail.com"},
   {name="Matthew McDermott", email="mattmcdermott8@gmail.com"},
+  {name="Gregory Kondas", email="gregkondas9@gmail.com"},
 ]
 description = "Add your description here"
 readme = "README.md"
