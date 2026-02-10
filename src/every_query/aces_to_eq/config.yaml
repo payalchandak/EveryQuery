@@ -1,0 +1,11 @@
+defaults:
+  - query_codes: admin_codes
+  - _self_
+
+target_rows_per_shard: 400
+task_name: readmiss_30d/
+queries: ${query_codes}
+
+eq_tasks_all_dir: /users/gbk2114/eq_stuff/tasks/all/held_out
+aces_shards_dir: /users/gbk2114/eic_stuff/make_index_dfs/task_configs/${task_name}/held_out
+output_dir: /users/gbk2114/eq_stuff/tasks/eval/aces/${task_name}/held_out

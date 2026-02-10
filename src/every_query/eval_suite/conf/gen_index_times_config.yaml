@@ -1,0 +1,19 @@
+defaults:
+  - _self_
+
+io:
+  # where your existing task shards live (expects all/{split}/*.parquet)
+  task_dir: /users/gbk2114/eq_stuff/tasks
+
+  # stable artifact root (NOT hydra outputs/)
+  out_root: /users/gbk2114/eq_stuff/tasks/eval/
+
+sampling:
+  splits: [held_out]
+  sample_times_per_subject: 1
+
+  # deterministic shuffle seed
+  seed: 43
+
+behavior:
+  skip_existing: true

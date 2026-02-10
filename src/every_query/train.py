@@ -1,7 +1,9 @@
+import builtins
 import hashlib
 import logging
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -10,10 +12,31 @@ import polars as pl
 import torch
 from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
-from meds import held_out_split, train_split, tuning_split
+from meds import train_split, tuning_split
+from MEDS_transforms.configs.utils import OmegaConfResolver
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 logger = logging.getLogger(__name__)
+
+
+@OmegaConfResolver
+def list_len(x):
+    return builtins.len(x)
+
+
+@OmegaConfResolver
+def int_prod(x: int, y: int) -> int:
+    """Returns the closest integer to the product of x and y (available as an OmegaConf resolver).
+
+    Examples:
+        >>> int_prod(2, 3)
+        6
+        >>> int_prod(2, 3.5)
+        7
+        >>> int_prod(2.49, 3)
+        7
+    """
+    return round(x * y)
 
 
 def values_as_list(**kwargs) -> list[Any]:
@@ -58,19 +81,24 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
     return sorted_checkpoints[-1] if sorted_checkpoints else None
 
 
-def collate_tasks(cfg: DictConfig) -> None:
+def collate_tasks(cfg: DictConfig) -> str:
     read_dir = f"{cfg.query.task_dir}/all"
 
-    task_str = f"{'|'.join(sorted(cfg.query.codes))}_{cfg.query.sample_times_per_subject}"
+    task_str = f"{'|'.join(sorted(cfg.query.codes))}"
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
     write_dir = f"{cfg.query.task_dir}/collated/{hash_hex}"
 
-    for split in [train_split, tuning_split, held_out_split]:
+    # Eval tasks generated in separate file
+    for split in [train_split, tuning_split]:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)
+
         for file_name in os.listdir(f"{read_dir}/{split}"):
             f = f"{write_dir}/{split}/{file_name}"
+            logger.info(f"Collating {f}")
+
             if os.path.exists(f):
                 logger.info(f"Skipping shard. Already collated at {f}.")
+                continue
             shard = (
                 pl.read_parquet(
                     source=f"{read_dir}/{split}/{file_name}",
@@ -99,6 +127,10 @@ def main(cfg: DictConfig) -> float | None:
         raise ValueError("query.codes must be a list")
 
     task_dir = collate_tasks(cfg)
+    if cfg.only_preprocess:
+        print("Collate tasks complete. Exiting.")
+        sys.exit(0)
+
     cfg.datamodule.config.task_labels_dir = task_dir
 
     if cfg.do_overwrite and cfg.do_resume:
@@ -147,7 +179,7 @@ def main(cfg: DictConfig) -> float | None:
     if ckpt_path:
         logger.info(f"Trying to resume training from checkpoint {ckpt_path}.")
         trainer_kwargs["ckpt_path"] = ckpt_path
-
+    print("fitting model")
     trainer.fit(**trainer_kwargs)
 
     best_ckpt_path = Path(trainer.checkpoint_callback.best_model_path)

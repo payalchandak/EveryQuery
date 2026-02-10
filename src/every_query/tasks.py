@@ -102,8 +102,9 @@ def build_task_label_matrix(
 
 
 if __name__ == "__main__":
-    read_dir = os.environ.get("INTERMEDIATE_DIR")
-    write_dir = f"{os.environ.get('TASK_DIR')}/all/"
+    read_codes_dir = os.environ.get("PROCESSED")
+    read_dir = os.environ.get("INTERMEDIATE")
+    write_dir = f"{os.environ.get('TASK_DIR')}/all"
     min_context_per_subject = 50
     duration = {"minutes": 0, "hours": 0, "days": 30, "weeks": 0}
 
@@ -116,13 +117,13 @@ if __name__ == "__main__":
             if not file_name.endswith(".parquet"):
                 continue
             if os.path.exists(f):
-                print("Skipping {f}. Already exists.")
+                print(f"Skipping {f}. Already exists.")
                 continue
             events_df = read_event_shard(f"{shard_directory}/{file_name}")
             print("Completed read_event_shard")
             censor_df = compute_censor_dataframe(events_df, min_context_per_subject, duration)
             print("Completed compute_censor_dataframe")
-            query_codes = read_query_codes(read_dir)
+            query_codes = read_query_codes(read_codes_dir)
             print("Completed read_query_codes")
             task_df = build_task_label_matrix(events_df, censor_df, query_codes, duration)
             print("Completed build_task_label_matrix")

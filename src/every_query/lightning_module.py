@@ -137,10 +137,6 @@ class EveryQueryLightningModule(L.LightningModule):
                 "censor_auc": BinaryAUROC().cpu(),
                 "occurs_auc": BinaryAUROC().cpu(),
             },
-            "predict": {
-                "censor_auc": BinaryAUROC().cpu(),
-                "occurs_auc": BinaryAUROC().cpu(),
-            },
         }
 
         self.save_hyperparameters(
@@ -285,9 +281,17 @@ class EveryQueryLightningModule(L.LightningModule):
         return loss
 
     @torch.no_grad()
-    def predict_step(self, batch: EveryQueryBatch) -> EveryQueryOutput:
+    def predict_step(self, batch: EveryQueryBatch) -> dict[str, torch.Tensor]:
         _, outputs = self.model(batch)
-        return outputs
+
+        return {
+            "subject_id": batch.subject_id.detach().cpu(),
+            "prediction_time": batch.prediction_time.detach().cpu(),
+            "occurs_probs": outputs.occurs_probs.detach().cpu(),
+            "censor_probs": outputs.censor_probs.detach().cpu(),
+            "occurs": batch.occurs.detach().cpu() if batch.occurs is not None else torch.tensor([]),
+            "censor": batch.censor.detach().cpu() if batch.censor is not None else torch.tensor([]),
+        }
 
     @staticmethod
     def _is_norm_bias_param(n: str) -> bool:

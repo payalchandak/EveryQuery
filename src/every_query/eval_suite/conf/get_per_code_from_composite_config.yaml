@@ -1,0 +1,17 @@
+defaults:
+  - _self_
+
+# inputs
+model_run_dir: /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49/
+task_df_fp: /users/gbk2114/eq_stuff/tasks/eval/aces/readmiss_30d/held_out
+preds_df_fp: /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49/eval/readmiss_30d/readmiss_30d.csv
+
+query_codes: ${eval_codes}
+
+# where to save eval outputs (outside hydra run dir if you want)
+#output_root: ${model_run_dir}/eval/${index_time_hash}/
+output_root: ${model_run_dir}/eval/readmiss_30d/
+do_overwrite: true
+do_resume: false
+seed: 140799
+only_preprocess: false

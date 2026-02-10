@@ -176,3 +176,9 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+src/every_query/eval_suite/conf/eval_codes/
+src/every_query/aces_to_eq/query_codes/
+
+# Generated train code YAMLs
+src/every_query/train_codes/
