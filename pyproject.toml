@@ -10,7 +10,7 @@ authors = [
   {name="Matthew McDermott", email="mattmcdermott8@gmail.com"},
   {name="Gregory Kondas", email="gregkondas9@gmail.com"},
 ]
-description = "Add your description here"
+description = "A framework for training and evaluating foundation models, using the MEDS ecosystem for data processing and PyTorch Lightning for training."
 readme = "README.md"
 requires-python = ">=3.12"
 classifiers = [
@@ -42,6 +42,12 @@ dev = [
 ] # Add your development (lint, test) dependencies here
 docs = [] # Add your documentation dependencies here (I recommend mkdocs-material)
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+every_query = ["**/*.yaml"]
+
 [tool.setuptools_scm] # Required for setuptools-scm to work, even if empty
 
 [project.optional-dependencies] # Add any optional dependencies here, installable via `pip install .[extra]`
@@ -61,8 +67,8 @@ markers = [] # Add any custom pytest markers here
 doctest_optionflags = ["NORMALIZE_WHITESPACE", "ELLIPSIS"]
 
 [project.urls]
-Homepage = "https://github.com/McDermottHealthAI/REPO_NAME" # Replace with your repo URL
-Issues = "https://github.com/McDermottHealthAI/REPO_NAME/issues" # Replace with your repo URL
+Homepage = "https://github.com/payalchandak/EveryQuery"
+Issues = "https://github.com/payalchandak/EveryQuery/issues"
 
 [tool.ruff] # Ruff configuration for linting and formatting
 target-version = "py312"
