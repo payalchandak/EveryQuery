@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - eval_codes: admin_codes
+  - eval_codes: 10000_ID__8db2be6fadf8_5000
 
 # inputs
 model_run_dir: /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49/
@@ -9,8 +9,8 @@ task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/aces/${index_time_hash}/
 ckpt_path: last
 
 # Random Codes (queries) to eval
-id_codes: #${eval_codes.id}
-ood_codes: #${eval_codes.ood}
+id_codes: ${eval_codes.id}
+ood_codes: ${eval_codes.ood}
 # Hand selected codes to eval model on
 manual_codes: [MEDS_DEATH]
 # where to save eval outputs (outside hydra run dir if you want)

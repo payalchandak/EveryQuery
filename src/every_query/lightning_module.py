@@ -291,6 +291,7 @@ class EveryQueryLightningModule(L.LightningModule):
             "censor_probs": outputs.censor_probs.detach().cpu(),
             "occurs": batch.occurs.detach().cpu() if batch.occurs is not None else torch.tensor([]),
             "censor": batch.censor.detach().cpu() if batch.censor is not None else torch.tensor([]),
+            "query_embed": outputs.query_embed.detach().cpu(),
         }
 
     @staticmethod

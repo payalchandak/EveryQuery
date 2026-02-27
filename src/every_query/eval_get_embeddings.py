@@ -1,5 +1,4 @@
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +51,6 @@ def main(cfg: DictConfig) -> None:
 
     codes: list[str] = cfg.query_codes
     rows = []
-    embed_rows = []
 
     for code in codes:
         slug = code_slug(code)
@@ -71,7 +69,6 @@ def main(cfg: DictConfig) -> None:
         subject_id = torch.cat([b["subject_id"] for b in pred_batches]).numpy()
         prediction_time = torch.cat([b["prediction_time"] for b in pred_batches]).numpy()
         occurs_probs = torch.cat([b["occurs_probs"] for b in pred_batches]).numpy()
-        query_embeds = torch.cat([b["query_embed"] for b in pred_batches]).numpy()  # (N, embed_dim)
 
         df = pl.DataFrame(
             {
@@ -82,34 +79,19 @@ def main(cfg: DictConfig) -> None:
         ).with_columns(pl.lit(code).alias("code"))
 
         rows.append(df)
-        embed_rows.append(
-            pl.DataFrame(
-                {
-                    "subject_id": subject_id,
-                    "prediction_time": prediction_time,
-                    "code": [code] * len(subject_id),
-                }
-            ).with_columns(pl.Series("embedding", query_embeds.tolist()))
-        )
-
-    if not rows:
-        logger.warning("No predictions were generated — all codes were skipped.")
-        return
 
     final_df = pl.concat(rows, how="vertical")
-    embed_df = pl.concat(embed_rows, how="vertical")
 
     # save
-    timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
     out_dir = Path(cfg.output_root)
-    out_fp = out_dir / f"all_preds_{timestamp}.csv"
-    embed_fp = out_dir / f"query_embeds_{timestamp}.parquet"
+    out_fp = out_dir / f"{cfg.task_name}_all_preds.csv"
+
+    if out_fp.exists() and not cfg.do_overwrite:
+        logger.info(f"Output exists at {out_fp}. Set do_overwrite=true to overwrite.")
+        return
 
     out_dir.mkdir(parents=True, exist_ok=True)
     final_df.write_csv(out_fp)
-    embed_df.write_parquet(embed_fp)
-    logger.info(f"Saved predictions to {out_fp}")
-    logger.info(f"Saved embeddings ({len(embed_df)} rows) to {embed_fp}")
 
 
 if __name__ == "__main__":

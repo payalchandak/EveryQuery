@@ -1,15 +1,15 @@
 defaults:
   - _self_
-  - eval_codes: embed_200_6b50c7179bf6
+  - eval_codes: admin_codes
 
 # inputs
 model_run_dir: /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49/
-task_name: 7573f855c4b050a9d79d57fefd8a139c
-task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index/${task_name}
+task_name: readmiss_30d
+task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/aces/${task_name}/held_out
 
 ckpt_path: last
 
-query_codes: ${eval_codes.codes}
+query_codes: ${eval_codes}
 
 # where to save eval outputs (outside hydra run dir if you want)
 #output_root: ${model_run_dir}/eval/${index_time_hash}/

@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -93,7 +94,8 @@ def main(cfg: DictConfig) -> None:
 
     # save
     out_dir = Path(cfg.output_root)
-    out_fp = out_dir / "meds_death_from_discharge.csv"
+    date_str = datetime.now(tz=UTC).strftime("%Y-%m-%d_%H%M%S")
+    out_fp = out_dir / f"all_code_aucs_{date_str}.csv"
 
     if out_fp.exists() and not cfg.do_overwrite:
         logger.info(f"Output exists at {out_fp}. Set do_overwrite=true to overwrite.")

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import hydra
 import polars as pl
-from omegaconf import DictConfig
+from omegaconf import DictConfig, ListConfig
 from tqdm import tqdm
 
 from every_query.utils.codes import code_slug
@@ -18,10 +18,20 @@ def main(cfg: DictConfig) -> None:
     all_dir = Path(cfg.paths.all_tasks_dir)
     out_root = Path(cfg.paths.out_root_dir)
     index_hash = str(cfg.index_hash)
-    id_codes = cfg.id_codes
-    ood_codes = cfg.ood_codes
-    codes = id_codes + ood_codes
+    eval_codes_obj = cfg.eval_codes
 
+    if isinstance(eval_codes_obj, ListConfig):
+        # Flat list case: just read in all codes
+        codes = list(eval_codes_obj)
+    elif isinstance(eval_codes_obj, DictConfig):
+        # Structured case: expect id/ood subfields
+        id_codes = list(eval_codes_obj.get("id", []))
+        ood_codes = list(eval_codes_obj.get("ood", []))
+        codes = id_codes + ood_codes
+    else:
+        raise ValueError(
+            f"eval_codes must be a list or dict with id/ood subfields, got {type(eval_codes_obj)}"
+        )
     skip_existing = bool(cfg.skip_existing)
 
     out_base = out_root / index_hash
