@@ -49,9 +49,8 @@ hash = stable_hash_list(sampled_embed_queries)
 # ---- write file ----
 out_path = f"{OUT_DIR}/embed_{N_SAMPLES}_{hash}.yaml"
 with open(out_path, "x") as f:
-    f.write("codes:\n")
     for code in sampled_embed_queries:
-        f.write(f'  - "{code}"\n')
+        f.write(f'- "{code}"\n')
 
 
 print(f"Done sampling {N_SAMPLES} queries for embedding plots")
