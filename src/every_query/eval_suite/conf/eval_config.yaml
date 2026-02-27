@@ -1,11 +1,11 @@
 defaults:
   - _self_
-  - eval_codes: 10000_ID__8db2be6fadf8_5000
+  - eval_codes: embed_200_6b50c7179bf6
 
 # inputs
 model_run_dir: /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49/
 index_time_hash: 7573f855c4b050a9d79d57fefd8a139c
-task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/aces/${index_time_hash}/
+task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index/${index_time_hash}/
 ckpt_path: last
 
 # Random Codes (queries) to eval
@@ -17,9 +17,10 @@ manual_codes: [MEDS_DEATH]
 output_root: ${model_run_dir}/eval/${index_time_hash}/
 #
 #output_root: /users/gbk2114/eq_stuff/dump/${index_time_hash}
+query_codes: ${eval_codes}
 
 do_overwrite: true
 do_resume: false
 seed: 140799
 only_preprocess: false
-mode: test
+mode: predict

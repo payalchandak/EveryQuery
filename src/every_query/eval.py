@@ -10,7 +10,10 @@ from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
 from omegaconf import DictConfig, OmegaConf
 
-from every_query.utils.codes import code_slug, values_as_list  # noqa: F401 (values_as_list used by config.yaml)
+from every_query.utils.codes import (  # noqa: F401 (values_as_list used by config.yaml)
+    code_slug,
+    values_as_list,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -100,6 +103,7 @@ def _run_test(cfg: DictConfig, train_cfg, M, trainer, task_set_dir: Path) -> Non
 
 def _run_predict(cfg: DictConfig, train_cfg, M, trainer, task_set_dir: Path) -> None:
     codes: list[str] = cfg.query_codes
+
     rows = []
     embed_rows = []
 
@@ -115,11 +119,18 @@ def _run_predict(cfg: DictConfig, train_cfg, M, trainer, task_set_dir: Path) -> 
         D = instantiate(train_cfg.datamodule)
 
         pred_batches = trainer.predict(model=M, datamodule=D, ckpt_path=cfg.ckpt_path)
+        
+        s_ids, p_times, o_probs, q_embeds = [], [], [], []
+        for b in pred_batches:
+            s_ids.append(b["subject_id"])
+            p_times.append(b["prediction_time"])
+            o_probs.append(b["occurs_probs"])
+            q_embeds.append(b["query_embed"])
+        subject_id = torch.cat(s_ids).numpy()
+        prediction_time = torch.cat(p_times).numpy()
+        occurs_probs = torch.cat(o_probs).numpy()
+        query_embeds = torch.cat(q_embeds).numpy()
 
-        subject_id = torch.cat([b["subject_id"] for b in pred_batches]).numpy()
-        prediction_time = torch.cat([b["prediction_time"] for b in pred_batches]).numpy()
-        occurs_probs = torch.cat([b["occurs_probs"] for b in pred_batches]).numpy()
-        query_embeds = torch.cat([b["query_embed"] for b in pred_batches]).numpy()
 
         rows.append(
             pl.DataFrame(
@@ -137,7 +148,7 @@ def _run_predict(cfg: DictConfig, train_cfg, M, trainer, task_set_dir: Path) -> 
                     "prediction_time": prediction_time,
                     "code": [code] * len(subject_id),
                 }
-            ).with_columns(pl.Series("embedding", query_embeds.tolist()))
+            ).with_columns(pl.Series("embedding", query_embeds))
         )
 
     if not rows:
