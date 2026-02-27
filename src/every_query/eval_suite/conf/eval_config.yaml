@@ -22,3 +22,4 @@ do_overwrite: true
 do_resume: false
 seed: 140799
 only_preprocess: false
+mode: test
