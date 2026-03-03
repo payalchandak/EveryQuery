@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -70,7 +71,9 @@ def _run_test(cfg: DictConfig, train_cfg, M, trainer, task_set_dir: Path) -> Non
         train_cfg.datamodule.config.task_labels_dir = task_labels_dir
         D = instantiate(train_cfg.datamodule)
 
+        t0 = time.time()
         out = trainer.test(model=M, datamodule=D, ckpt_path=cfg.ckpt_path)
+        eval_time = time.time() - t0
         m = out[0] if out else {}
 
         rows.append(
@@ -84,6 +87,7 @@ def _run_test(cfg: DictConfig, train_cfg, M, trainer, task_set_dir: Path) -> Non
                 "censor_auc": float(m.get("held_out/censor_auc"))
                 if m.get("held_out/censor_auc") is not None
                 else None,
+                "eval_time": eval_time,
             }
         )
 
