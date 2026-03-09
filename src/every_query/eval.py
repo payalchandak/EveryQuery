@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import hydra
+from hydra.core.hydra_config import HydraConfig
 import polars as pl
 import torch
 from hydra.utils import instantiate
@@ -160,9 +161,13 @@ def _run_predict(cfg: DictConfig, train_cfg, M, trainer, task_set_dir: Path) -> 
         return
 
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+    
+    hc = HydraConfig.get()
+    eval_codes_choice_str = hc.runtime.choices["eval_codes"]
+
     out_dir = Path(cfg.output_root)
-    out_fp = out_dir / f"all_preds_{timestamp}.csv"
-    embed_fp = out_dir / f"query_embeds_{timestamp}.parquet"
+    out_fp = out_dir / f"all_preds_{eval_codes_choice_str}_{timestamp}.csv"
+    embed_fp = out_dir / f"query_embeds_{eval_codes_choice_str}_{timestamp}.parquet"
 
     out_dir.mkdir(parents=True, exist_ok=True)
     pl.concat(rows, how="vertical").write_csv(out_fp)
