@@ -123,7 +123,7 @@ def collate_tasks(cfg: DictConfig) -> str:
                 .rename({"censored": "boolean_value"})
                 .with_columns(pl.col("occurs").fill_null(False))
                 .sample(fraction=1, shuffle=True, seed=cfg.get("seed", 1))
-                .group_by(["subject_id", "duration_days"])
+                .group_by(["subject_id"])
                 .head(cfg.query.sample_times_per_subject)
             )
             shard.write_parquet(f)
