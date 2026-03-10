@@ -82,37 +82,48 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
 
 
 def collate_tasks(cfg: DictConfig) -> str:
-    read_dir = f"{cfg.query.task_dir}/all"
+    task_dir = cfg.query.task_dir
+    durations = list(range(cfg.query.duration_min, cfg.query.duration_max))
 
-    task_str = f"{'|'.join(sorted(cfg.query.codes))}"
+    task_str = f"{'|'.join(sorted(cfg.query.codes))}_{'|'.join(str(d) for d in sorted(durations))}"
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
-    write_dir = f"{cfg.query.task_dir}/collated/{hash_hex}"
+    write_dir = f"{task_dir}/collated/{hash_hex}"
+
+    first_duration = durations[0]
 
     # Eval tasks generated in separate file
     for split in [train_split, tuning_split]:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)
 
-        for file_name in os.listdir(f"{read_dir}/{split}"):
+        for file_name in os.listdir(f"{task_dir}/{first_duration}/{split}"):
             f = f"{write_dir}/{split}/{file_name}"
             logger.info(f"Collating {f}")
 
             if os.path.exists(f):
                 logger.info(f"Skipping shard. Already collated at {f}.")
                 continue
+
+            duration_shards = []
+            for duration in durations:
+                duration_shards.append(
+                    pl.read_parquet(
+                        source=f"{task_dir}/{duration}/{split}/{file_name}",
+                        columns=["subject_id", "prediction_time", "censored", *cfg.query.codes],
+                    )
+                    .with_columns(pl.lit(duration).alias("duration_days"))
+                    .unpivot(
+                        index=["subject_id", "prediction_time", "censored", "duration_days"],
+                        variable_name="query",
+                        value_name="occurs",
+                    )
+                )
+
             shard = (
-                pl.read_parquet(
-                    source=f"{read_dir}/{split}/{file_name}",
-                    columns=["subject_id", "prediction_time", "censored", *cfg.query.codes],
-                )
-                .unpivot(
-                    index=["subject_id", "prediction_time", "censored"],
-                    variable_name="query",
-                    value_name="occurs",
-                )
+                pl.concat(duration_shards)
                 .rename({"censored": "boolean_value"})
                 .with_columns(pl.col("occurs").fill_null(False))
                 .sample(fraction=1, shuffle=True, seed=cfg.get("seed", 1))
-                .group_by("subject_id")
+                .group_by(["subject_id"])
                 .head(cfg.query.sample_times_per_subject)
             )
             shard.write_parquet(f)

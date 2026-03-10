@@ -13,6 +13,8 @@ query:
   task_dir: ${oc.env:TASK_DIR}
   sample_times_per_subject: 20
   codes: ${train_codes.codes}
+  duration_min: 30
+  duration_max: 366
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule

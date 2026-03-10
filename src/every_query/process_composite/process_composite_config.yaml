@@ -1,8 +1,8 @@
 do_overwrite: False
 model_path: /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49
 task_name: readmiss_30d
-predictions_df_path: ${model_path}/eval/${task_name}/${task_name}_all_preds.csv
+split_name: held_out
 
-task_labels_df_path: /users/gbk2114/eic_stuff/make_index_dfs/task_configs/${task_name}/held_out
-
-output_path: ${model_path}/eval/readmiss_30d/
+predictions_df_path: ${model_path}/eval/${task_name}/${split_name}/all_preds_hosp_admin_codes_20260305_014527.csv
+task_labels_df_path: /users/gbk2114/eic_stuff/make_index_dfs/task_configs/${task_name}
+output_path: ${model_path}/eval/${task_name}/${split_name}/

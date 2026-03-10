@@ -1,24 +1,26 @@
 defaults:
   - _self_
-  - eval_codes: admin_codes
+  - eval_codes: hosp_admin_codes
 
 # inputs
 model_run_dir: /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49/
-index_time_hash: 7573f855c4b050a9d79d57fefd8a139c
+index_time_hash: readmiss_30d/held_out
 task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/aces/${index_time_hash}/
 ckpt_path: last
 
 # Random Codes (queries) to eval
-id_codes: #${eval_codes.id}
-ood_codes: #${eval_codes.ood}
+id_codes: ${eval_codes.id}
+ood_codes: ${eval_codes.ood}
 # Hand selected codes to eval model on
 manual_codes: [MEDS_DEATH]
 # where to save eval outputs (outside hydra run dir if you want)
 output_root: ${model_run_dir}/eval/${index_time_hash}/
 #
 #output_root: /users/gbk2114/eq_stuff/dump/${index_time_hash}
+query_codes: ${eval_codes}
 
 do_overwrite: true
 do_resume: false
 seed: 140799
 only_preprocess: false
+mode: predict

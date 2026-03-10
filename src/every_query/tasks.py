@@ -104,27 +104,31 @@ def build_task_label_matrix(
 if __name__ == "__main__":
     read_codes_dir = os.environ.get("PROCESSED")
     read_dir = os.environ.get("INTERMEDIATE")
-    write_dir = f"{os.environ.get('TASK_DIR')}/all"
+    task_dir = os.environ.get("TASK_DIR")
     min_context_per_subject = 50
-    duration = {"minutes": 0, "hours": 0, "days": 30, "weeks": 0}
+    durations = list(range(30, 366))
 
     for split in [train_split, tuning_split, held_out_split]:
         shard_directory = f"{read_dir}/data/{split}"
-        write_directory = f"{write_dir}/{split}"
-        os.makedirs(write_directory, exist_ok=True)
         for file_name in os.listdir(shard_directory):
-            f = f"{write_directory}/{file_name}"
             if not file_name.endswith(".parquet"):
                 continue
-            if os.path.exists(f):
-                print(f"Skipping {f}. Already exists.")
-                continue
+
+            # Read once per shard, shared across all durations
             events_df = read_event_shard(f"{shard_directory}/{file_name}")
             print("Completed read_event_shard")
-            censor_df = compute_censor_dataframe(events_df, min_context_per_subject, duration)
-            print("Completed compute_censor_dataframe")
             query_codes = read_query_codes(read_codes_dir)
             print("Completed read_query_codes")
-            task_df = build_task_label_matrix(events_df, censor_df, query_codes, duration)
-            print("Completed build_task_label_matrix")
-            task_df.write_parquet(f)
+
+            for days in durations:
+                write_directory = f"{task_dir}/{days}/{split}"
+                f = f"{write_directory}/{file_name}"
+                if os.path.exists(f):
+                    print(f"Skipping {f}. Already exists.")
+                    continue
+                os.makedirs(write_directory, exist_ok=True)
+                censor_df = compute_censor_dataframe(events_df, min_context_per_subject, {"days": days})
+                print(f"Completed compute_censor_dataframe for {days} days")
+                task_df = build_task_label_matrix(events_df, censor_df, query_codes, {"days": days})
+                print(f"Completed build_task_label_matrix for {days} days")
+                task_df.write_parquet(f)

@@ -4,6 +4,7 @@ import hydra
 import polars as pl
 from omegaconf import DictConfig
 from sklearn.metrics import roc_auc_score
+from datetime import datetime
 
 
 def agg_probs(
@@ -88,7 +89,8 @@ def main(cfg: DictConfig) -> None:
     out_df = pl.DataFrame(aucs)
 
     out_dir = Path(cfg.output_path)
-    out_fp = out_dir / f"{cfg.task_name}_all_preds.csv"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_fp = out_dir / f"all_preds_{timestamp}.csv"
 
     if out_fp.exists() and not cfg.do_overwrite:
         print(f"Output exists at {out_fp}. Set do_overwrite=true to overwrite.")

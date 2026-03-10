@@ -8,6 +8,7 @@ import yaml
 # total of 40 codes to calculate auroc for
 PARQUET_PATH = "/users/gbk2114/data/MIMIC_MEDS/MEDS_cohort/processed/metadata/codes.parquet"
 SEED = 42
+NUM_CODES = 5000
 
 random.seed(SEED)
 
@@ -17,7 +18,7 @@ random.seed(SEED)
 df = pl.read_parquet(PARQUET_PATH)
 all_codes = set(df["code"].unique().to_list())
 
-training_sets = ["10000_ID__8db2be6fadf8", "10000_ID__fef969fa50be", "10000_ID__e267abdbc547"]
+training_sets = ["10000_ID__8db2be6fadf8"]
 
 for training_set in training_sets:
     with open(f"../train_codes/{training_set}.yaml") as f:
@@ -28,11 +29,15 @@ for training_set in training_sets:
     id_codes = sorted(id_codes)
     ood_codes = sorted(ood_codes)
 
-    id_sampled = random.sample(id_codes, 20)
-    ood_sampled = random.sample(ood_codes, 20)
+    id_sampled = random.sample(id_codes, NUM_CODES)
+    ood_sampled = random.sample(ood_codes, 500)
 
     out_codes = {"id": id_sampled, "ood": ood_sampled}
     os.makedirs("../eval_suite/conf/eval_codes", exist_ok=True)
 
-    with open(f"../eval_suite/conf/eval_codes/{training_set}.yaml", "w") as f:
+    out_fp = f"../eval_suite/conf/eval_codes/{training_set}_{NUM_CODES}.yaml"
+
+    with open(out_fp, "w") as f:
         yaml.safe_dump(out_codes, f)
+
+    print(f"Writtten to {out_fp}")
