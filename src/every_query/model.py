@@ -1,7 +1,7 @@
 import logging
 import textwrap
 from dataclasses import dataclass
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 import torch
 from transformers import AutoConfig, ModernBertConfig, ModernBertModel
@@ -441,44 +441,6 @@ class EveryQueryModel(torch.nn.Module):
             "input_ids": batch.code,
             "attention_mask": attention_mask,
         }
-
-    @torch.no_grad()
-    def get_attention_weights(
-        self,
-        batch: EveryQueryBatch,
-        block: Literal["first", "last"] = "last",
-    ) -> torch.Tensor:
-        """Run a forward pass and return attention weights for one transformer block.
-
-        Args:
-            batch: Input batch.
-            block: Which block to return — ``"first"`` or ``"last"``.
-
-        Returns:
-            Tensor of shape ``(batch_size, num_heads, seq_len, seq_len)``.
-
-        Raises:
-            RuntimeError: If the model uses FlashAttention 2, which does not return
-                attention weights. Re-initialize the model without flash_attn installed
-                to use this method.
-        """
-        orig = self.HF_model.config.output_attentions
-        self.HF_model.config.output_attentions = True
-        try:
-            outputs = self.HF_model(**self._hf_inputs(batch), output_attentions=True)
-        finally:
-            self.HF_model.config.output_attentions = orig
-
-        attentions = outputs.attentions  # tuple of (batch, heads, seq, seq) per layer
-        if attentions is None or all(a is None for a in attentions):
-            raise RuntimeError(
-                "Attention weights are None — this model likely uses FlashAttention 2, which does not "
-                "support returning attention weights. To use get_attention_weights(), either uninstall "
-                "flash_attn or initialize the model in an environment without it."
-            )
-
-        idx = 0 if block == "first" else -1
-        return attentions[idx]  # (batch_size, num_heads, seq_len, seq_len)
 
     def _forward_demo(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         """A demo forward pass that adds more checks and assertions."""
