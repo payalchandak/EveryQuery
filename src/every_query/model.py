@@ -1,7 +1,7 @@
 import logging
 import textwrap
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import torch
 from transformers import AutoConfig, ModernBertConfig, ModernBertModel
@@ -272,6 +272,9 @@ class EveryQueryModel(torch.nn.Module):
         self.occurs_mlp = MLP(
             layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout
         )
+        self.duration_embed = MLP(
+            layers=[1, 64, self.HF_model.config.hidden_size], dropout_prob=self.HF_model.config.mlp_dropout
+        )
         self.criterion = torch.nn.BCEWithLogitsLoss()
 
         self.do_demo = do_demo
@@ -324,11 +327,12 @@ class EveryQueryModel(torch.nn.Module):
             raise ValueError(f"Batch mode {batch.mode} is not supported.")
 
         _batch_size, seq_len = code.shape
+        effective_seq_len = seq_len + (1 if batch.duration_days is not None else 0)
 
-        if seq_len > self.max_seq_len:
+        if effective_seq_len > self.max_seq_len:
             raise ValueError(
-                f"Input sequence length {batch.code.shape[1]} exceeds model max sequence length "
-                f"{self.max_seq_len}."
+                f"Input sequence length {effective_seq_len} (including duration token) exceeds model max "
+                f"sequence length {self.max_seq_len}."
             )
         elif seq_len <= 1:
             raise ValueError(
@@ -421,10 +425,60 @@ class EveryQueryModel(torch.nn.Module):
         Returns:
             A dictionary of inputs for the Hugging Face model.
         """
+        attention_mask = batch.code != batch.PAD_INDEX  # (batch_size, seq_len)
+
+        if batch.duration_days is not None:
+            word_embeds = self.HF_model.embeddings.word_embeddings(batch.code)  # (B, seq_len, H)
+            dur_norm = (batch.duration_days / 365.0).unsqueeze(-1)  # (B, 1)
+            dur_emb = self.duration_embed(dur_norm).unsqueeze(1)    # (B, 1, H)
+            # Insert duration embedding at position 1 (after query token at position 0)
+            inputs_embeds = torch.cat([word_embeds[:, :1, :], dur_emb, word_embeds[:, 1:, :]], dim=1)
+            dur_mask = torch.ones(batch.code.shape[0], 1, dtype=torch.bool, device=batch.code.device)
+            attention_mask = torch.cat([attention_mask[:, :1], dur_mask, attention_mask[:, 1:]], dim=1)
+            return {"inputs_embeds": inputs_embeds, "attention_mask": attention_mask}
+
         return {
             "input_ids": batch.code,
-            "attention_mask": (batch.code != batch.PAD_INDEX),
+            "attention_mask": attention_mask,
         }
+
+    @torch.no_grad()
+    def get_attention_weights(
+        self,
+        batch: EveryQueryBatch,
+        block: Literal["first", "last"] = "last",
+    ) -> torch.Tensor:
+        """Run a forward pass and return attention weights for one transformer block.
+
+        Args:
+            batch: Input batch.
+            block: Which block to return — ``"first"`` or ``"last"``.
+
+        Returns:
+            Tensor of shape ``(batch_size, num_heads, seq_len, seq_len)``.
+
+        Raises:
+            RuntimeError: If the model uses FlashAttention 2, which does not return
+                attention weights. Re-initialize the model without flash_attn installed
+                to use this method.
+        """
+        orig = self.HF_model.config.output_attentions
+        self.HF_model.config.output_attentions = True
+        try:
+            outputs = self.HF_model(**self._hf_inputs(batch), output_attentions=True)
+        finally:
+            self.HF_model.config.output_attentions = orig
+
+        attentions = outputs.attentions  # tuple of (batch, heads, seq, seq) per layer
+        if attentions is None or all(a is None for a in attentions):
+            raise RuntimeError(
+                "Attention weights are None — this model likely uses FlashAttention 2, which does not "
+                "support returning attention weights. To use get_attention_weights(), either uninstall "
+                "flash_attn or initialize the model in an environment without it."
+            )
+
+        idx = 0 if block == "first" else -1
+        return attentions[idx]  # (batch_size, num_heads, seq_len, seq_len)
 
     def _forward_demo(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         """A demo forward pass that adds more checks and assertions."""
