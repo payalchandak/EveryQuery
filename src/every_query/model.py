@@ -273,7 +273,7 @@ class EveryQueryModel(torch.nn.Module):
             layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout
         )
         self.duration_embed = MLP(
-            layers=[1, 64, self.HF_model.config.hidden_size], dropout_prob=self.HF_model.config.mlp_dropout
+            layers=[1, 64, self.HF_model.config.hidden_size], dropout_prob=0
         )
         self.criterion = torch.nn.BCEWithLogitsLoss()
 
