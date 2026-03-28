@@ -154,33 +154,44 @@ def precompute_min_deltas_wide(
     Returns a wide DataFrame with columns:
         subject_id, prediction_time, future_duration, <code_1>, <code_2>, ...
     where each code column contains the minimum duration until that code's next occurrence
-    after prediction_time (or null if it never occurs).
+    strictly after prediction_time (or null if it never occurs).
+
+    Uses join_asof(strategy="forward") per code to avoid the O(n_pred × n_events) cross-join
+    that caused OOM on large shards.
     """
-    pred_times = base_df.select(["subject_id", "prediction_time"])
-
-    # Single join: all prediction times x all future events per subject
-    matched = (
-        pred_times.join(events_df, on="subject_id", how="left")
-        .filter(pl.col("time") > pl.col("prediction_time"))
-        .with_columns((pl.col("time") - pl.col("prediction_time")).alias("delta"))
-        .group_by(["subject_id", "prediction_time", "code"])
-        .agg(pl.col("delta").min().alias("min_delta"))
+    pred_sorted = base_df.sort(["subject_id", "prediction_time"])
+    # Shift by 1µs so join_asof(strategy="forward") gives time >= prediction_time+1µs,
+    # which is equivalent to time > prediction_time for µs-precision datetimes.
+    pred_keys = pred_sorted.select(
+        "subject_id",
+        (pl.col("prediction_time") + pl.duration(microseconds=1)).alias("_pt_shifted"),
+        "prediction_time",
     )
 
-    # Pivot to wide format — one column per code
-    pivoted = matched.pivot(on="code", index=["subject_id", "prediction_time"], values="min_delta")
-
-    # Ensure all query codes have a column (some codes may not appear in any events)
+    code_cols: list[pl.DataFrame] = []
     for code in query_codes:
-        if code not in pivoted.columns:
-            pivoted = pivoted.with_columns(pl.lit(None).alias(code).cast(pl.Duration("us")))
+        code_events = (
+            events_df.filter(pl.col("code") == code)
+            .select(["subject_id", "time"])
+            .sort(["subject_id", "time"])
+        )
+        asof = pred_keys.join_asof(
+            code_events,
+            by="subject_id",
+            left_on="_pt_shifted",
+            right_on="time",
+            strategy="forward",
+        )
+        # time is the first code event strictly after prediction_time (or null if none)
+        delta_col = (
+            pl.when(pl.col("time").is_not_null())
+            .then(pl.col("time") - pl.col("prediction_time"))
+            .otherwise(pl.lit(None).cast(pl.Duration("us")))
+            .alias(code)
+        )
+        code_cols.append(asof.select(delta_col))
 
-    # Join back future_duration from base_df and keep only the requested code columns
-    return base_df.join(
-        pivoted.select(["subject_id", "prediction_time", *query_codes]),
-        on=["subject_id", "prediction_time"],
-        how="left",
-    )
+    return pl.concat([pred_sorted, *code_cols], how="horizontal")
 
 
 def build_task_for_duration(
