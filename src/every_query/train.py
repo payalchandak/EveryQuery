@@ -85,7 +85,14 @@ def collate_tasks(cfg: DictConfig) -> str:
     task_dir = cfg.query.task_dir
     durations = list(range(cfg.query.duration_min, cfg.query.duration_max))
 
-    task_str = f"{'|'.join(sorted(cfg.query.codes))}_{'|'.join(str(d) for d in sorted(durations))}"
+    compound_fraction = cfg.query.get("compound_fraction", 0.0)
+    min_compound_size = cfg.query.get("min_compound_size", 2)
+    max_compound_size = cfg.query.get("max_compound_size", 10)
+
+    task_str = (
+        f"{'|'.join(sorted(cfg.query.codes))}_{'|'.join(str(d) for d in sorted(durations))}"
+        f"_cf{compound_fraction}_min{min_compound_size}_max{max_compound_size}"
+    )
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
     write_dir = f"{task_dir}/collated/{hash_hex}"
 
@@ -113,9 +120,14 @@ def collate_tasks(cfg: DictConfig) -> str:
                     .with_columns(pl.lit(duration).alias("duration_days"))
                     .unpivot(
                         index=["subject_id", "prediction_time", "censored", "duration_days"],
-                        variable_name="query",
+                        variable_name="_code_name",
                         value_name="occurs",
                     )
+                    .with_columns(
+                        pl.lit("ANY").alias("quantifier"),
+                        pl.concat_list("_code_name").alias("query_codes"),
+                    )
+                    .drop("_code_name")
                 )
 
             shard = (
