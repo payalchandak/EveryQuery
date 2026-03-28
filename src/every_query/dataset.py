@@ -34,9 +34,10 @@ class EveryQueryBatch(MEDSTorchBatch):
     censor: torch.BoolTensor | None = None
     occurs: torch.LongTensor | None = None
     query: torch.LongTensor | None = None
+    duration_days: torch.FloatTensor | None = None
 
     # Include new annotations in label tensor names for display
-    LABEL_TENSOR_NAMES: ClassVar[tuple[str]] = ("boolean_value", "censor", "occurs", "query")
+    LABEL_TENSOR_NAMES: ClassVar[tuple[str]] = ("boolean_value", "censor", "occurs", "query", "duration_days")
 
     def __post_init__(self):
         # Run base validations
@@ -49,6 +50,8 @@ class EveryQueryBatch(MEDSTorchBatch):
             self._MEDSTorchBatch__check_shape("occurs", (self.batch_size,))
         if self.query is not None:
             self._MEDSTorchBatch__check_shape("query", (self.batch_size,))
+        if self.duration_days is not None:
+            self._MEDSTorchBatch__check_shape("duration_days", (self.batch_size,))
 
 
 class QueryData(NamedTuple):
@@ -128,6 +131,9 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         if "query" in label_names:
             group_cols.append("query")
             out_cols.append("query")
+        if "duration_days" in label_names:
+            group_cols.append("duration_days")
+            out_cols.append("duration_days")
 
         return (
             label_df.join(schema_df, on=DataSchema.subject_id_name, how="inner", maintain_order="left")
@@ -152,8 +158,10 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         # Extra task annotations
         self.has_occurs: bool = "occurs" in self.schema_df.collect_schema().names()
         self.has_query: bool = "query" in self.schema_df.collect_schema().names()
+        self.has_duration_days: bool = "duration_days" in self.schema_df.collect_schema().names()
         self.occurs = self.schema_df["occurs"] if self.has_occurs else None
         self.query = self.schema_df["query"] if self.has_query else None
+        self.duration_days = self.schema_df["duration_days"] if self.has_duration_days else None
         # Load code vocabulary mapping (string code -> integer vocab index) for encoding queries
         try:
             code_meta = pl.read_parquet(
@@ -179,7 +187,7 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         def read_df(fp: Path) -> pl.DataFrame:
             schema = pq.read_schema(fp)
             extras = []
-            for extra_col in [self.LABEL_COL, "occurs", "query"]:
+            for extra_col in [self.LABEL_COL, "occurs", "query", "duration_days"]:
                 if extra_col in schema.names:
                     extras.append(extra_col)
             label_cols = [*required_cols, *extras]
@@ -213,6 +221,8 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
             out["occurs"] = self.occurs[idx]
         if getattr(self, "has_query", False):
             out["query"] = self.query[idx]
+        if getattr(self, "has_duration_days", False):
+            out["duration_days"] = self.duration_days[idx]
 
         return out
 
@@ -230,4 +240,6 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         if getattr(self, "has_query", False):
             query_ids = [self.encode_query(item["query"]) for item in batch]
             out["query"] = torch.as_tensor(query_ids).long()
+        if getattr(self, "has_duration_days", False):
+            out["duration_days"] = torch.as_tensor([item["duration_days"] for item in batch]).float()
         return EveryQueryBatch(**out)
