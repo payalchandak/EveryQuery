@@ -97,6 +97,7 @@ def collate_tasks(cfg: DictConfig) -> str:
     geometric_p = cfg.query.geometric_p
     max_query_codes = cfg.query.max_query_codes
     seed = cfg.get("seed", 1)
+    num_queries = cfg.query.queries_per_shard
 
     task_str = (
         f"{'|'.join(sorted(cfg.query.codes))}_{'|'.join(str(d) for d in sorted(durations))}"
@@ -107,7 +108,6 @@ def collate_tasks(cfg: DictConfig) -> str:
 
     first_duration = durations[0]
     all_codes = list(cfg.query.codes)
-    num_queries = cfg.query.queries_per_shard
     rng = np.random.default_rng(seed)
 
     for split in [train_split, tuning_split]:
