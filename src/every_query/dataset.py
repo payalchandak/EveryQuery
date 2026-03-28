@@ -103,7 +103,7 @@ class QueryData(NamedTuple):
                 query_dict = {
                     "time_delta_days": [np.nan],
                     "code": [self.code],
-                    "numeric_value": [np.nan],
+                    "numeric_value": [[np.nan for _ in range(len(self.code))]],
                 }
             case BatchMode.SM:
                 query_dict = {
@@ -154,9 +154,12 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         if "occurs" in label_names:
             group_cols.append("occurs")
             out_cols.append("occurs")
-        if "query" in label_names:
-            group_cols.append("query")
-            out_cols.append("query")
+        if "quantifier" in label_names:
+            group_cols.append("quantifier")
+            out_cols.append("quantifier")
+        if "query_codes" in label_names:
+            group_cols.append("query_codes")
+            out_cols.append("query_codes")
         if "duration_days" in label_names:
             group_cols.append("duration_days")
             out_cols.append("duration_days")
@@ -183,10 +186,12 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
 
         # Extra task annotations
         self.has_occurs: bool = "occurs" in self.schema_df.collect_schema().names()
-        self.has_query: bool = "query" in self.schema_df.collect_schema().names()
+        self.has_quantifier: bool = "quantifier" in self.schema_df.collect_schema().names()
+        self.has_query_codes: bool = "query_codes" in self.schema_df.collect_schema().names()
         self.has_duration_days: bool = "duration_days" in self.schema_df.collect_schema().names()
         self.occurs = self.schema_df["occurs"] if self.has_occurs else None
-        self.query = self.schema_df["query"] if self.has_query else None
+        self.quantifier = self.schema_df["quantifier"] if self.has_quantifier else None
+        self.query_codes = self.schema_df["query_codes"] if self.has_query_codes else None
         self.duration_days = self.schema_df["duration_days"] if self.has_duration_days else None
         # Load code vocabulary mapping (string code -> integer vocab index) for encoding queries
         try:
@@ -213,7 +218,7 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         def read_df(fp: Path) -> pl.DataFrame:
             schema = pq.read_schema(fp)
             extras = []
-            for extra_col in [self.LABEL_COL, "occurs", "query", "duration_days"]:
+            for extra_col in [self.LABEL_COL, "occurs", "quantifier", "query_codes", "duration_days"]:
                 if extra_col in schema.names:
                     extras.append(extra_col)
             label_cols = [*required_cols, *extras]
@@ -239,14 +244,16 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         dynamic_data = out["dynamic"]
         schema = dynamic_data.schema
         schema["code"] = np.int16
-        query_data = QueryData(code=[self.encode_query(self.query[idx])])
+        query_data = QueryData(code=[self.encode_query(c) for c in self.query_codes[idx]])
         query_as_JNRT = query_data.to_JNRT(self.config.batch_mode, schema)
         out["dynamic"] = JointNestedRaggedTensorDict.concatenate([query_as_JNRT, dynamic_data])
 
         if getattr(self, "has_occurs", False):
             out["occurs"] = self.occurs[idx]
-        if getattr(self, "has_query", False):
-            out["query"] = self.query[idx]
+        if getattr(self, "has_quantifier", False):
+            out["quantifier"] = self.quantifier[idx]
+        if getattr(self, "has_query_codes", False):
+            out["query_codes"] = self.query_codes[idx]
         if getattr(self, "has_duration_days", False):
             out["duration_days"] = self.duration_days[idx]
 
@@ -263,9 +270,6 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
             out["censor"] = out[self.LABEL_COL]
         if getattr(self, "has_occurs", False):
             out["occurs"] = torch.Tensor([item["occurs"] for item in batch]).long()
-        if getattr(self, "has_query", False):
-            query_ids = [self.encode_query(item["query"]) for item in batch]
-            out["query"] = torch.as_tensor(query_ids).long()
         if getattr(self, "has_duration_days", False):
             out["duration_days"] = torch.as_tensor([item["duration_days"] for item in batch]).float()
         return EveryQueryBatch(**out)
