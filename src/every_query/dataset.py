@@ -28,6 +28,29 @@ class EveryQueryBatch(MEDSTorchBatch):
     All other behavior is inherited unchanged.
     """
 
+    # Special token IDs for the uniform query prefix format:
+    #   [QUANT, c1, ..., cN, SEP, DUR, SEP, patient_event_1, ..., PAD...]
+    # Assigned at runtime via configure_special_tokens(backbone_vocab_size).
+    NUM_SPECIAL_TOKENS: ClassVar[int] = 4
+    ANY_TOKEN_ID: ClassVar[int | None] = None
+    ALL_TOKEN_ID: ClassVar[int | None] = None
+    SEP_TOKEN_ID: ClassVar[int | None] = None
+    DUR_TOKEN_ID: ClassVar[int | None] = None
+
+    @classmethod
+    def configure_special_tokens(cls, backbone_vocab_size: int) -> int:
+        """Assign special-token IDs starting at *backbone_vocab_size*.
+
+        Must be called once before any batch is created (e.g. during model or
+        dataset initialization).  Returns the total effective vocab size so
+        callers can resize the backbone's embedding table if needed.
+        """
+        cls.ANY_TOKEN_ID = backbone_vocab_size
+        cls.ALL_TOKEN_ID = backbone_vocab_size + 1
+        cls.SEP_TOKEN_ID = backbone_vocab_size + 2
+        cls.DUR_TOKEN_ID = backbone_vocab_size + 3
+        return backbone_vocab_size + cls.NUM_SPECIAL_TOKENS
+
     # Extra task annotations (subject-level)
     subject_id: torch.LongTensor | None = None
     prediction_time: torch.LongTensor | None = None
@@ -35,6 +58,7 @@ class EveryQueryBatch(MEDSTorchBatch):
     occurs: torch.LongTensor | None = None
     query: torch.LongTensor | None = None
     duration_days: torch.FloatTensor | None = None
+    query_embed_position: torch.LongTensor | None = None
 
     # Include new annotations in label tensor names for display
     LABEL_TENSOR_NAMES: ClassVar[tuple[str]] = ("boolean_value", "censor", "occurs", "query", "duration_days")
@@ -52,6 +76,8 @@ class EveryQueryBatch(MEDSTorchBatch):
             self._MEDSTorchBatch__check_shape("query", (self.batch_size,))
         if self.duration_days is not None:
             self._MEDSTorchBatch__check_shape("duration_days", (self.batch_size,))
+        if self.query_embed_position is not None:
+            self._MEDSTorchBatch__check_shape("query_embed_position", (self.batch_size,))
 
 
 class QueryData(NamedTuple):
