@@ -180,6 +180,178 @@ class TestPrecomputeMinDeltasWide:
         assert min_deltas["FAKE//Z99"].null_count() == min_deltas.height
 
 
+class TestCensorRegressionEdgeCases:
+    """Regression tests for edge-case inputs — new pipeline vs reference."""
+
+    def test_single_event_subject(self):
+        """Subject with exactly min_context events: last event is prediction_time and record_end_time.
+
+        future_duration = 0, so every prediction time should be censored.
+        """
+        min_context = 3
+        base = datetime(2020, 1, 1)
+        rows = [{"subject_id": 1, "time": base + timedelta(days=i), "code": "ICD//A01"} for i in range(min_context)]
+        events_df = pl.DataFrame(rows).sort(["subject_id", "time"])
+
+        for days in [30, 90]:
+            duration = {"days": days}
+            ref = tasks_reference.compute_censor_dataframe(events_df, min_context, duration)
+            base_df = tasks.compute_base_prediction_times(events_df, min_context)
+            new = tasks.derive_censor_for_duration(base_df, duration)
+            ref_sorted, new_sorted = _align_columns(_sort_df(ref), _sort_df(new))
+            assert ref_sorted.equals(new_sorted), f"Single-event subject mismatch at duration={days}"
+            # All rows should be censored
+            assert new_sorted["censored"].all(), "Subject at record_end_time should always be censored"
+
+    def test_code_occurs_at_prediction_time_boundary(self):
+        """Event at exactly prediction_time should NOT count (strict > boundary)."""
+        base = datetime(2020, 1, 1)
+        # Subject 1: 10 context events, then a query event at the prediction_time itself
+        rows = [{"subject_id": 1, "time": base + timedelta(days=i), "code": "ICD//A01"} for i in range(10)]
+        # Add the query code at the last context event time (i.e., prediction_time = that time)
+        rows.append({"subject_id": 1, "time": base + timedelta(days=9), "code": "ICD//QUERY"})
+        # Add future events so the row is not censored
+        rows.append({"subject_id": 1, "time": base + timedelta(days=100), "code": "ICD//A01"})
+        events_df = pl.DataFrame(rows).sort(["subject_id", "time"])
+        query_codes = ["ICD//QUERY"]
+        min_context = 5
+        duration = {"days": 90}
+
+        ref_censor = tasks_reference.compute_censor_dataframe(events_df, min_context, duration)
+        ref_labels = tasks_reference.build_task_label_matrix(events_df, ref_censor, query_codes, duration)
+
+        base_df = tasks.compute_base_prediction_times(events_df, min_context)
+        min_deltas = tasks.precompute_min_deltas_wide(events_df, base_df, query_codes)
+        new_labels = tasks.build_task_for_duration(min_deltas, query_codes, duration)
+
+        ref_sorted, new_sorted = _align_columns(_sort_df(ref_labels), _sort_df(new_labels))
+        assert ref_sorted.equals(new_sorted), "Boundary at prediction_time mismatch"
+        # The row where prediction_time == query event time should have label False
+        at_boundary = new_sorted.filter(pl.col("prediction_time") == base + timedelta(days=9))
+        assert not at_boundary.is_empty()
+        assert not at_boundary["ICD//QUERY"][0], "Event at prediction_time should not count"
+
+    def test_code_occurs_at_duration_end_boundary(self):
+        """Event at exactly prediction_time + duration should NOT count (strict < boundary)."""
+        base = datetime(2020, 1, 1)
+        rows = [{"subject_id": 1, "time": base + timedelta(days=i), "code": "ICD//A01"} for i in range(10)]
+        # Query event at exactly prediction_time + 30 days for the prediction at day 9
+        rows.append({"subject_id": 1, "time": base + timedelta(days=9 + 30), "code": "ICD//QUERY"})
+        # Extend record so not censored
+        rows.append({"subject_id": 1, "time": base + timedelta(days=200), "code": "ICD//A01"})
+        events_df = pl.DataFrame(rows).sort(["subject_id", "time"])
+        query_codes = ["ICD//QUERY"]
+        min_context = 5
+        duration = {"days": 30}
+
+        ref_censor = tasks_reference.compute_censor_dataframe(events_df, min_context, duration)
+        ref_labels = tasks_reference.build_task_label_matrix(events_df, ref_censor, query_codes, duration)
+
+        base_df = tasks.compute_base_prediction_times(events_df, min_context)
+        min_deltas = tasks.precompute_min_deltas_wide(events_df, base_df, query_codes)
+        new_labels = tasks.build_task_for_duration(min_deltas, query_codes, duration)
+
+        ref_sorted, new_sorted = _align_columns(_sort_df(ref_labels), _sort_df(new_labels))
+        assert ref_sorted.equals(new_sorted), "Boundary at prediction_time + duration mismatch"
+        # The row at prediction day 9: query at day 39, duration=30 -> day 39 == day 9+30, should be False
+        at_pred = new_sorted.filter(
+            (~pl.col("censored")) & (pl.col("prediction_time") == base + timedelta(days=9))
+        )
+        assert not at_pred.is_empty()
+        assert not at_pred["ICD//QUERY"][0], "Event at prediction_time + duration should not count"
+
+    def test_code_only_in_past(self):
+        """Code present in dataset but only before all prediction times should yield False, not null."""
+        base = datetime(2020, 1, 1)
+        rows = [{"subject_id": 1, "time": base + timedelta(days=i), "code": "ICD//A01"} for i in range(10)]
+        # Query code only at day 0 — before any valid prediction time (min_context=5 -> first pred at day 4)
+        rows.append({"subject_id": 1, "time": base, "code": "ICD//QUERY"})
+        # Extend record so not censored at duration=30
+        rows.append({"subject_id": 1, "time": base + timedelta(days=200), "code": "ICD//A01"})
+        events_df = pl.DataFrame(rows).sort(["subject_id", "time"])
+        query_codes = ["ICD//QUERY"]
+        min_context = 5
+        duration = {"days": 30}
+
+        ref_censor = tasks_reference.compute_censor_dataframe(events_df, min_context, duration)
+        ref_labels = tasks_reference.build_task_label_matrix(events_df, ref_censor, query_codes, duration)
+
+        base_df = tasks.compute_base_prediction_times(events_df, min_context)
+        min_deltas = tasks.precompute_min_deltas_wide(events_df, base_df, query_codes)
+        new_labels = tasks.build_task_for_duration(min_deltas, query_codes, duration)
+
+        ref_sorted, new_sorted = _align_columns(_sort_df(ref_labels), _sort_df(new_labels))
+        assert ref_sorted.equals(new_sorted), "Code-only-in-past mismatch"
+        # Uncensored rows should have False, not null
+        uncensored = new_sorted.filter(~pl.col("censored"))
+        assert not uncensored.is_empty()
+        assert uncensored["ICD//QUERY"].null_count() == 0
+        assert not uncensored["ICD//QUERY"].any()
+
+    def test_all_rows_censored(self):
+        """When all prediction times are censored, code label columns should all be null."""
+        base = datetime(2020, 1, 1)
+        # Only 6 events, record ends at day 5; duration=365 ensures everything is censored
+        rows = [{"subject_id": 1, "time": base + timedelta(days=i), "code": "ICD//A01"} for i in range(6)]
+        events_df = pl.DataFrame(rows).sort(["subject_id", "time"])
+        query_codes = ["ICD//A01"]
+        min_context = 3
+        duration = {"days": 365}
+
+        ref_censor = tasks_reference.compute_censor_dataframe(events_df, min_context, duration)
+        ref_labels = tasks_reference.build_task_label_matrix(events_df, ref_censor, query_codes, duration)
+
+        base_df = tasks.compute_base_prediction_times(events_df, min_context)
+        min_deltas = tasks.precompute_min_deltas_wide(events_df, base_df, query_codes)
+        new_labels = tasks.build_task_for_duration(min_deltas, query_codes, duration)
+
+        ref_sorted, new_sorted = _align_columns(_sort_df(ref_labels), _sort_df(new_labels))
+        assert ref_sorted.equals(new_sorted), "All-censored mismatch"
+        assert new_sorted["censored"].all()
+        assert new_sorted["ICD//A01"].null_count() == new_sorted.height
+
+    def test_single_subject(self):
+        """Regression with n=1 subject to catch any aggregation edge cases."""
+        base = datetime(2020, 1, 1)
+        rows = [{"subject_id": 1, "time": base + timedelta(days=i * 5), "code": "ICD//A01"} for i in range(20)]
+        events_df = pl.DataFrame(rows).sort(["subject_id", "time"])
+        query_codes = ["ICD//A01"]
+        min_context = 5
+
+        for days in [30, 90]:
+            duration = {"days": days}
+            ref_censor = tasks_reference.compute_censor_dataframe(events_df, min_context, duration)
+            ref_labels = tasks_reference.build_task_label_matrix(events_df, ref_censor, query_codes, duration)
+
+            base_df = tasks.compute_base_prediction_times(events_df, min_context)
+            min_deltas = tasks.precompute_min_deltas_wide(events_df, base_df, query_codes)
+            new_labels = tasks.build_task_for_duration(min_deltas, query_codes, duration)
+
+            ref_sorted, new_sorted = _align_columns(_sort_df(ref_labels), _sort_df(new_labels))
+            assert ref_sorted.equals(new_sorted), f"Single-subject mismatch at duration={days}"
+
+    def test_duplicate_timestamps_in_input(self):
+        """Duplicate (subject_id, time, code) rows should not cause divergence between pipelines."""
+        base = datetime(2020, 1, 1)
+        rows = [{"subject_id": 1, "time": base + timedelta(days=i), "code": "ICD//A01"} for i in range(15)]
+        # Add duplicates
+        rows += rows[:5]
+        events_df = pl.DataFrame(rows).sort(["subject_id", "time"])
+        query_codes = ["ICD//A01"]
+        min_context = 5
+        duration = {"days": 30}
+
+        ref_censor = tasks_reference.compute_censor_dataframe(events_df, min_context, duration)
+        ref_labels = tasks_reference.build_task_label_matrix(events_df, ref_censor, query_codes, duration)
+
+        base_df = tasks.compute_base_prediction_times(events_df, min_context)
+        min_deltas = tasks.precompute_min_deltas_wide(events_df, base_df, query_codes)
+        new_labels = tasks.build_task_for_duration(min_deltas, query_codes, duration)
+
+        ref_sorted, new_sorted = _align_columns(_sort_df(ref_labels), _sort_df(new_labels))
+        assert ref_sorted.equals(new_sorted), "Duplicate-timestamp mismatch"
+
+
 class TestSampleDurations:
     def test_reproducibility(self):
         d1 = tasks.sample_durations(100, 1, 731, seed=42)
