@@ -83,7 +83,14 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
 
 def collate_tasks(cfg: DictConfig) -> str:
     task_dir = cfg.query.task_dir
-    durations = list(range(cfg.query.duration_min, cfg.query.duration_max))
+    durations_path = f"{task_dir}/sampled_durations.json"
+    if os.path.exists(durations_path):
+        import json
+
+        with open(durations_path) as f:
+            durations = json.load(f)
+    else:
+        durations = list(range(cfg.query.duration_min, cfg.query.duration_max))
 
     task_str = f"{'|'.join(sorted(cfg.query.codes))}_{'|'.join(str(d) for d in sorted(durations))}"
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()

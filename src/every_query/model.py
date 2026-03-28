@@ -272,9 +272,7 @@ class EveryQueryModel(torch.nn.Module):
         self.occurs_mlp = MLP(
             layers=[self.HF_model.config.hidden_size, 128, 1], dropout_prob=self.HF_model.config.mlp_dropout
         )
-        self.duration_embed = MLP(
-            layers=[1, 64, self.HF_model.config.hidden_size], dropout_prob=0
-        )
+        self.duration_embed = MLP(layers=[1, 64, self.HF_model.config.hidden_size], dropout_prob=0)
         self.criterion = torch.nn.BCEWithLogitsLoss()
 
         self.do_demo = do_demo
@@ -430,7 +428,7 @@ class EveryQueryModel(torch.nn.Module):
         if batch.duration_days is not None:
             word_embeds = self.HF_model.embeddings.word_embeddings(batch.code)  # (B, seq_len, H)
             dur_norm = (batch.duration_days / 365.0).unsqueeze(-1)  # (B, 1)
-            dur_emb = self.duration_embed(dur_norm).unsqueeze(1)    # (B, 1, H)
+            dur_emb = self.duration_embed(dur_norm).unsqueeze(1)  # (B, 1, H)
             # Insert duration embedding at position 1 (after query token at position 0)
             inputs_embeds = torch.cat([word_embeds[:, :1, :], dur_emb, word_embeds[:, 1:, :]], dim=1)
             dur_mask = torch.ones(batch.code.shape[0], 1, dtype=torch.bool, device=batch.code.device)

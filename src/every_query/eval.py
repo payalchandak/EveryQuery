@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any
 
 import hydra
-from hydra.core.hydra_config import HydraConfig
 import polars as pl
 import torch
+from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
 from omegaconf import DictConfig, OmegaConf
@@ -124,7 +124,7 @@ def _run_predict(cfg: DictConfig, train_cfg, M, trainer, task_set_dir: Path) -> 
         D = instantiate(train_cfg.datamodule)
 
         pred_batches = trainer.predict(model=M, datamodule=D, ckpt_path=cfg.ckpt_path)
-        
+
         s_ids, p_times, o_probs, q_embeds = [], [], [], []
         for b in pred_batches:
             s_ids.append(b["subject_id"])
@@ -135,7 +135,6 @@ def _run_predict(cfg: DictConfig, train_cfg, M, trainer, task_set_dir: Path) -> 
         prediction_time = torch.cat(p_times).numpy()
         occurs_probs = torch.cat(o_probs).numpy()
         query_embeds = torch.cat(q_embeds).numpy()
-
 
         rows.append(
             pl.DataFrame(
@@ -161,7 +160,7 @@ def _run_predict(cfg: DictConfig, train_cfg, M, trainer, task_set_dir: Path) -> 
         return
 
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
-    
+
     hc = HydraConfig.get()
     eval_codes_choice_str = hc.runtime.choices["eval_codes"]
 
