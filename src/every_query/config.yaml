@@ -15,6 +15,9 @@ query:
   codes: ${train_codes.codes}
   duration_min: 30
   duration_max: 366
+  compound_fraction: 0.3
+  min_compound_size: 2
+  max_compound_size: 10
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
