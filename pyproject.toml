@@ -33,6 +33,7 @@ dependencies = [
   "torchmetrics",
   "lightning~=2.5.1",
   "dotenv>=0.9.9",
+  "scikit-learn",
 ] # Add your runtime dependencies here
 
 [dependency-groups]
