@@ -73,6 +73,9 @@ trainer:
     config:
       query_codes: ${train_codes.codes}
       num_query_codes: ${list_len:${train_codes.codes}}
+      geometric_p: ${query.geometric_p}
+      max_query_codes: ${query.max_query_codes}
+      queries_per_shard: ${query.queries_per_shard}
   callbacks:
     _target_: __main__.values_as_list
     learning_rate_monitor:
