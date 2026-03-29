@@ -261,6 +261,9 @@ class EveryQueryModel(torch.nn.Module):
 
         self.HF_model = ModernBertModel._from_config(self.HF_model_config, **extra_kwargs)
 
+        total_vocab = EveryQueryBatch.configure_special_tokens(self.HF_model_config.vocab_size)
+        self.HF_model.resize_token_embeddings(total_vocab)
+
         self.do_grad_ckpt = do_grad_ckpt
         if self.do_grad_ckpt and hasattr(self.HF_model, "gradient_checkpointing_enable"):
             self.HF_model.gradient_checkpointing_enable()
