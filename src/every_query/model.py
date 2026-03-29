@@ -230,10 +230,14 @@ class EveryQueryModel(torch.nn.Module):
         do_demo: bool = False,
         do_grad_ckpt: bool = False,
         mlp_dropout: float = 0.1,
+        model_name_or_config: str | ModernBertConfig = "answerdotai/ModernBERT-base",
     ):
         super().__init__()
 
-        self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained("answerdotai/ModernBERT-base")
+        if isinstance(model_name_or_config, ModernBertConfig):
+            self.HF_model_config = model_name_or_config
+        else:
+            self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained(model_name_or_config)
 
         extra_kwargs = {"torch_dtype": self.PRECISION_TO_MODEL_WEIGHTS_DTYPE.get(precision)}
 
@@ -285,6 +289,7 @@ class EveryQueryModel(torch.nn.Module):
             "precision": precision,
             "do_demo": do_demo,
             "mlp_dropout": self.HF_model.config.mlp_dropout,
+            "model_name_or_config": model_name_or_config,
         }
 
     @property
