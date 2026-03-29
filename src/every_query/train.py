@@ -150,6 +150,12 @@ def collate_tasks(cfg: DictConfig) -> str:
                         "duration_days",
                         occurs_expr.alias("occurs"),
                         pl.lit(quantifier).alias("quantifier"),
+                        # Broadcasts a single list value (e.g. ["A", "B"]) as a constant column across
+                        # all rows, tagging each row with the codes that define this query.
+                        # Wrapping a Python list in a one-element Series of dtype List, then calling
+                        # .first() collapses the length-1 Series to a scalar so Polars can broadcast it.
+                        # This is brittle: future Polars versions may change lit(Series) semantics or
+                        # alignment rules, and the .first() trick silently masks shape mismatches.
                         pl.lit(pl.Series("query_codes", [codes_subset])).first().alias("query_codes"),
                     )
                     query_frames.append(query_frame)
