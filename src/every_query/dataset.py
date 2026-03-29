@@ -81,35 +81,45 @@ class EveryQueryBatch(MEDSTorchBatch):
 
 
 class QueryData(NamedTuple):
-    """Simple data structure to hold query data, capturing codes.
+    """Holds the full query prefix token sequence for encoding into a JNRT.
 
-    As a `NamedTuple`, can be accessed both by index (e.g. `data[0]`) and by attribute (e.g. `data.code`).
+    ``prefix_tokens`` contains the complete prefix::
 
-    Attributes:
-        code: List of integer codes.
+        [QUANT, c1, ..., cN, SEP, DUR, SEP]
+
+    where QUANT is ANY or ALL, c1..cN are medical-code vocab indices,
+    and SEP / DUR are special tokens assigned by
+    ``EveryQueryBatch.configure_special_tokens``.
+
+    DUR will later be overwritten by a continuous time embedding.
+
+    All tokens are placed in the JNRT ``code`` column with ``NaN``
+    ``time_delta_days`` and ``numeric_value`` (same as patient events
+    without those fields).
     """
 
-    code: list[int]
+    prefix_tokens: list[int]
 
     def to_JNRT(self, batch_mode: BatchMode, schema: dict | None = None) -> JointNestedRaggedTensorDict:
-        """Converts the query data into a JointNestedRaggedTensorDict representation.
+        """Converts the query prefix into a JointNestedRaggedTensorDict.
 
         Raises:
             ValueError: If the batch mode is not SEM or SM.
         """
 
+        n = len(self.prefix_tokens)
         match batch_mode:
             case BatchMode.SEM:
                 query_dict = {
                     "time_delta_days": [np.nan],
-                    "code": [self.code],
-                    "numeric_value": [[np.nan for _ in range(len(self.code))]],
+                    "code": [self.prefix_tokens],
+                    "numeric_value": [[np.nan] * n],
                 }
             case BatchMode.SM:
                 query_dict = {
-                    "time_delta_days": [np.nan for _ in range(len(self.code))],
-                    "code": self.code,
-                    "numeric_value": [np.nan for _ in range(len(self.code))],
+                    "time_delta_days": [np.nan] * n,
+                    "code": self.prefix_tokens,
+                    "numeric_value": [np.nan] * n,
                 }
             case _:
                 raise ValueError(f"Invalid batch mode {batch_mode}!")
@@ -227,8 +237,8 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         logger.info(f"Reading tasks from {self.config.task_labels_fps}")
         return pl.concat([read_df(fp) for fp in self.config.task_labels_fps], how="vertical")
 
-    def encode_query(self, code_name: str) -> int:
-        """Encode query using the canonical code vocabulary mapping."""
+    def encode_query_code(self, code_name: str) -> int:
+        """Encode query code using the canonical code vocabulary mapping."""
         try:
             return int(self.code_to_index.get(code_name, EveryQueryBatch.PAD_INDEX))
         except Exception:
@@ -244,9 +254,25 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         dynamic_data = out["dynamic"]
         schema = dynamic_data.schema
         schema["code"] = np.int16
-        query_data = QueryData(code=[self.encode_query(c) for c in self.query_codes[idx]])
+
+        quantifier_str = self.quantifier[idx]
+        quant_token = (
+            EveryQueryBatch.ANY_TOKEN_ID if quantifier_str == "ANY" else EveryQueryBatch.ALL_TOKEN_ID
+        )
+        encoded_codes = [self.encode_query_code(c) for c in self.query_codes[idx]]
+        prefix_tokens = [
+            quant_token,
+            *encoded_codes,
+            EveryQueryBatch.SEP_TOKEN_ID,
+            EveryQueryBatch.DUR_TOKEN_ID,
+            EveryQueryBatch.SEP_TOKEN_ID,
+        ]
+
+        query_data = QueryData(prefix_tokens=prefix_tokens)
         query_as_JNRT = query_data.to_JNRT(self.config.batch_mode, schema)
         out["dynamic"] = JointNestedRaggedTensorDict.concatenate([query_as_JNRT, dynamic_data])
+
+        out["query_embed_position"] = len(prefix_tokens) - 1
 
         if getattr(self, "has_occurs", False):
             out["occurs"] = self.occurs[idx]
@@ -272,4 +298,7 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
             out["occurs"] = torch.Tensor([item["occurs"] for item in batch]).long()
         if getattr(self, "has_duration_days", False):
             out["duration_days"] = torch.as_tensor([item["duration_days"] for item in batch]).float()
+        out["query_embed_position"] = torch.as_tensor(
+            [item["query_embed_position"] for item in batch]
+        ).long()
         return EveryQueryBatch(**out)
