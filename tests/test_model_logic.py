@@ -368,3 +368,108 @@ class TestLogitsIndependentOfTargets:
         assert not torch.equal(baseline_loss, perturbed_loss), (
             "total loss should change when censor/occurs targets are flipped"
         )
+
+
+class TestCrossLossTargetIndependence:
+    """``censor_loss`` must be independent of ``batch.occurs``.
+
+    ``censor_loss`` is computed from ``censor_logits`` and ``batch.censor`` only
+    (``censor_loss = self._get_loss(censor_logits, batch.censor, mask=None)``).
+    ``batch.occurs`` participates only in the ``occurs_loss`` path.  If a bug
+    accidentally threads ``batch.occurs`` into the ``censor_loss`` computation,
+    this test class catches it.
+
+    The existing ``TestLogitsIndependentOfTargets`` flips *both* targets
+    simultaneously and therefore cannot isolate this single-target property.
+    """
+
+    @torch.no_grad()
+    def test_flipping_occurs_preserves_censor_loss(self, demo_model, sample_batch):
+        """Perturbing only ``occurs`` must leave ``censor_logits`` and ``censor_loss`` bit-identical."""
+        _, baseline_out = demo_model._forward(sample_batch)
+        assert baseline_out.censor_loss.isfinite(), (
+            "Precondition: baseline censor_loss must be finite for equality check"
+        )
+
+        perturbed = copy.deepcopy(sample_batch)
+        perturbed.occurs = 1 - perturbed.occurs
+
+        assert not torch.equal(sample_batch.occurs, perturbed.occurs), (
+            "Precondition: occurs targets must actually differ after flip"
+        )
+        assert torch.equal(sample_batch.censor, perturbed.censor), (
+            "Precondition: censor targets must be untouched"
+        )
+
+        _, perturbed_out = demo_model._forward(perturbed)
+
+        assert torch.equal(baseline_out.censor_logits, perturbed_out.censor_logits), (
+            "censor_logits must not change when only occurs targets are flipped "
+            "(logits depend on input codes/embeddings, not target tensors)"
+        )
+        assert torch.equal(baseline_out.censor_loss, perturbed_out.censor_loss), (
+            "censor_loss must not change when only occurs targets are flipped"
+        )
+
+    @torch.no_grad()
+    def test_flipping_occurs_changes_occurs_loss(self, demo_model, sample_batch):
+        """Negative control: flipping ``occurs`` must change ``occurs_loss``.
+
+        Proves the occurs-flip perturbation is non-trivial — the model does use
+        ``batch.occurs`` in at least the ``occurs_loss`` path.
+        """
+        assert (~sample_batch.censor).any(), (
+            "Precondition: at least one uncensored sample is required "
+            "for occurs_loss to be sensitive to occurs targets"
+        )
+
+        _, baseline_out = demo_model._forward(sample_batch)
+        assert baseline_out.occurs_loss.isfinite(), (
+            "Precondition: baseline occurs_loss must be finite"
+        )
+
+        perturbed = copy.deepcopy(sample_batch)
+        perturbed.occurs = 1 - perturbed.occurs
+
+        _, perturbed_out = demo_model._forward(perturbed)
+
+        assert not torch.equal(baseline_out.occurs_loss, perturbed_out.occurs_loss), (
+            "occurs_loss should change when occurs targets are flipped "
+            "(negative control for censor_loss invariance)"
+        )
+
+    @torch.no_grad()
+    def test_flipping_censor_changes_censor_loss(self, demo_model, sample_batch):
+        """Negative control: flipping ``censor`` must change ``censor_loss``.
+
+        Proves ``censor_loss`` is not trivially constant — it genuinely depends
+        on ``batch.censor``, and the invariance to ``batch.occurs`` is a real
+        isolation property, not an artefact of ``censor_loss`` being insensitive
+        to all targets.
+
+        Edge-case guard: with a two-sample batch and ``mean`` reduction,
+        ``~censor`` permutes the targets.  The mean BCE is permutation-invariant
+        when all logits are identical, so we assert logit diversity first.
+        """
+        _, baseline_out = demo_model._forward(sample_batch)
+        assert baseline_out.censor_loss.isfinite(), (
+            "Precondition: baseline censor_loss must be finite"
+        )
+        assert not torch.all(baseline_out.censor_logits == baseline_out.censor_logits[0]), (
+            "Precondition: censor_logits must vary across samples; uniform logits "
+            "make mean-reduced BCE invariant to target permutation in this 2-sample batch"
+        )
+
+        perturbed = copy.deepcopy(sample_batch)
+        perturbed.censor = ~perturbed.censor
+
+        assert not torch.equal(sample_batch.censor, perturbed.censor), (
+            "Precondition: censor targets must actually differ after flip"
+        )
+
+        _, perturbed_out = demo_model._forward(perturbed)
+
+        assert not torch.equal(baseline_out.censor_loss, perturbed_out.censor_loss), (
+            "censor_loss must change when censor targets are flipped "
+            "(proves censor_loss is not trivially constant)"
+        )
