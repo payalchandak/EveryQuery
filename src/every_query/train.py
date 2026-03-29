@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +82,48 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
     return sorted_checkpoints[-1] if sorted_checkpoints else None
 
 
+def _collate_shard(
+    file_name: str,
+    split: str,
+    write_dir: str,
+    task_dir: str,
+    durations: list,
+    codes: list,
+    sample_times_per_subject: int,
+    seed: int,
+) -> None:
+    out_path = f"{write_dir}/{split}/{file_name}"
+    if os.path.exists(out_path):
+        logger.info(f"Skipping shard. Already collated at {out_path}.")
+        return
+
+    logger.info(f"Collating {out_path}")
+    columns = ["subject_id", "prediction_time", "censored", *codes]
+
+    duration_frames = [
+        pl.scan_parquet(f"{task_dir}/{duration}/{split}/{file_name}")
+        .select(columns)
+        .with_columns(pl.lit(duration).alias("duration_days"))
+        .unpivot(
+            index=["subject_id", "prediction_time", "censored", "duration_days"],
+            variable_name="query",
+            value_name="occurs",
+        )
+        for duration in durations
+    ]
+
+    shard = (
+        pl.concat(duration_frames)
+        .rename({"censored": "boolean_value"})
+        .with_columns(pl.col("occurs").fill_null(False))
+        .collect()
+        .sample(fraction=1, shuffle=True, seed=seed)
+        .group_by(["subject_id"])
+        .head(sample_times_per_subject)
+    )
+    shard.write_parquet(out_path)
+
+
 def collate_tasks(cfg: DictConfig) -> str:
     task_dir = cfg.query.task_dir
     durations_path = f"{task_dir}/sampled_durations.json"
@@ -97,43 +140,34 @@ def collate_tasks(cfg: DictConfig) -> str:
     write_dir = f"{task_dir}/collated/{hash_hex}"
 
     first_duration = durations[0]
+    codes = list(cfg.query.codes)
+    seed = cfg.get("seed", 1)
+    sample_times_per_subject = cfg.query.sample_times_per_subject
 
     # Eval tasks generated in separate file
     for split in [train_split, tuning_split]:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)
+        file_names = os.listdir(f"{task_dir}/{first_duration}/{split}")
 
-        for file_name in os.listdir(f"{task_dir}/{first_duration}/{split}"):
-            f = f"{write_dir}/{split}/{file_name}"
-            logger.info(f"Collating {f}")
-
-            if os.path.exists(f):
-                logger.info(f"Skipping shard. Already collated at {f}.")
-                continue
-
-            duration_shards = []
-            for duration in durations:
-                duration_shards.append(
-                    pl.read_parquet(
-                        source=f"{task_dir}/{duration}/{split}/{file_name}",
-                        columns=["subject_id", "prediction_time", "censored", *cfg.query.codes],
-                    )
-                    .with_columns(pl.lit(duration).alias("duration_days"))
-                    .unpivot(
-                        index=["subject_id", "prediction_time", "censored", "duration_days"],
-                        variable_name="query",
-                        value_name="occurs",
-                    )
+        max_workers = min(len(file_names), os.cpu_count() or 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(
+                    _collate_shard,
+                    file_name,
+                    split,
+                    write_dir,
+                    task_dir,
+                    durations,
+                    codes,
+                    sample_times_per_subject,
+                    seed,
                 )
+                for file_name in file_names
+            ]
+            for future in as_completed(futures):
+                future.result()
 
-            shard = (
-                pl.concat(duration_shards)
-                .rename({"censored": "boolean_value"})
-                .with_columns(pl.col("occurs").fill_null(False))
-                .sample(fraction=1, shuffle=True, seed=cfg.get("seed", 1))
-                .group_by(["subject_id"])
-                .head(cfg.query.sample_times_per_subject)
-            )
-            shard.write_parquet(f)
         logger.info(f"Tasks collated for {split} and written to {hash_hex}.")
 
     return write_dir
