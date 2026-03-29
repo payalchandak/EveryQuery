@@ -311,6 +311,7 @@ class EveryQueryModel(torch.nn.Module):
           - The input must not contain out-of-vocabulary tokens.
           - The input must not contain inf or nan values.
           - The input must not contain only padding tokens.
+          - The query_embed_position must be within sequence bounds for each sample.
 
         Args:
             batch: The input batch of data.
@@ -327,11 +328,10 @@ class EveryQueryModel(torch.nn.Module):
             raise ValueError(f"Batch mode {batch.mode} is not supported.")
 
         _batch_size, seq_len = code.shape
-        effective_seq_len = seq_len + (1 if batch.duration_days is not None else 0)
 
-        if effective_seq_len > self.max_seq_len:
+        if seq_len > self.max_seq_len:
             raise ValueError(
-                f"Input sequence length {effective_seq_len} (including duration token) exceeds model max "
+                f"Input sequence length {seq_len} exceeds model max "
                 f"sequence length {self.max_seq_len}."
             )
         elif seq_len <= 1:
@@ -342,10 +342,11 @@ class EveryQueryModel(torch.nn.Module):
         torch._assert(~torch.isinf(code).any(), "Batch code contains inf values.")
         torch._assert(~torch.isnan(code).any(), "Batch code contains nan values.")
 
-        out_of_vocab = code >= self.vocab_size
+        num_embeddings = self.HF_model.get_input_embeddings().num_embeddings
+        out_of_vocab = code >= num_embeddings
         out_of_vocab_msg = (
             f"Input sequence contains {out_of_vocab.sum()} out-of-vocabulary tokens "
-            f"(max {batch.code.max()} for vocab size {self.vocab_size})."
+            f"(max {batch.code.max()} for vocab size {num_embeddings})."
         )
 
         torch._assert(~out_of_vocab.any(), out_of_vocab_msg)
@@ -358,6 +359,14 @@ class EveryQueryModel(torch.nn.Module):
             f"Batch size: {code.shape[0]}, Sequence length: {code.shape[1]}"
         )
         torch._assert(~all_samples_pad.any(), all_samples_pad_msg)
+
+        if batch.query_embed_position is not None:
+            bad_pos = batch.query_embed_position >= seq_len
+            if bad_pos.any().item():
+                raise ValueError(
+                    f"{_val(bad_pos.sum())} sample(s) have query_embed_position >= seq_len ({seq_len}). "
+                    f"Max position: {_val(batch.query_embed_position.max())}."
+                )
 
     def _check_parameters(self):
         """Logs a warning about the finiteness of any parameters in the model.
