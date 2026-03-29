@@ -21,7 +21,8 @@ class EveryQueryBatch(MEDSTorchBatch):
     """MEDS batch with EveryQuery-specific annotations.
 
     Applies only the outlined changes on top of MEDSTorchBatch:
-      - Adds optional per-sample annotations `occurs` and `query`.
+      - Adds optional per-sample annotations (`occurs`, `duration_days`,
+        `query_embed_position`, etc.).
       - Extends `LABEL_TENSOR_NAMES` to include them for printing.
       - Validates their shapes in `__post_init__` if provided.
 
@@ -56,12 +57,13 @@ class EveryQueryBatch(MEDSTorchBatch):
     prediction_time: torch.LongTensor | None = None
     censor: torch.BoolTensor | None = None
     occurs: torch.LongTensor | None = None
-    query: torch.LongTensor | None = None
+    quantifier: list | None = None
+    query_codes: list | None = None
     duration_days: torch.FloatTensor | None = None
     query_embed_position: torch.LongTensor | None = None
 
     # Include new annotations in label tensor names for display
-    LABEL_TENSOR_NAMES: ClassVar[tuple[str]] = ("boolean_value", "censor", "occurs", "query", "duration_days")
+    LABEL_TENSOR_NAMES: ClassVar[tuple[str]] = ("boolean_value", "censor", "occurs", "duration_days")
 
     def __post_init__(self):
         # Run base validations
@@ -72,8 +74,14 @@ class EveryQueryBatch(MEDSTorchBatch):
             self._MEDSTorchBatch__check_shape("censor", (self.batch_size,))
         if self.occurs is not None:
             self._MEDSTorchBatch__check_shape("occurs", (self.batch_size,))
-        if self.query is not None:
-            self._MEDSTorchBatch__check_shape("query", (self.batch_size,))
+        if self.quantifier is not None and len(self.quantifier) != self.batch_size:
+            raise ValueError(
+                f"Expected quantifier length {self.batch_size}, got {len(self.quantifier)}"
+            )
+        if self.query_codes is not None and len(self.query_codes) != self.batch_size:
+            raise ValueError(
+                f"Expected query_codes length {self.batch_size}, got {len(self.query_codes)}"
+            )
         if self.duration_days is not None:
             self._MEDSTorchBatch__check_shape("duration_days", (self.batch_size,))
         if self.query_embed_position is not None:
@@ -277,7 +285,7 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         if getattr(self, "has_occurs", False):
             out["occurs"] = self.occurs[idx]
         if getattr(self, "has_quantifier", False):
-            out["quantifier"] = self.quantifier[idx]
+            out["quantifier"] = quantifier_str
         if getattr(self, "has_query_codes", False):
             out["query_codes"] = self.query_codes[idx]
         if getattr(self, "has_duration_days", False):
@@ -296,6 +304,10 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
             out["censor"] = out[self.LABEL_COL]
         if getattr(self, "has_occurs", False):
             out["occurs"] = torch.Tensor([item["occurs"] for item in batch]).long()
+        if getattr(self, "has_quantifier", False):
+            out["quantifier"] = [item["quantifier"] for item in batch]
+        if getattr(self, "has_query_codes", False):
+            out["query_codes"] = [item["query_codes"] for item in batch]
         if getattr(self, "has_duration_days", False):
             out["duration_days"] = torch.as_tensor([item["duration_days"] for item in batch]).float()
         out["query_embed_position"] = torch.as_tensor(
