@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import hydra
+import numpy as np
 import polars as pl
 import torch
 from hydra.utils import instantiate
@@ -82,16 +83,33 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
 
 
 def collate_tasks(cfg: DictConfig) -> str:
+    """Build training task rows with geometric query generation.
+
+    For each shard, pre-generates ``len(cfg.query.codes)`` query definitions
+    (matching the row count that the old unpivot approach produced).  Each
+    definition draws ``k ~ Geometric(geometric_p)`` codes, caps at
+    ``max_query_codes``, picks a random ANY/ALL quantifier, and computes
+    ``occurs`` via ``pl.any_horizontal`` / ``pl.all_horizontal``.
+    """
     task_dir = cfg.query.task_dir
     durations = list(range(cfg.query.duration_min, cfg.query.duration_max))
 
-    task_str = f"{'|'.join(sorted(cfg.query.codes))}_{'|'.join(str(d) for d in sorted(durations))}"
+    geometric_p = cfg.query.geometric_p
+    max_query_codes = cfg.query.max_query_codes
+    seed = cfg.get("seed", 1)
+    num_queries = cfg.query.queries_per_shard
+
+    task_str = (
+        f"{'|'.join(sorted(cfg.query.codes))}_{'|'.join(str(d) for d in sorted(durations))}"
+        f"_gp{geometric_p}_mqc{max_query_codes}_qps{num_queries}_seed{seed}"
+    )
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
     write_dir = f"{task_dir}/collated/{hash_hex}"
 
     first_duration = durations[0]
+    all_codes = list(cfg.query.codes)
+    rng = np.random.default_rng(seed)
 
-    # Eval tasks generated in separate file
     for split in [train_split, tuning_split]:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)
 
@@ -103,26 +121,52 @@ def collate_tasks(cfg: DictConfig) -> str:
                 logger.info(f"Skipping shard. Already collated at {f}.")
                 continue
 
+            query_defs: list[tuple[str, list[str]]] = []
+            for _ in range(num_queries):
+                k = int(min(rng.geometric(geometric_p), max_query_codes, len(all_codes)))
+                codes_subset = rng.choice(all_codes, size=k, replace=False).tolist()
+                quantifier = str(rng.choice(["ANY", "ALL"]))
+                query_defs.append((quantifier, codes_subset))
+
             duration_shards = []
             for duration in durations:
-                duration_shards.append(
-                    pl.read_parquet(
-                        source=f"{task_dir}/{duration}/{split}/{file_name}",
-                        columns=["subject_id", "prediction_time", "censored", *cfg.query.codes],
+                wide_df = pl.read_parquet(
+                    source=f"{task_dir}/{duration}/{split}/{file_name}",
+                    columns=["subject_id", "prediction_time", "censored", *all_codes],
+                ).with_columns(pl.lit(duration).alias("duration_days"))
+
+                query_frames = []
+                for quantifier, codes_subset in query_defs:
+                    code_exprs = [pl.col(c) for c in codes_subset]
+                    if quantifier == "ANY":
+                        occurs_expr = pl.any_horizontal(*code_exprs)
+                    else:
+                        occurs_expr = pl.all_horizontal(*code_exprs)
+
+                    query_frame = wide_df.select(
+                        "subject_id",
+                        "prediction_time",
+                        "censored",
+                        "duration_days",
+                        occurs_expr.alias("occurs"),
+                        pl.lit(quantifier).alias("quantifier"),
+                        # Broadcasts a single list value (e.g. ["A", "B"]) as a constant column across
+                        # all rows, tagging each row with the codes that define this query.
+                        # Wrapping a Python list in a one-element Series of dtype List, then calling
+                        # .first() collapses the length-1 Series to a scalar so Polars can broadcast it.
+                        # This is brittle: future Polars versions may change lit(Series) semantics or
+                        # alignment rules, and the .first() trick silently masks shape mismatches.
+                        pl.lit(pl.Series("query_codes", [codes_subset])).first().alias("query_codes"),
                     )
-                    .with_columns(pl.lit(duration).alias("duration_days"))
-                    .unpivot(
-                        index=["subject_id", "prediction_time", "censored", "duration_days"],
-                        variable_name="query",
-                        value_name="occurs",
-                    )
-                )
+                    query_frames.append(query_frame)
+
+                duration_shards.append(pl.concat(query_frames))
 
             shard = (
                 pl.concat(duration_shards)
                 .rename({"censored": "boolean_value"})
                 .with_columns(pl.col("occurs").fill_null(False))
-                .sample(fraction=1, shuffle=True, seed=cfg.get("seed", 1))
+                .sample(fraction=1, shuffle=True, seed=seed)
                 .group_by(["subject_id"])
                 .head(cfg.query.sample_times_per_subject)
             )

@@ -261,6 +261,9 @@ class EveryQueryModel(torch.nn.Module):
 
         self.HF_model = ModernBertModel._from_config(self.HF_model_config, **extra_kwargs)
 
+        total_vocab = EveryQueryBatch.configure_special_tokens(self.HF_model_config.vocab_size)
+        self.HF_model.resize_token_embeddings(total_vocab)
+
         self.do_grad_ckpt = do_grad_ckpt
         if self.do_grad_ckpt and hasattr(self.HF_model, "gradient_checkpointing_enable"):
             self.HF_model.gradient_checkpointing_enable()
@@ -296,8 +299,8 @@ class EveryQueryModel(torch.nn.Module):
 
     @property
     def vocab_size(self) -> int:
-        """The vocabulary size of the model."""
-        return self.HF_model_config.vocab_size
+        """The vocabulary size of the model (after any embedding resizing)."""
+        return self.HF_model.get_input_embeddings().num_embeddings
 
     def _check_inputs(self, batch: EveryQueryBatch):
         """Checks the inputs for various validity properties.
@@ -311,6 +314,7 @@ class EveryQueryModel(torch.nn.Module):
           - The input must not contain out-of-vocabulary tokens.
           - The input must not contain inf or nan values.
           - The input must not contain only padding tokens.
+          - The query_embed_position must be within sequence bounds for each sample.
 
         Args:
             batch: The input batch of data.
@@ -327,11 +331,10 @@ class EveryQueryModel(torch.nn.Module):
             raise ValueError(f"Batch mode {batch.mode} is not supported.")
 
         _batch_size, seq_len = code.shape
-        effective_seq_len = seq_len + (1 if batch.duration_days is not None else 0)
 
-        if effective_seq_len > self.max_seq_len:
+        if seq_len > self.max_seq_len:
             raise ValueError(
-                f"Input sequence length {effective_seq_len} (including duration token) exceeds model max "
+                f"Input sequence length {seq_len} exceeds model max "
                 f"sequence length {self.max_seq_len}."
             )
         elif seq_len <= 1:
@@ -342,10 +345,11 @@ class EveryQueryModel(torch.nn.Module):
         torch._assert(~torch.isinf(code).any(), "Batch code contains inf values.")
         torch._assert(~torch.isnan(code).any(), "Batch code contains nan values.")
 
-        out_of_vocab = code >= self.vocab_size
+        num_embeddings = self.HF_model.get_input_embeddings().num_embeddings
+        out_of_vocab = code >= num_embeddings
         out_of_vocab_msg = (
             f"Input sequence contains {out_of_vocab.sum()} out-of-vocabulary tokens "
-            f"(max {batch.code.max()} for vocab size {self.vocab_size})."
+            f"(max {batch.code.max()} for vocab size {num_embeddings})."
         )
 
         torch._assert(~out_of_vocab.any(), out_of_vocab_msg)
@@ -358,6 +362,14 @@ class EveryQueryModel(torch.nn.Module):
             f"Batch size: {code.shape[0]}, Sequence length: {code.shape[1]}"
         )
         torch._assert(~all_samples_pad.any(), all_samples_pad_msg)
+
+        if batch.query_embed_position is not None:
+            bad_pos = batch.query_embed_position >= seq_len
+            if bad_pos.any().item():
+                raise ValueError(
+                    f"{_val(bad_pos.sum())} sample(s) have query_embed_position >= seq_len ({seq_len}). "
+                    f"Max position: {_val(batch.query_embed_position.max())}."
+                )
 
     def _check_parameters(self):
         """Logs a warning about the finiteness of any parameters in the model.
@@ -410,37 +422,34 @@ class EveryQueryModel(torch.nn.Module):
     def _hf_inputs(self, batch: EveryQueryBatch) -> dict[str, torch.Tensor]:
         """Converts the EveryQueryBatch to a dictionary of inputs for the Hugging Face model.
 
-        HF relevant input keys:
-            - input_ids: The input sequence of token IDs. Captured in `batch.code`.
-            - attention_mask: A mask to avoid attending to padding tokens. See the
-              [documentation](https://huggingface.co/docs/transformers/en/model_doc/gpt_neox#transformers.GPTNeoXModel.forward.attention_mask)
-              for more details. Should be a tensor of shape `(batch_size, seq_len)` (same as `input_ids`) with
-              0s for tokens that are masked and 1s for tokens that are not masked. This means it is given by
-              `batch.code != batch.PAD_INDEX` as whenever the code is not a padding token, it should be
-              attended to.
+        Every query uses the uniform prefix ``[QUANT, c1..cN, SEP, DUR, SEP, ...]``
+        so the DUR placeholder already occupies a real token slot in ``batch.code``.
+        We always take the ``inputs_embeds`` path: look up word embeddings for every
+        token, then overwrite the DUR slot (at ``query_embed_position - 1``) with the
+        continuous duration embedding produced by ``self.duration_embed``.
 
         Args:
             batch: The input batch of data.
 
         Returns:
-            A dictionary of inputs for the Hugging Face model.
+            A dictionary with ``inputs_embeds`` and ``attention_mask`` for the Hugging Face Model.
         """
-        attention_mask = batch.code != batch.PAD_INDEX  # (batch_size, seq_len)
+        attention_mask = batch.code != batch.PAD_INDEX  # (B, seq_len)
 
-        if batch.duration_days is not None:
-            word_embeds = self.HF_model.embeddings.word_embeddings(batch.code)  # (B, seq_len, H)
-            dur_norm = (batch.duration_days / 365.0).unsqueeze(-1)  # (B, 1)
-            dur_emb = self.duration_embed(dur_norm).unsqueeze(1)    # (B, 1, H)
-            # Insert duration embedding at position 1 (after query token at position 0)
-            inputs_embeds = torch.cat([word_embeds[:, :1, :], dur_emb, word_embeds[:, 1:, :]], dim=1)
-            dur_mask = torch.ones(batch.code.shape[0], 1, dtype=torch.bool, device=batch.code.device)
-            attention_mask = torch.cat([attention_mask[:, :1], dur_mask, attention_mask[:, 1:]], dim=1)
-            return {"inputs_embeds": inputs_embeds, "attention_mask": attention_mask}
+        # Work on a copy: the embedding output sits in the autograd graph, and the
+        # in-place DUR overwrite below would corrupt gradient bookkeeping without clone().
+        word_embeds = self.HF_model.embeddings.word_embeddings(batch.code).clone()  # (B, seq_len, H)
 
-        return {
-            "input_ids": batch.code,
-            "attention_mask": attention_mask,
-        }
+        dur_norm = (batch.duration_days / 365.0).unsqueeze(-1)  # (B, 1)
+        dur_emb = self.duration_embed(dur_norm)                  # (B, H)
+
+        # Overwrite the DUR placeholder with the learned duration embedding.
+        # Fancy-index because the DUR position differs across samples.
+        batch_idx = torch.arange(word_embeds.size(0), device=word_embeds.device)
+        dur_pos = batch.query_embed_position - 1
+        word_embeds[batch_idx, dur_pos, :] = dur_emb
+
+        return {"inputs_embeds": word_embeds, "attention_mask": attention_mask}
 
     def _forward_demo(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         """A demo forward pass that adds more checks and assertions."""
@@ -462,8 +471,9 @@ class EveryQueryModel(torch.nn.Module):
 
     def _forward(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         outputs = self.HF_model(**self._hf_inputs(batch))
-        embeddings = outputs.last_hidden_state  # (batch_size, seq_len + query_len, hidden_size)
-        query_embed = embeddings[:, 0, :]  # 0 is query_index (batch_size, hidden_size)
+        embeddings = outputs.last_hidden_state  # (batch_size, seq_len, hidden_size)
+        batch_idx = torch.arange(embeddings.size(0), device=embeddings.device)
+        query_embed = embeddings[batch_idx, batch.query_embed_position, :]  # (batch_size, hidden_size)
 
         censor_logits = self.censor_mlp(query_embed)
         censor_loss = self._get_loss(censor_logits, batch.censor, mask=None)
