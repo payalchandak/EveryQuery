@@ -62,6 +62,8 @@ addopts = [
   "--ignore=docs",
   "--ignore=AGENTS.md",
   "--ignore=CONTRIBUTORS.md",
+  "--ignore=src/every_query/process_composite",
+  "--ignore=src/every_query/sample_codes",
   "--doctest-glob=*.md",
 ]
 markers = [] # Add any custom pytest markers here
