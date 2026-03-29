@@ -1,6 +1,6 @@
 """Root conftest — session-scoped fixture DAG for the EveryQuery test suite.
 
-Fixture dependency graph (all session-scoped):
+Fixture dependency graph (all session-scoped)::
 
     demo_model_config ──► demo_model ──► demo_lightning_module
             │                                    │
@@ -17,7 +17,7 @@ Fixture dependency graph (all session-scoped):
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -40,11 +40,11 @@ _TRAIN_SUBJECTS = [239684, 1195293, 68729, 814703]
 _TUNING_SUBJECTS = [754281]
 
 _PRED_TIMES: dict[int, datetime] = {
-    239684: datetime(2010, 5, 11, 18, 0),
-    1195293: datetime(2010, 6, 20, 20, 30),
-    68729: datetime(2010, 5, 26, 3, 0),
-    814703: datetime(2010, 2, 5, 6, 0),
-    754281: datetime(2010, 1, 3, 7, 0),
+    239684: datetime(2010, 5, 11, 18, 0, tzinfo=UTC),
+    1195293: datetime(2010, 6, 20, 20, 30, tzinfo=UTC),
+    68729: datetime(2010, 5, 26, 3, 0, tzinfo=UTC),
+    814703: datetime(2010, 2, 5, 6, 0, tzinfo=UTC),
+    754281: datetime(2010, 1, 3, 7, 0, tzinfo=UTC),
 }
 
 _QUERY_CODES = ["HR", "TEMP"]
@@ -164,9 +164,7 @@ def demo_dataset(
     collated_dir = tmp_path_factory.mktemp("eq_collated")
 
     rows = []
-    for i, (subj, query_code) in enumerate(
-        (s, q) for s in _TRAIN_SUBJECTS for q in _QUERY_CODES
-    ):
+    for i, (subj, query_code) in enumerate((s, q) for s in _TRAIN_SUBJECTS for q in _QUERY_CODES):
         rows.append(
             {
                 "subject_id": subj,

@@ -12,11 +12,9 @@ from unittest.mock import patch
 import lightning as L
 import torch
 from torch.utils.data import DataLoader
-from transformers import ModernBertConfig
 
 from every_query.lightning_module import EveryQueryLightningModule
 from every_query.model import EveryQueryModel, EveryQueryOutput
-
 
 # ── test_model_forward_shape ────────────────────────────────────────────
 
@@ -126,10 +124,16 @@ class TestTrainerFitTwoSteps:
         )
 
         train_dl = DataLoader(
-            demo_dataset, batch_size=2, collate_fn=demo_dataset.collate, shuffle=False,
+            demo_dataset,
+            batch_size=2,
+            collate_fn=demo_dataset.collate,
+            shuffle=False,
         )
         val_dl = DataLoader(
-            demo_dataset, batch_size=2, collate_fn=demo_dataset.collate, shuffle=False,
+            demo_dataset,
+            batch_size=2,
+            collate_fn=demo_dataset.collate,
+            shuffle=False,
         )
 
         trainer = L.Trainer(
@@ -163,10 +167,16 @@ class TestCheckpointRoundtrip:
         )
 
         train_dl = DataLoader(
-            demo_dataset, batch_size=2, collate_fn=demo_dataset.collate, shuffle=False,
+            demo_dataset,
+            batch_size=2,
+            collate_fn=demo_dataset.collate,
+            shuffle=False,
         )
         val_dl = DataLoader(
-            demo_dataset, batch_size=2, collate_fn=demo_dataset.collate, shuffle=False,
+            demo_dataset,
+            batch_size=2,
+            collate_fn=demo_dataset.collate,
+            shuffle=False,
         )
 
         trainer = L.Trainer(
@@ -242,8 +252,7 @@ class TestDemoModeChecks:
         with torch.no_grad():
             next(iter(model.censor_mlp.parameters())).fill_(float("nan"))
 
-        with caplog.at_level(logging.WARNING, logger="every_query.model"):
-            with torch.no_grad():
-                model(sample_batch)
+        with caplog.at_level(logging.WARNING, logger="every_query.model"), torch.no_grad():
+            model(sample_batch)
 
         assert any("nan" in msg.lower() for msg in caplog.messages)

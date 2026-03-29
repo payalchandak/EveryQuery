@@ -112,8 +112,7 @@ class TestTrainCliRuns:
         output_dir = tmp_path_factory.mktemp("cli_train")
         result = _run_train_subprocess(task_parquet_dir, tensorized_cohort_dir, output_dir)
         assert result.returncode == 0, (
-            f"train.py failed (rc={result.returncode}).\n"
-            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            f"train.py failed (rc={result.returncode}).\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
         return output_dir
 

@@ -319,8 +319,11 @@ class EveryQueryLightningModule(L.LightningModule):
             >>> pred_batch.subject_id = torch.tensor([1, 2])
             >>> pred_batch.prediction_time = torch.tensor([100, 200])
             >>> result = demo_lightning_module.predict_step(pred_batch)
-            >>> sorted(result.keys())
-            ['censor', 'censor_probs', 'occurs', 'occurs_probs', 'prediction_time', 'query_embed', 'subject_id']
+            >>> sorted(result.keys()) == [
+            ...     'censor', 'censor_probs', 'occurs', 'occurs_probs',
+            ...     'prediction_time', 'query_embed', 'subject_id',
+            ... ]
+            True
             >>> result['query_embed'].shape[1] == demo_model_config.hidden_size
             True
             >>> result['query_embed'].shape[0]

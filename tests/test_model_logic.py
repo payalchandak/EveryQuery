@@ -52,15 +52,15 @@ class TestQueryTokenPositionAffectsQueryEmbed:
 
         _, perturbed_out = demo_model._forward(perturbed)
 
-        assert not torch.equal(
-            baseline_out.query_embed[target_row], perturbed_out.query_embed[target_row]
-        ), "query_embed for the perturbed sample should change"
+        assert not torch.equal(baseline_out.query_embed[target_row], perturbed_out.query_embed[target_row]), (
+            "query_embed for the perturbed sample should change"
+        )
 
         other_rows = [i for i in range(sample_batch.batch_size) if i != target_row]
         for r in other_rows:
-            assert torch.equal(
-                baseline_out.query_embed[r], perturbed_out.query_embed[r]
-            ), f"query_embed for unperturbed sample {r} should be unchanged"
+            assert torch.equal(baseline_out.query_embed[r], perturbed_out.query_embed[r]), (
+                f"query_embed for unperturbed sample {r} should be unchanged"
+            )
 
 
 class TestUncensoredSamplesContributeToOccursLoss:
@@ -103,9 +103,7 @@ class TestCensoredSamplesExcludedFromOccursLoss:
     @torch.no_grad()
     def test_flipping_censored_occurs_label_preserves_occurs_loss(self, demo_model, sample_batch):
         censored_mask = sample_batch.censor
-        assert censored_mask.any(), (
-            "Precondition: sample_batch must contain at least one censored sample"
-        )
+        assert censored_mask.any(), "Precondition: sample_batch must contain at least one censored sample"
         assert (~censored_mask).any(), (
             "Precondition: sample_batch must contain at least one uncensored sample "
             "(otherwise occurs_loss is NaN from empty-tensor BCE and torch.equal(nan, nan) is False)"
@@ -127,8 +125,8 @@ class TestCensoredSamplesExcludedFromOccursLoss:
 
 
 class TestDurationPathSwitching:
-    """Setting ``duration_days=None`` must switch ``_hf_inputs`` from the
-    ``inputs_embeds`` path to the ``input_ids`` path.
+    """Setting ``duration_days=None`` must switch ``_hf_inputs`` from the ``inputs_embeds`` path to the
+    ``input_ids`` path.
 
     When ``duration_days`` is present the method embeds a duration token and
     returns ``inputs_embeds`` with the sequence expanded by one position (the
@@ -165,26 +163,19 @@ class TestDurationPathSwitching:
 
         hf_out = demo_model._hf_inputs(perturbed)
 
-        assert "input_ids" in hf_out, (
-            "_hf_inputs should return 'input_ids' when duration_days is None"
-        )
+        assert "input_ids" in hf_out, "_hf_inputs should return 'input_ids' when duration_days is None"
         assert "inputs_embeds" not in hf_out, (
             "_hf_inputs should NOT return 'inputs_embeds' when duration_days is None"
         )
-        assert hf_out["input_ids"].shape[1] == seq_len, (
-            "input_ids seq dim should equal the original seq_len"
-        )
-        assert hf_out["attention_mask"].shape[1] == seq_len, (
-            "attention_mask seq dim should match input_ids"
-        )
+        assert hf_out["input_ids"].shape[1] == seq_len, "input_ids seq dim should equal the original seq_len"
+        assert hf_out["attention_mask"].shape[1] == seq_len, "attention_mask seq dim should match input_ids"
 
     @torch.no_grad()
     def test_duration_path_inserts_attended_position(self, demo_model, sample_batch):
         """The duration path must insert an always-attended position at index 1.
 
-        Compares the attention masks from both paths to prove that
-        position 1 was genuinely injected rather than inherited from the
-        original codes (which may already be non-padding at that index).
+        Compares the attention masks from both paths to prove that position 1 was genuinely injected rather
+        than inherited from the original codes (which may already be non-padding at that index).
         """
         assert sample_batch.duration_days is not None, (
             "Precondition: sample_batch must have duration_days for this test"
@@ -223,11 +214,11 @@ class TestPaddingTokenInvariance:
         _, baseline_out = demo_model._forward(sample_batch)
 
         perturbed = copy.deepcopy(sample_batch)
-        B, orig_seq_len = perturbed.code.shape
+        b, orig_seq_len = perturbed.code.shape
         extra = 4
 
         perturbed.code = torch.cat(
-            [perturbed.code, torch.full((B, extra), perturbed.PAD_INDEX, dtype=perturbed.code.dtype)],
+            [perturbed.code, torch.full((b, extra), perturbed.PAD_INDEX, dtype=perturbed.code.dtype)],
             dim=1,
         )
 
@@ -259,13 +250,13 @@ class TestPaddingTokenInvariance:
         _, baseline_out = demo_model._forward(sample_batch)
 
         control = copy.deepcopy(sample_batch)
-        B = control.code.shape[0]
+        b = control.code.shape[0]
         extra = 4
         non_pad_token = 5
         assert non_pad_token != control.PAD_INDEX
 
         control.code = torch.cat(
-            [control.code, torch.full((B, extra), non_pad_token, dtype=control.code.dtype)],
+            [control.code, torch.full((b, extra), non_pad_token, dtype=control.code.dtype)],
             dim=1,
         )
 
@@ -424,9 +415,7 @@ class TestCrossLossTargetIndependence:
         )
 
         _, baseline_out = demo_model._forward(sample_batch)
-        assert baseline_out.occurs_loss.isfinite(), (
-            "Precondition: baseline occurs_loss must be finite"
-        )
+        assert baseline_out.occurs_loss.isfinite(), "Precondition: baseline occurs_loss must be finite"
 
         perturbed = copy.deepcopy(sample_batch)
         perturbed.occurs = 1 - perturbed.occurs
@@ -452,9 +441,7 @@ class TestCrossLossTargetIndependence:
         when all logits are identical, so we assert logit diversity first.
         """
         _, baseline_out = demo_model._forward(sample_batch)
-        assert baseline_out.censor_loss.isfinite(), (
-            "Precondition: baseline censor_loss must be finite"
-        )
+        assert baseline_out.censor_loss.isfinite(), "Precondition: baseline censor_loss must be finite"
         assert not torch.all(baseline_out.censor_logits == baseline_out.censor_logits[0]), (
             "Precondition: censor_logits must vary across samples; uniform logits "
             "make mean-reduced BCE invariant to target permutation in this 2-sample batch"

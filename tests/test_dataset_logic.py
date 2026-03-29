@@ -67,9 +67,7 @@ class TestQueryTokenPrependedAtPosition0:
         query_a = demo_dataset.query[idx_a]
         query_b = demo_dataset.query[idx_b]
 
-        assert query_a != query_b, (
-            "Precondition: indices 0 and 1 should have different query strings"
-        )
+        assert query_a != query_b, "Precondition: indices 0 and 1 should have different query strings"
 
         item_a = demo_dataset._seeded_getitem(idx_a)
         item_b = demo_dataset._seeded_getitem(idx_b)
@@ -109,8 +107,8 @@ class TestCollateMapsBooleanValueToCensor:
         )
 
     def test_censor_reflects_mutated_item_labels(self, demo_dataset):
-        """Flipping an item's boolean_value before collation must flip the
-        corresponding censor entry, proving collate reads from the items."""
+        """Flipping an item's boolean_value before collation must flip the corresponding censor entry, proving
+        collate reads from the items."""
         items = [copy.deepcopy(demo_dataset[0]), copy.deepcopy(demo_dataset[1])]
 
         original_0 = bool(items[0][demo_dataset.LABEL_COL])
@@ -129,9 +127,7 @@ class TestCollateMapsBooleanValueToCensor:
         items = [demo_dataset[0], demo_dataset[1]]
         batch = demo_dataset.collate(items)
 
-        assert batch.censor.dtype == torch.bool, (
-            f"Expected bool dtype for censor, got {batch.censor.dtype}"
-        )
+        assert batch.censor.dtype == torch.bool, f"Expected bool dtype for censor, got {batch.censor.dtype}"
 
 
 class TestDurationDaysPassthrough:
@@ -154,14 +150,12 @@ class TestDurationDaysPassthrough:
         items = [demo_dataset[i] for i in indices]
         batch = demo_dataset.collate(items)
 
-        expected = torch.tensor(
-            [demo_dataset.duration_days[i] for i in indices], dtype=torch.float
-        )
+        expected = torch.tensor([demo_dataset.duration_days[i] for i in indices], dtype=torch.float)
         torch.testing.assert_close(batch.duration_days, expected)
 
     def test_collate_reads_per_item_duration(self, demo_dataset: EveryQueryPytorchDataset):
-        """Perturb item-level duration_days to distinct values so the test
-        cannot pass if collate ignores the per-item values."""
+        """Perturb item-level duration_days to distinct values so the test cannot pass if collate ignores the
+        per-item values."""
         items = [copy.deepcopy(demo_dataset[0]), copy.deepcopy(demo_dataset[1])]
         items[0]["duration_days"] = 7.0
         items[1]["duration_days"] = 365.0
@@ -189,8 +183,8 @@ class TestDurationDaysPassthrough:
 
 
 class TestDifferentQueryStringProducesDifferentIndex:
-    """Items with distinct ``query`` strings must produce different encoded
-    indices at position 0 of collated ``batch.code``.
+    """Items with distinct ``query`` strings must produce different encoded indices at position 0 of collated
+    ``batch.code``.
 
     ``_seeded_getitem`` encodes the item's query string via ``encode_query``
     and prepends it as position 0 of the dynamic sequence.  Two items whose

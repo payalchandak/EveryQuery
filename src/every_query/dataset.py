@@ -227,7 +227,11 @@ class QueryData(NamedTuple):
         A ``schema`` can override the dtype of stored arrays:
 
             >>> import numpy as np
-            >>> pprint_dense(QueryData(code=[5]).to_JNRT(BatchMode.SM, schema={"code": np.float32}).to_dense())
+            >>> pprint_dense(
+            ...     QueryData(code=[5])
+            ...     .to_JNRT(BatchMode.SM, schema={"code": np.float32})
+            ...     .to_dense()
+            ... )
             code
             [5.]
             .

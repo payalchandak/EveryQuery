@@ -403,14 +403,20 @@ class EveryQueryModel(torch.nn.Module):
 
             Duration token adds +1, so seq_len=128 trips the limit:
 
-            >>> demo_model._check_inputs(Mock(mode="SM", code=torch.ones(1, 128, dtype=torch.long), duration_days=torch.tensor([30.0]), PAD_INDEX=0))
+            >>> demo_model._check_inputs(Mock(
+            ...     mode="SM", code=torch.ones(1, 128, dtype=torch.long),
+            ...     duration_days=torch.tensor([30.0]), PAD_INDEX=0,
+            ... ))
             Traceback (most recent call last):
                 ...
             ValueError: ...exceeds model max sequence length...
 
             All-padding batch:
 
-            >>> demo_model._check_inputs(Mock(mode="SM", code=torch.zeros(1, 3, dtype=torch.long), duration_days=None, PAD_INDEX=0))
+            >>> demo_model._check_inputs(Mock(
+            ...     mode="SM", code=torch.zeros(1, 3, dtype=torch.long),
+            ...     duration_days=None, PAD_INDEX=0,
+            ... ))
             Traceback (most recent call last):
                 ...
             AssertionError: ...only padding tokens...
@@ -523,7 +529,11 @@ class EveryQueryModel(torch.nn.Module):
         Examples:
             Without ``duration_days``, returns ``input_ids`` and ``attention_mask``:
 
-            >>> no_dur = Mock(mode="SM", code=torch.tensor([[1, 2, 3], [4, 5, 0]]), duration_days=None, PAD_INDEX=0)
+            >>> no_dur = Mock(
+            ...     mode="SM",
+            ...     code=torch.tensor([[1, 2, 3], [4, 5, 0]]),
+            ...     duration_days=None, PAD_INDEX=0,
+            ... )
             >>> hf_in = demo_model._hf_inputs(no_dur)
             >>> sorted(hf_in.keys())
             ['attention_mask', 'input_ids']
@@ -548,8 +558,9 @@ class EveryQueryModel(torch.nn.Module):
 
         if batch.duration_days is not None:
             # tok_embeddings in newer transformers, word_embeddings in older
-            embed_layer = getattr(self.HF_model.embeddings, "tok_embeddings", None) or getattr(
-                self.HF_model.embeddings, "word_embeddings"
+            embed_layer = (
+                getattr(self.HF_model.embeddings, "tok_embeddings", None)
+                or self.HF_model.embeddings.word_embeddings
             )
             word_embeds = embed_layer(batch.code)  # (B, seq_len, H)
             dur_norm = (batch.duration_days / 365.0).unsqueeze(-1)  # (B, 1)

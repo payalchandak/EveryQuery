@@ -12,7 +12,6 @@ import torch
 
 from every_query.lightning_module import EveryQueryLightningModule
 
-
 _CONFIGURED_WD = 0.01
 
 
@@ -84,9 +83,7 @@ class TestWeightDecayParamGroupSeparation:
                 grouped_ptrs.add(p.data_ptr())
                 total_grouped += 1
 
-        assert expected_ptrs == grouped_ptrs, (
-            "Optimizer param groups don't cover all module parameters"
-        )
+        assert expected_ptrs == grouped_ptrs, "Optimizer param groups don't cover all module parameters"
         assert total_grouped == len(expected_ptrs), (
             f"Expected {len(expected_ptrs)} params but groups contain {total_grouped} "
             "(some parameters appear in multiple groups)"
