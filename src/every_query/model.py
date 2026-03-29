@@ -410,37 +410,32 @@ class EveryQueryModel(torch.nn.Module):
     def _hf_inputs(self, batch: EveryQueryBatch) -> dict[str, torch.Tensor]:
         """Converts the EveryQueryBatch to a dictionary of inputs for the Hugging Face model.
 
-        HF relevant input keys:
-            - input_ids: The input sequence of token IDs. Captured in `batch.code`.
-            - attention_mask: A mask to avoid attending to padding tokens. See the
-              [documentation](https://huggingface.co/docs/transformers/en/model_doc/gpt_neox#transformers.GPTNeoXModel.forward.attention_mask)
-              for more details. Should be a tensor of shape `(batch_size, seq_len)` (same as `input_ids`) with
-              0s for tokens that are masked and 1s for tokens that are not masked. This means it is given by
-              `batch.code != batch.PAD_INDEX` as whenever the code is not a padding token, it should be
-              attended to.
+        Every query uses the uniform prefix ``[QUANT, c1..cN, SEP, DUR, SEP, ...]``
+        so the DUR placeholder already occupies a real token slot in ``batch.code``.
+        We always take the ``inputs_embeds`` path: look up word embeddings for every
+        token, then overwrite the DUR slot (at ``query_embed_position - 1``) with the
+        continuous duration embedding produced by ``self.duration_embed``.
 
         Args:
             batch: The input batch of data.
 
         Returns:
-            A dictionary of inputs for the Hugging Face model.
+            A dictionary with ``inputs_embeds`` and ``attention_mask`` for the Hugging Face Model.
         """
-        attention_mask = batch.code != batch.PAD_INDEX  # (batch_size, seq_len)
+        attention_mask = batch.code != batch.PAD_INDEX  # (B, seq_len)
 
-        if batch.duration_days is not None:
-            word_embeds = self.HF_model.embeddings.word_embeddings(batch.code)  # (B, seq_len, H)
-            dur_norm = (batch.duration_days / 365.0).unsqueeze(-1)  # (B, 1)
-            dur_emb = self.duration_embed(dur_norm).unsqueeze(1)    # (B, 1, H)
-            # Insert duration embedding at position 1 (after query token at position 0)
-            inputs_embeds = torch.cat([word_embeds[:, :1, :], dur_emb, word_embeds[:, 1:, :]], dim=1)
-            dur_mask = torch.ones(batch.code.shape[0], 1, dtype=torch.bool, device=batch.code.device)
-            attention_mask = torch.cat([attention_mask[:, :1], dur_mask, attention_mask[:, 1:]], dim=1)
-            return {"inputs_embeds": inputs_embeds, "attention_mask": attention_mask}
+        word_embeds = self.HF_model.embeddings.word_embeddings(batch.code)  # (B, seq_len, H)
 
-        return {
-            "input_ids": batch.code,
-            "attention_mask": attention_mask,
-        }
+        dur_norm = (batch.duration_days / 365.0).unsqueeze(-1)  # (B, 1)
+        dur_emb = self.duration_embed(dur_norm)                  # (B, H)
+
+        # Overwrite the DUR placeholder with the learned duration embedding.
+        # Fancy-index because the DUR position differs across samples.
+        batch_idx = torch.arange(word_embeds.size(0), device=word_embeds.device)
+        dur_pos = batch.query_embed_position - 1
+        word_embeds[batch_idx, dur_pos, :] = dur_emb
+
+        return {"inputs_embeds": word_embeds, "attention_mask": attention_mask}
 
     def _forward_demo(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         """A demo forward pass that adds more checks and assertions."""
