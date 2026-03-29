@@ -221,11 +221,11 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
             logger.info("Old-format Parquet detected: synthesizing 'query_codes' from 'query' column.")
             self.has_query_codes = True
         if not self.has_duration_days:
-            logger.warning(
-                "Task labels missing 'duration_days'; defaulting to 30. "
-                "For accurate results, add a 'duration_days' column to the task Parquet."
+            raise ValueError(
+                "Task Parquet is missing a 'duration_days' column. "
+                "Every task file must specify the prediction horizon explicitly. "
+                "Add a 'duration_days' column to the task Parquet."
             )
-            self.has_duration_days = True
 
         self.occurs = self.schema_df["occurs"] if self.has_occurs else None
         self.quantifier = (
@@ -238,10 +238,7 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
             else [[q] for q in self.schema_df["query"].to_list()] if has_old_query
             else None
         )
-        self.duration_days = (
-            self.schema_df["duration_days"] if "duration_days" in schema_names
-            else [30.0] * len(self.schema_df)
-        )
+        self.duration_days = self.schema_df["duration_days"]
         # Load code vocabulary mapping (string code -> integer vocab index) for encoding queries
         try:
             code_meta = pl.read_parquet(
