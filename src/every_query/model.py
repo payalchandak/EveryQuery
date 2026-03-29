@@ -436,7 +436,9 @@ class EveryQueryModel(torch.nn.Module):
         """
         attention_mask = batch.code != batch.PAD_INDEX  # (B, seq_len)
 
-        word_embeds = self.HF_model.embeddings.word_embeddings(batch.code)  # (B, seq_len, H)
+        # Work on a copy: the embedding output sits in the autograd graph, and the
+        # in-place DUR overwrite below would corrupt gradient bookkeeping without clone().
+        word_embeds = self.HF_model.embeddings.word_embeddings(batch.code).clone()  # (B, seq_len, H)
 
         dur_norm = (batch.duration_days / 365.0).unsqueeze(-1)  # (B, 1)
         dur_emb = self.duration_embed(dur_norm)                  # (B, H)
