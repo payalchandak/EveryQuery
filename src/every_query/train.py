@@ -19,12 +19,12 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 logger = logging.getLogger(__name__)
 
 
-@OmegaConfResolver
+@OmegaConfResolver(replace=True)
 def list_len(x):
     return builtins.len(x)
 
 
-@OmegaConfResolver
+@OmegaConfResolver(replace=True)
 def int_prod(x: int, y: int) -> int:
     """Returns the closest integer to the product of x and y (available as an OmegaConf resolver).
 

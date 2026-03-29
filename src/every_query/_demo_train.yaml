@@ -27,7 +27,7 @@ query:
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
-  data_class: dataset.EveryQueryPytorchDataset
+  data_class: every_query.dataset.EveryQueryPytorchDataset
   config:
     _target_: meds_torchdata.MEDSTorchDataConfig
     tensorized_cohort_dir: ???
