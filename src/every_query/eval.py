@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any
 
 import hydra
-from hydra.core.hydra_config import HydraConfig
 import polars as pl
 import torch
+from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
 from omegaconf import DictConfig, OmegaConf
