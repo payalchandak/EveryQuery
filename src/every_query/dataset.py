@@ -292,7 +292,7 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
 
         dynamic_data = out["dynamic"]
         schema = dynamic_data.schema
-        schema["code"] = np.int16
+        schema["code"] = np.int64
 
         quantifier_str = self.quantifier[idx]
         quant_token = (
