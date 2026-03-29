@@ -457,8 +457,9 @@ class EveryQueryModel(torch.nn.Module):
 
     def _forward(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         outputs = self.HF_model(**self._hf_inputs(batch))
-        embeddings = outputs.last_hidden_state  # (batch_size, seq_len + query_len, hidden_size)
-        query_embed = embeddings[:, 0, :]  # 0 is query_index (batch_size, hidden_size)
+        embeddings = outputs.last_hidden_state  # (batch_size, seq_len, hidden_size)
+        batch_idx = torch.arange(embeddings.size(0), device=embeddings.device)
+        query_embed = embeddings[batch_idx, batch.query_embed_position, :]  # (batch_size, hidden_size)
 
         censor_logits = self.censor_mlp(query_embed)
         censor_loss = self._get_loss(censor_logits, batch.censor, mask=None)
