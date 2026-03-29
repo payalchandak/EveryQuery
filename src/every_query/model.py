@@ -299,8 +299,8 @@ class EveryQueryModel(torch.nn.Module):
 
     @property
     def vocab_size(self) -> int:
-        """The vocabulary size of the model."""
-        return self.HF_model_config.vocab_size
+        """The vocabulary size of the model (after any embedding resizing)."""
+        return self.HF_model.get_input_embeddings().num_embeddings
 
     def _check_inputs(self, batch: EveryQueryBatch):
         """Checks the inputs for various validity properties.
