@@ -40,6 +40,97 @@ class EveryQueryBatch(MEDSTorchBatch):
     LABEL_TENSOR_NAMES: ClassVar[tuple[str]] = ("boolean_value", "censor", "occurs", "query", "duration_days")
 
     def __post_init__(self):
+        """Run base validations and check EveryQuery annotation shapes.
+
+        Examples:
+            Valid SM-mode batch with all EveryQuery annotations:
+
+            >>> batch = EveryQueryBatch(
+            ...     code=torch.tensor([[1, 2, 3], [4, 5, 0]]),
+            ...     numeric_value=torch.tensor([[1.0, 0.0, -3.0], [0.0, 0.0, 0.0]]),
+            ...     numeric_value_mask=torch.tensor([[True, False, True], [False, True, False]]),
+            ...     time_delta_days=torch.tensor([[1.0, 0.0, 2.0], [4.0, 0.0, 0.0]]),
+            ...     censor=torch.tensor([True, False]),
+            ...     occurs=torch.tensor([1, 0]),
+            ...     query=torch.tensor([10, 20]),
+            ...     duration_days=torch.tensor([30.0, 60.0]),
+            ... )
+            >>> batch.batch_size
+            2
+            >>> batch.occurs.tolist()
+            [1, 0]
+
+            Annotations default to ``None`` when omitted:
+
+            >>> batch = EveryQueryBatch(
+            ...     code=torch.tensor([[1, 2], [3, 4]]),
+            ...     numeric_value=torch.tensor([[1.0, 0.0], [0.0, 0.0]]),
+            ...     numeric_value_mask=torch.tensor([[True, False], [False, True]]),
+            ...     time_delta_days=torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+            ... )
+            >>> batch.occurs is None
+            True
+
+            Mismatched ``occurs`` shape raises ``ValueError``:
+
+            >>> EveryQueryBatch(
+            ...     code=torch.tensor([[1, 2], [3, 4]]),
+            ...     numeric_value=torch.tensor([[1.0, 0.0], [0.0, 0.0]]),
+            ...     numeric_value_mask=torch.tensor([[True, False], [False, True]]),
+            ...     time_delta_days=torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+            ...     occurs=torch.tensor([1, 0, 1]),
+            ... )
+            Traceback (most recent call last):
+                ...
+            ValueError: Expected shape (2,) for occurs, but got torch.Size([3])!
+
+            Wrong dimensionality for ``duration_days`` also fails:
+
+            >>> EveryQueryBatch(
+            ...     code=torch.tensor([[1, 2], [3, 4]]),
+            ...     numeric_value=torch.tensor([[1.0, 0.0], [0.0, 0.0]]),
+            ...     numeric_value_mask=torch.tensor([[True, False], [False, True]]),
+            ...     time_delta_days=torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+            ...     duration_days=torch.tensor([[30.0], [60.0]]),
+            ... )
+            Traceback (most recent call last):
+                ...
+            ValueError: Expected shape (2,) for duration_days, but got torch.Size([2, 1])!
+
+            SEM mode works with annotations and inherited ``boolean_value``:
+
+            >>> batch = EveryQueryBatch(
+            ...     code=torch.tensor([[[1, 2], [3, 0]], [[5, 6], [0, 0]]]),
+            ...     numeric_value=torch.tensor(
+            ...         [[[1.0, 0.0], [0.0, 0.0]], [[0.0, 0.0], [0.0, 0.0]]]),
+            ...     numeric_value_mask=torch.tensor(
+            ...         [[[True, False], [False, False]], [[False, True], [False, False]]]),
+            ...     time_delta_days=torch.tensor([[1.0, 2.0], [4.0, 0.0]]),
+            ...     event_mask=torch.tensor([[True, True], [True, False]]),
+            ...     boolean_value=torch.tensor([True, False]),
+            ...     censor=torch.tensor([True, False]),
+            ...     occurs=torch.tensor([1, 0]),
+            ... )
+            >>> print(batch.mode)
+            SEM
+            >>> batch.has_labels
+            True
+            >>> batch.censor.tolist()
+            [True, False]
+
+            Mismatched ``censor`` shape raises ``ValueError``:
+
+            >>> EveryQueryBatch(
+            ...     code=torch.tensor([[1, 2], [3, 4]]),
+            ...     numeric_value=torch.tensor([[1.0, 0.0], [0.0, 0.0]]),
+            ...     numeric_value_mask=torch.tensor([[True, False], [False, True]]),
+            ...     time_delta_days=torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+            ...     censor=torch.tensor([True]),
+            ... )
+            Traceback (most recent call last):
+                ...
+            ValueError: Expected shape (2,) for censor, but got torch.Size([1])!
+        """
         # Run base validations
         super().__post_init__()
 
@@ -70,6 +161,88 @@ class QueryData(NamedTuple):
 
         Raises:
             ValueError: If the batch mode is not SEM or SM.
+
+        Examples:
+            >>> from nested_ragged_tensors.ragged_numpy import pprint_dense
+            >>> query = QueryData(code=[5])
+
+        In SM mode, codes and NaN fillers are stored flat (one entry per code):
+
+            >>> pprint_dense(query.to_JNRT(BatchMode.SM).to_dense())
+            code
+            [5]
+            .
+            numeric_value
+            [nan]
+            .
+            time_delta_days
+            [nan]
+
+        Multiple codes in SM mode produce one entry per code:
+
+            >>> pprint_dense(QueryData(code=[5, 7]).to_JNRT(BatchMode.SM).to_dense())
+            code
+            [5 7]
+            .
+            numeric_value
+            [nan nan]
+            .
+            time_delta_days
+            [nan nan]
+
+        In SEM mode, codes are nested inside a single event:
+
+            >>> pprint_dense(query.to_JNRT(BatchMode.SEM).to_dense())
+            numeric_value
+            [nan]
+            .
+            time_delta_days
+            [nan]
+            .
+            ---
+            .
+            dim1/mask
+            [[ True]]
+            .
+            code
+            [[5]]
+
+        SEM mode with multiple codes nests them inside one event:
+
+            >>> pprint_dense(QueryData(code=[5, 7]).to_JNRT(BatchMode.SEM).to_dense())
+            numeric_value
+            [nan]
+            .
+            time_delta_days
+            [nan]
+            .
+            ---
+            .
+            dim1/mask
+            [[ True  True]]
+            .
+            code
+            [[5 7]]
+
+        A ``schema`` can override the dtype of stored arrays:
+
+            >>> import numpy as np
+            >>> pprint_dense(QueryData(code=[5]).to_JNRT(BatchMode.SM, schema={"code": np.float32}).to_dense())
+            code
+            [5.]
+            .
+            numeric_value
+            [nan]
+            .
+            time_delta_days
+            [nan]
+
+        An invalid batch mode raises ``ValueError``:
+
+            >>> query.to_JNRT("invalid")
+            Traceback (most recent call last):
+                ...
+            ValueError: Invalid batch mode invalid!
         """
 
         match batch_mode:
