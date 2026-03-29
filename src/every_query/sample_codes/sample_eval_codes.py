@@ -41,4 +41,4 @@ if __name__ == "__main__":
         with open(out_fp, "w") as f:
             yaml.safe_dump(out_codes, f)
 
-        print(f"Writtten to {out_fp}")
+        print(f"Written to {out_fp}")
