@@ -181,6 +181,9 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         if "duration_days" in label_names:
             group_cols.append("duration_days")
             out_cols.append("duration_days")
+        if "query" in label_names:
+            group_cols.append("query")
+            out_cols.append("query")
 
         return (
             label_df.join(schema_df, on=DataSchema.subject_id_name, how="inner", maintain_order="left")
@@ -207,10 +210,38 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         self.has_quantifier: bool = "quantifier" in self.schema_df.collect_schema().names()
         self.has_query_codes: bool = "query_codes" in self.schema_df.collect_schema().names()
         self.has_duration_days: bool = "duration_days" in self.schema_df.collect_schema().names()
+
+        schema_names = self.schema_df.collect_schema().names()
+        has_old_query = "query" in schema_names
+
+        if has_old_query and not self.has_quantifier:
+            logger.info("Old-format Parquet detected: synthesizing 'quantifier' from 'query' column.")
+            self.has_quantifier = True
+        if has_old_query and not self.has_query_codes:
+            logger.info("Old-format Parquet detected: synthesizing 'query_codes' from 'query' column.")
+            self.has_query_codes = True
+        if not self.has_duration_days:
+            logger.warning(
+                "Task labels missing 'duration_days'; defaulting to 30. "
+                "For accurate results, add a 'duration_days' column to the task Parquet."
+            )
+            self.has_duration_days = True
+
         self.occurs = self.schema_df["occurs"] if self.has_occurs else None
-        self.quantifier = self.schema_df["quantifier"] if self.has_quantifier else None
-        self.query_codes = self.schema_df["query_codes"] if self.has_query_codes else None
-        self.duration_days = self.schema_df["duration_days"] if self.has_duration_days else None
+        self.quantifier = (
+            self.schema_df["quantifier"] if "quantifier" in schema_names
+            else ["ANY"] * len(self.schema_df) if has_old_query
+            else None
+        )
+        self.query_codes = (
+            self.schema_df["query_codes"] if "query_codes" in schema_names
+            else [[q] for q in self.schema_df["query"].to_list()] if has_old_query
+            else None
+        )
+        self.duration_days = (
+            self.schema_df["duration_days"] if "duration_days" in schema_names
+            else [30.0] * len(self.schema_df)
+        )
         # Load code vocabulary mapping (string code -> integer vocab index) for encoding queries
         try:
             code_meta = pl.read_parquet(
@@ -236,7 +267,7 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         def read_df(fp: Path) -> pl.DataFrame:
             schema = pq.read_schema(fp)
             extras = []
-            for extra_col in [self.LABEL_COL, "occurs", "quantifier", "query_codes", "duration_days"]:
+            for extra_col in [self.LABEL_COL, "occurs", "quantifier", "query_codes", "duration_days", "query"]:
                 if extra_col in schema.names:
                     extras.append(extra_col)
             label_cols = [*required_cols, *extras]
