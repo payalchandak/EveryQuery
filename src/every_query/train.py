@@ -149,7 +149,7 @@ def collate_tasks(cfg: DictConfig) -> str:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)
         file_names = os.listdir(f"{task_dir}/{first_duration}/{split}")
 
-        max_workers = min(len(file_names), os.cpu_count() or 4)
+        max_workers = min(len(file_names), int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4)))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(
