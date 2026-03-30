@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import hydra
+import numpy as np
 import polars as pl
 import torch
 from hydra.utils import instantiate
@@ -104,68 +105,97 @@ def _collate_shard(
         return
 
     logger.info(f"Collating {out_path}")
-    columns = ["subject_id", "prediction_time", "censored", *codes]
     n_codes = len(codes)
+    rng = np.random.default_rng(seed)
 
-    # Pass 1: Collect lightweight index (no code columns) across all durations
+    # --- PASS 1: Generate the Index Pool ---
+    # We collect all available timestamps across all durations.
     index_frames = []
     for d in durations:
         idx = (
             pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}")
-            .select("subject_id", "prediction_time", "censored")
+            .select("subject_id", "prediction_time")
             .with_columns(pl.lit(d).alias("duration_days"))
             .collect()
         )
         index_frames.append(idx)
 
+    if not index_frames:
+        return
+
     all_indices = pl.concat(index_frames)
     del index_frames
 
-    # Sample wide rows per subject uniformly. Each kept wide row becomes n_codes narrow
-    # rows after unpivot, so keep enough to cover sample_times_per_subject with margin.
+    # --- PASS 2: Sample Labels Statistically Identical to Original ---
+    # To match the original distribution, we must sample from (Time * Code) space.
+    # Instead of exploding 10k codes (memory heavy), we assign random code indices.
 
-    sampled_indices = (
-        all_indices.sample(fraction=1, shuffle=True, seed=seed)
+    # We repeat the indices enough times to ensure we can hit the sample target
+    # even if a subject has very few timestamps.
+    oversample_factor = min(n_codes, 10)
+
+    sampled_labels = (
+        all_indices.select(pl.all(), pl.lit(list(range(oversample_factor))).alias("_rep"))
+        .explode("_rep")
+        .with_columns(
+            # Randomly assign a code index to every "slot"
+            pl.lit(rng.integers(0, n_codes, size=len(all_indices) * oversample_factor)).alias("code_idx")
+        )
+        # Global shuffle across all times/durations/codes for this shard
+        .sample(fraction=1, shuffle=True, seed=seed)
         .group_by("subject_id")
         .head(sample_times_per_subject)
+        .with_columns(
+            # Map index back to the actual column name
+            pl.col("code_idx").map_elements(lambda i: codes[i], return_dtype=pl.String).alias("query")
+        )
+        .drop("_rep", "code_idx")
     )
     del all_indices
 
-    # Pass 2: For each duration, read only the kept rows via semi-join, then unpivot
+    # --- PASS 3: Selective Extraction ---
+    # We only load the columns and rows we actually selected in Pass 2.
     batch_results = []
     for d in durations:
-        kept = sampled_indices.filter(pl.col("duration_days") == d).select("subject_id", "prediction_time")
-        if kept.is_empty():
+        kept_for_duration = sampled_labels.filter(pl.col("duration_days") == d)
+        if kept_for_duration.is_empty():
             continue
 
-        wide_df = pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}").select(columns).collect()
+        unique_times = kept_for_duration.select("subject_id", "prediction_time").unique()
+        needed_codes = kept_for_duration.get_column("query").unique().to_list()
 
-        matched = wide_df.join(kept, on=["subject_id", "prediction_time"], how="semi")
-        del wide_df
+        # Only read the subset of 10k columns that were actually sampled
+        load_cols = ["subject_id", "prediction_time", "censored", *needed_codes]
 
-        if matched.is_empty():
-            continue
+        wide_df = (
+            pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}")
+            .select(load_cols)
+            .join(unique_times.lazy(), on=["subject_id", "prediction_time"], how="inner")
+            .collect()
+        )
 
         narrow_df = (
-            matched.with_columns(pl.lit(d).alias("duration_days"))
+            wide_df.with_columns(pl.lit(d).alias("duration_days"))
             .unpivot(
                 index=["subject_id", "prediction_time", "censored", "duration_days"],
                 variable_name="query",
                 value_name="occurs",
             )
+            # Inner join ensures we only keep the specific (Time, Code) pairs from Pass 2
+            .join(
+                kept_for_duration, on=["subject_id", "prediction_time", "duration_days", "query"], how="inner"
+            )
             .rename({"censored": "boolean_value"})
             .with_columns(pl.col("occurs").fill_null(False))
         )
-        del matched
         batch_results.append(narrow_df)
 
-    shard = (
-        pl.concat(batch_results)
-        .sample(fraction=1, shuffle=True, seed=seed)
-        .group_by(["subject_id"])
-        .head(sample_times_per_subject)
-    )
-    shard.write_parquet(out_path)
+    # --- PASS 4: Final Write ---
+    if batch_results:
+        shard = pl.concat(batch_results)
+        # Final shuffle so the file isn't ordered by duration
+        shard = shard.sample(fraction=1, shuffle=True, seed=seed)
+        shard.write_parquet(out_path)
 
 
 def collate_tasks(cfg: DictConfig) -> str:
