@@ -99,34 +99,64 @@ def _collate_shard(
 
     logger.info(f"Collating {out_path}")
     columns = ["subject_id", "prediction_time", "censored", *codes]
+    n_codes = len(codes)
 
-    duration_batch_size = 10
+    # Pass 1: Collect lightweight index (no code columns) across all durations
+    index_frames = []
+    for d in durations:
+        idx = (
+            pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}")
+            .select("subject_id", "prediction_time", "censored")
+            .with_columns(pl.lit(d).alias("duration_days"))
+            .collect(streaming=True)
+        )
+        index_frames.append(idx)
+
+    all_indices = pl.concat(index_frames)
+    del index_frames
+
+    # Sample wide rows per subject uniformly. Each kept wide row becomes n_codes narrow
+    # rows after unpivot, so keep enough to cover sample_times_per_subject with margin.
+    n_wide_per_subject = max(1, -(-sample_times_per_subject // n_codes) * 2)
+
+    sampled_indices = (
+        all_indices.sample(fraction=1, shuffle=True, seed=seed)
+        .group_by("subject_id")
+        .head(n_wide_per_subject)
+    )
+    del all_indices
+
+    # Pass 2: For each duration, read only the kept rows via semi-join, then unpivot
     batch_results = []
-    for i in range(0, len(durations), duration_batch_size):
-        batch_durations = durations[i : i + duration_batch_size]
+    for d in durations:
+        kept = sampled_indices.filter(pl.col("duration_days") == d).select("subject_id", "prediction_time")
+        if kept.is_empty():
+            continue
 
-        duration_frames = [
+        wide_df = (
             pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}")
             .select(columns)
-            .with_columns(pl.lit(d).alias("duration_days"))
+            .collect(streaming=True)
+        )
+
+        matched = wide_df.join(kept, on=["subject_id", "prediction_time"], how="semi")
+        del wide_df
+
+        if matched.is_empty():
+            continue
+
+        narrow_df = (
+            matched.with_columns(pl.lit(d).alias("duration_days"))
             .unpivot(
                 index=["subject_id", "prediction_time", "censored", "duration_days"],
                 variable_name="query",
                 value_name="occurs",
             )
-            for d in batch_durations
-        ]
-
-        batch_df = (
-            pl.concat(duration_frames)
             .rename({"censored": "boolean_value"})
             .with_columns(pl.col("occurs").fill_null(False))
-            .collect()
-            .sample(fraction=1, shuffle=True, seed=seed)
-            .group_by(["subject_id"])
-            .head(sample_times_per_subject)
         )
-        batch_results.append(batch_df)
+        del matched
+        batch_results.append(narrow_df)
 
     shard = (
         pl.concat(batch_results)
