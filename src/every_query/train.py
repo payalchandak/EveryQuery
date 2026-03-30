@@ -100,23 +100,36 @@ def _collate_shard(
     logger.info(f"Collating {out_path}")
     columns = ["subject_id", "prediction_time", "censored", *codes]
 
-    duration_frames = [
-        pl.scan_parquet(f"{task_dir}/{duration}/{split}/{file_name}")
-        .select(columns)
-        .with_columns(pl.lit(duration).alias("duration_days"))
-        .unpivot(
-            index=["subject_id", "prediction_time", "censored", "duration_days"],
-            variable_name="query",
-            value_name="occurs",
+    duration_batch_size = 10
+    batch_results = []
+    for i in range(0, len(durations), duration_batch_size):
+        batch_durations = durations[i : i + duration_batch_size]
+
+        duration_frames = [
+            pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}")
+            .select(columns)
+            .with_columns(pl.lit(d).alias("duration_days"))
+            .unpivot(
+                index=["subject_id", "prediction_time", "censored", "duration_days"],
+                variable_name="query",
+                value_name="occurs",
+            )
+            for d in batch_durations
+        ]
+
+        batch_df = (
+            pl.concat(duration_frames)
+            .rename({"censored": "boolean_value"})
+            .with_columns(pl.col("occurs").fill_null(False))
+            .collect()
+            .sample(fraction=1, shuffle=True, seed=seed)
+            .group_by(["subject_id"])
+            .head(sample_times_per_subject)
         )
-        for duration in durations
-    ]
+        batch_results.append(batch_df)
 
     shard = (
-        pl.concat(duration_frames)
-        .rename({"censored": "boolean_value"})
-        .with_columns(pl.col("occurs").fill_null(False))
-        .collect()
+        pl.concat(batch_results)
         .sample(fraction=1, shuffle=True, seed=seed)
         .group_by(["subject_id"])
         .head(sample_times_per_subject)
