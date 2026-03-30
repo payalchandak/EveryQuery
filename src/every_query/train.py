@@ -2,6 +2,7 @@ import builtins
 import hashlib
 import logging
 import os
+
 NUM_CPUS = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
 FILES_AT_ONCE = 10
 THREADS_PER_FILE = max(1, NUM_CPUS // FILES_AT_ONCE)
@@ -122,12 +123,11 @@ def _collate_shard(
 
     # Sample wide rows per subject uniformly. Each kept wide row becomes n_codes narrow
     # rows after unpivot, so keep enough to cover sample_times_per_subject with margin.
-    n_wide_per_subject = max(1, -(-sample_times_per_subject // n_codes) * 2)
 
     sampled_indices = (
         all_indices.sample(fraction=1, shuffle=True, seed=seed)
         .group_by("subject_id")
-        .head(n_wide_per_subject)
+        .head(sample_times_per_subject)
     )
     del all_indices
 
