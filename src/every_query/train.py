@@ -2,6 +2,11 @@ import builtins
 import hashlib
 import logging
 import os
+NUM_CPUS = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+FILES_AT_ONCE = 10
+THREADS_PER_FILE = max(1, NUM_CPUS // FILES_AT_ONCE)
+os.environ["POLARS_MAX_THREADS"] = str(THREADS_PER_FILE)
+os.environ["OMP_NUM_THREADS"] = str(THREADS_PER_FILE)
 import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -108,7 +113,7 @@ def _collate_shard(
             pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}")
             .select("subject_id", "prediction_time", "censored")
             .with_columns(pl.lit(d).alias("duration_days"))
-            .collect(streaming=True)
+            .collect()
         )
         index_frames.append(idx)
 
@@ -133,11 +138,7 @@ def _collate_shard(
         if kept.is_empty():
             continue
 
-        wide_df = (
-            pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}")
-            .select(columns)
-            .collect(streaming=True)
-        )
+        wide_df = pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}").select(columns).collect()
 
         matched = wide_df.join(kept, on=["subject_id", "prediction_time"], how="semi")
         del wide_df
@@ -192,8 +193,7 @@ def collate_tasks(cfg: DictConfig) -> str:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)
         file_names = os.listdir(f"{task_dir}/{first_duration}/{split}")
 
-        max_workers = min(len(file_names), int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4)))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=FILES_AT_ONCE) as executor:
             futures = [
                 executor.submit(
                     _collate_shard,
