@@ -2,12 +2,20 @@ import builtins
 import hashlib
 import logging
 import os
+
+NUM_CPUS = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+FILES_AT_ONCE = 10
+THREADS_PER_FILE = max(1, NUM_CPUS // FILES_AT_ONCE)
+os.environ["POLARS_MAX_THREADS"] = str(THREADS_PER_FILE)
+os.environ["OMP_NUM_THREADS"] = str(THREADS_PER_FILE)
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import hydra
+import numpy as np
 import polars as pl
 import torch
 from hydra.utils import instantiate
@@ -173,52 +181,158 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
     return sorted_checkpoints[-1] if sorted_checkpoints else None
 
 
+def _collate_shard(
+    file_name: str,
+    split: str,
+    write_dir: str,
+    task_dir: str,
+    durations: list,
+    codes: list,
+    sample_times_per_subject: int,
+    seed: int,
+) -> None:
+    out_path = f"{write_dir}/{split}/{file_name}"
+    if os.path.exists(out_path):
+        logger.info(f"Skipping shard. Already collated at {out_path}.")
+        return
+
+    logger.info(f"Collating {out_path}")
+    n_codes = len(codes)
+    rng = np.random.default_rng(seed)
+
+    # --- PASS 1: Generate the Index Pool ---
+    # We collect all available timestamps across all durations.
+    index_frames = []
+    for d in durations:
+        idx = (
+            pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}")
+            .select("subject_id", "prediction_time")
+            .with_columns(pl.lit(d).alias("duration_days"))
+            .collect()
+        )
+        index_frames.append(idx)
+
+    if not index_frames:
+        return
+
+    all_indices = pl.concat(index_frames)
+    del index_frames
+
+    # --- PASS 2: Sample Labels Statistically Identical to Original ---
+    # To match the original distribution, we must sample from (Time * Code) space.
+    # Instead of exploding 10k codes (memory heavy), we assign random code indices.
+
+    # We repeat the indices enough times to ensure we can hit the sample target
+    # even if a subject has very few timestamps.
+    oversample_factor = min(n_codes, 10)
+
+    sampled_labels = (
+        all_indices.select(pl.all(), pl.lit(list(range(oversample_factor))).alias("_rep"))
+        .explode("_rep")
+        .with_columns(
+            # Randomly assign a code index to every "slot"
+            pl.lit(rng.integers(0, n_codes, size=len(all_indices) * oversample_factor)).alias("code_idx")
+        )
+        # Global shuffle across all times/durations/codes for this shard
+        .sample(fraction=1, shuffle=True, seed=seed)
+        .group_by("subject_id")
+        .head(sample_times_per_subject)
+        .with_columns(
+            # Map index back to the actual column name
+            pl.col("code_idx").map_elements(lambda i: codes[i], return_dtype=pl.String).alias("query")
+        )
+        .drop("_rep", "code_idx")
+    )
+    del all_indices
+
+    # --- PASS 3: Selective Extraction ---
+    # We only load the columns and rows we actually selected in Pass 2.
+    batch_results = []
+    for d in durations:
+        kept_for_duration = sampled_labels.filter(pl.col("duration_days") == d)
+        if kept_for_duration.is_empty():
+            continue
+
+        unique_times = kept_for_duration.select("subject_id", "prediction_time").unique()
+        needed_codes = kept_for_duration.get_column("query").unique().to_list()
+
+        # Only read the subset of 10k columns that were actually sampled
+        load_cols = ["subject_id", "prediction_time", "censored", *needed_codes]
+
+        wide_df = (
+            pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}")
+            .select(load_cols)
+            .join(unique_times.lazy(), on=["subject_id", "prediction_time"], how="inner")
+            .collect()
+        )
+
+        narrow_df = (
+            wide_df.with_columns(pl.lit(d).alias("duration_days"))
+            .unpivot(
+                index=["subject_id", "prediction_time", "censored", "duration_days"],
+                variable_name="query",
+                value_name="occurs",
+            )
+            # Inner join ensures we only keep the specific (Time, Code) pairs from Pass 2
+            .join(
+                kept_for_duration, on=["subject_id", "prediction_time", "duration_days", "query"], how="inner"
+            )
+            .rename({"censored": "boolean_value"})
+            .with_columns(pl.col("occurs").fill_null(False))
+        )
+        batch_results.append(narrow_df)
+
+    # --- PASS 4: Final Write ---
+    if batch_results:
+        shard = pl.concat(batch_results)
+        # Final shuffle so the file isn't ordered by duration
+        shard = shard.sample(fraction=1, shuffle=True, seed=seed)
+        shard.write_parquet(out_path)
+
+
 def collate_tasks(cfg: DictConfig) -> str:
     task_dir = cfg.query.task_dir
-    durations = list(range(cfg.query.duration_min, cfg.query.duration_max))
+    durations_path = f"{task_dir}/sampled_durations.json"
+    if os.path.exists(durations_path):
+        import json
+
+        with open(durations_path) as f:
+            durations = json.load(f)
+    else:
+        durations = list(range(cfg.query.duration_min, cfg.query.duration_max))
 
     task_str = f"{'|'.join(sorted(cfg.query.codes))}_{'|'.join(str(d) for d in sorted(durations))}"
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
     write_dir = f"{task_dir}/collated/{hash_hex}"
 
     first_duration = durations[0]
+    codes = list(cfg.query.codes)
+    seed = cfg.get("seed", 1)
+    sample_times_per_subject = cfg.query.sample_times_per_subject
 
     # Eval tasks generated in separate file
     for split in [train_split, tuning_split]:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)
+        file_names = os.listdir(f"{task_dir}/{first_duration}/{split}")
 
-        for file_name in os.listdir(f"{task_dir}/{first_duration}/{split}"):
-            f = f"{write_dir}/{split}/{file_name}"
-            logger.info(f"Collating {f}")
-
-            if os.path.exists(f):
-                logger.info(f"Skipping shard. Already collated at {f}.")
-                continue
-
-            duration_shards = []
-            for duration in durations:
-                duration_shards.append(
-                    pl.read_parquet(
-                        source=f"{task_dir}/{duration}/{split}/{file_name}",
-                        columns=["subject_id", "prediction_time", "censored", *cfg.query.codes],
-                    )
-                    .with_columns(pl.lit(duration).alias("duration_days"))
-                    .unpivot(
-                        index=["subject_id", "prediction_time", "censored", "duration_days"],
-                        variable_name="query",
-                        value_name="occurs",
-                    )
+        with ThreadPoolExecutor(max_workers=FILES_AT_ONCE) as executor:
+            futures = [
+                executor.submit(
+                    _collate_shard,
+                    file_name,
+                    split,
+                    write_dir,
+                    task_dir,
+                    durations,
+                    codes,
+                    sample_times_per_subject,
+                    seed,
                 )
+                for file_name in file_names
+            ]
+            for future in as_completed(futures):
+                future.result()
 
-            shard = (
-                pl.concat(duration_shards)
-                .rename({"censored": "boolean_value"})
-                .with_columns(pl.col("occurs").fill_null(False))
-                .sample(fraction=1, shuffle=True, seed=cfg.get("seed", 1))
-                .group_by(["subject_id"])
-                .head(cfg.query.sample_times_per_subject)
-            )
-            shard.write_parquet(f)
         logger.info(f"Tasks collated for {split} and written to {hash_hex}.")
 
     return write_dir
