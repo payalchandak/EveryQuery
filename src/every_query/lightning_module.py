@@ -264,12 +264,42 @@ class EveryQueryLightningModule(L.LightningModule):
                     self._update_metric(name="occurs_auc", split=split, preds=preds, target=target)
 
     def training_step(self, batch: EveryQueryBatch) -> torch.Tensor:
+        """Forward pass and metric logging for a single training batch.
+
+        Examples:
+            >>> with patch.object(demo_lightning_module, '_log_metrics'):
+            ...     loss = demo_lightning_module.training_step(sample_batch)
+            >>> loss.shape
+            torch.Size([])
+            >>> torch.isfinite(loss).item()
+            True
+
+        Unlike ``validation_step``, gradients are tracked:
+
+            >>> loss.requires_grad
+            True
+        """
         loss, outputs = self.model(batch)
         self._log_metrics(loss, outputs, batch, train_split)
         return loss
 
     @torch.no_grad()
     def validation_step(self, batch: EveryQueryBatch) -> torch.Tensor:
+        """Forward pass and metric logging for a single validation batch (no gradients).
+
+        Examples:
+            >>> with patch.object(demo_lightning_module, '_log_metrics'):
+            ...     loss = demo_lightning_module.validation_step(sample_batch)
+            >>> loss.shape
+            torch.Size([])
+            >>> torch.isfinite(loss).item()
+            True
+
+        ``@torch.no_grad`` means the returned loss has no gradient:
+
+            >>> loss.requires_grad
+            False
+        """
         loss, outputs = self.model(batch)
         self._log_metrics(loss, outputs, batch, tuning_split)
         return loss
@@ -282,6 +312,30 @@ class EveryQueryLightningModule(L.LightningModule):
 
     @torch.no_grad()
     def predict_step(self, batch: EveryQueryBatch) -> dict[str, torch.Tensor]:
+        """Produce prediction outputs (probabilities, embeddings, labels) for one batch.
+
+        Examples:
+            >>> pred_batch = copy.copy(sample_batch)
+            >>> pred_batch.subject_id = torch.tensor([1, 2])
+            >>> pred_batch.prediction_time = torch.tensor([100, 200])
+            >>> result = demo_lightning_module.predict_step(pred_batch)
+            >>> sorted(result.keys()) == [
+            ...     'censor', 'censor_probs', 'occurs', 'occurs_probs',
+            ...     'prediction_time', 'query_embed', 'subject_id',
+            ... ]
+            True
+            >>> result['query_embed'].shape[1] == demo_model_config.hidden_size
+            True
+            >>> result['query_embed'].shape[0]
+            2
+
+        Probabilities come from sigmoid, so they lie in [0, 1]:
+
+            >>> result['censor_probs'].min().item() >= 0
+            True
+            >>> result['censor_probs'].max().item() <= 1
+            True
+        """
         _, outputs = self.model(batch)
 
         return {
@@ -296,6 +350,31 @@ class EveryQueryLightningModule(L.LightningModule):
 
     @staticmethod
     def _is_norm_bias_param(n: str) -> bool:
+        """True when *n* is a bias or layer-norm weight (these get zero weight decay).
+
+        Examples:
+            >>> EveryQueryLightningModule._is_norm_bias_param("encoder.attention.self.query.bias")
+            True
+            >>> EveryQueryLightningModule._is_norm_bias_param("encoder.attention.self.query.weight")
+            False
+            >>> EveryQueryLightningModule._is_norm_bias_param("encoder.layer_norm.weight")
+            True
+            >>> EveryQueryLightningModule._is_norm_bias_param("encoder.layernorm2.weight")
+            True
+
+        CamelCase variant used by HuggingFace models:
+
+            >>> EveryQueryLightningModule._is_norm_bias_param("bert.encoder.layer.0.output.LayerNorm.weight")
+            True
+
+        The regex requires a ``layer`` prefix, so ModernBERT-style norm names
+        (``attn_norm``, ``mlp_norm``, ``final_norm``, bare ``norm``) are **not** matched:
+
+            >>> EveryQueryLightningModule._is_norm_bias_param("layers.1.attn_norm.weight")
+            False
+            >>> EveryQueryLightningModule._is_norm_bias_param("final_norm.weight")
+            False
+        """
         return bool(re.search(r"(bias|layer(_?)norm(\d*)\.weight)", n, re.IGNORECASE))
 
     def _norm_bias_params(self) -> Iterator[torch.nn.parameter.Parameter]:
@@ -328,6 +407,59 @@ class EveryQueryLightningModule(L.LightningModule):
         return new_factory
 
     def configure_optimizers(self):
+        """Builds optimizer (and optional LR scheduler) with norm/bias weight-decay separation.
+
+        Returns an optimizer when no LR scheduler factory is set, or a dict with
+        ``"optimizer"`` and ``"lr_scheduler"`` keys when one is provided.
+
+        Raises:
+            ValueError: If no optimizer factory was provided at init time.
+
+        Examples:
+            Without an LR scheduler the return value is just the optimizer:
+
+            >>> result = demo_lightning_module.configure_optimizers()
+            >>> isinstance(result, torch.optim.Optimizer)
+            True
+            >>> len(result.param_groups)
+            2
+            >>> result.param_groups[1]['weight_decay']
+            0.0
+
+            Raises ``ValueError`` when no optimizer factory is set:
+
+            >>> module_no_opt = EveryQueryLightningModule(model=demo_model)
+            >>> module_no_opt.configure_optimizers()
+            Traceback (most recent call last):
+                ...
+            ValueError: Optimizer factory is not set. Cannot configure optimizers.
+
+            With an LR scheduler, returns a dict containing optimizer and scheduler config:
+
+            >>> module_with_sched = EveryQueryLightningModule(
+            ...     model=demo_model,
+            ...     optimizer=partial(torch.optim.AdamW, lr=1e-4),
+            ...     LR_scheduler=partial(torch.optim.lr_scheduler.StepLR, step_size=1),
+            ... )
+            >>> result_sched = module_with_sched.configure_optimizers()
+            >>> sorted(result_sched.keys())
+            ['lr_scheduler', 'optimizer']
+            >>> result_sched['lr_scheduler']['interval']
+            'step'
+
+            ``ReduceLROnPlateau`` gets epoch-level monitoring instead:
+
+            >>> module_plateau = EveryQueryLightningModule(
+            ...     model=demo_model,
+            ...     optimizer=partial(torch.optim.AdamW, lr=1e-4),
+            ...     LR_scheduler=partial(torch.optim.lr_scheduler.ReduceLROnPlateau),
+            ... )
+            >>> result_plateau = module_plateau.configure_optimizers()
+            >>> result_plateau['lr_scheduler']['interval']
+            'epoch'
+            >>> result_plateau['lr_scheduler']['monitor']
+            'tuning/loss'
+        """
         if self.optimizer_factory is None:
             raise ValueError("Optimizer factory is not set. Cannot configure optimizers.")
 
@@ -365,6 +497,51 @@ class EveryQueryLightningModule(L.LightningModule):
 
     @classmethod
     def load_from_checkpoint(cls, ckpt_path: str | None = None) -> "EveryQueryLightningModule":
+        """Restore an ``EveryQueryLightningModule`` from a Lightning checkpoint.
+
+        Extracts ``model``, ``optimizer``, and ``LR_scheduler`` hyper-parameters from the
+        checkpoint, reconstructs the corresponding objects, then delegates to the base
+        ``LightningModule.load_from_checkpoint`` for state-dict loading.
+
+        Examples:
+            Round-trip save / load preserves hyper-parameters:
+
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     ckpt_path = tmpdir + "/test.ckpt"
+            ...     torch.save({
+            ...         'state_dict': demo_lightning_module.state_dict(),
+            ...         'hyper_parameters': dict(demo_lightning_module.hparams),
+            ...         'pytorch-lightning_version': L.__version__,
+            ...     }, ckpt_path)
+            ...     loaded = EveryQueryLightningModule.load_from_checkpoint(ckpt_path)
+            ...     loaded.hparams['optimizer'] == demo_lightning_module.hparams['optimizer']
+            True
+            >>> loaded.hparams['LR_scheduler'] is None
+            True
+            >>> loaded.hparams['model']['precision']
+            '32-true'
+            >>> loaded.hparams['model']['do_demo']
+            True
+
+        Weights survive the round-trip (state dict is loaded correctly):
+
+            >>> torch.equal(next(loaded.parameters()), next(demo_lightning_module.parameters()))
+            True
+
+        A checkpoint missing a required hparam key raises ``KeyError``:
+
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     bad_path = tmpdir + "/bad.ckpt"
+            ...     torch.save({
+            ...         'state_dict': {},
+            ...         'hyper_parameters': {'model': {}},
+            ...         'pytorch-lightning_version': L.__version__,
+            ...     }, bad_path)
+            ...     EveryQueryLightningModule.load_from_checkpoint(bad_path)
+            Traceback (most recent call last):
+                ...
+            KeyError: "Checkpoint does not contain optimizer hyperparameters. Got ['model']"
+        """
         checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         hparams = checkpoint.get("hyper_parameters", {})
 

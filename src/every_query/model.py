@@ -38,6 +38,21 @@ def _val(tensor: torch.Tensor) -> int | bool | float:
 
 
 class MLP(torch.nn.Module):
+    """Multi-layer perceptron with ReLU activations and optional dropout.
+
+    Examples:
+        >>> mlp = MLP([64, 32, 1], dropout_prob=0.1)
+        >>> x = torch.randn(4, 64)
+        >>> mlp(x).shape
+        torch.Size([4, 1])
+
+        Two-layer (no hidden layer, no dropout):
+
+        >>> mlp2 = MLP([8, 1], dropout_prob=0.5)
+        >>> mlp2(torch.randn(2, 8)).shape
+        torch.Size([2, 1])
+    """
+
     def __init__(self, layers, dropout_prob):
         super().__init__()
         modules = []
@@ -109,16 +124,49 @@ class EveryQueryOutput(BaseModelOutput):
 
     @staticmethod
     def logits_to_probs(logits: torch.Tensor) -> torch.Tensor:
+        """Converts logits to probabilities via sigmoid, squeezing trailing dimensions.
+
+        Examples:
+            >>> EveryQueryOutput.logits_to_probs(torch.tensor([[0.0]]))
+            tensor(0.5000)
+            >>> EveryQueryOutput.logits_to_probs(torch.zeros(3, 1))
+            tensor([0.5000, 0.5000, 0.5000])
+
+            Saturates near 0 and 1 for extreme logits:
+
+            >>> EveryQueryOutput.logits_to_probs(torch.tensor([[1000.0]])) > 0.999
+            tensor(True)
+            >>> EveryQueryOutput.logits_to_probs(torch.tensor([[-1000.0]])) < 0.001
+            tensor(True)
+        """
         return torch.sigmoid(logits).squeeze()
 
     @property
     def occurs_probs(self) -> torch.Tensor | None:
+        """Sigmoid probabilities for the occurs head, or ``None`` if logits are absent.
+
+        Examples:
+            >>> EveryQueryOutput(last_hidden_state=None).occurs_probs is None
+            True
+            >>> out = EveryQueryOutput(last_hidden_state=None, occurs_logits=torch.zeros(3, 1))
+            >>> out.occurs_probs
+            tensor([0.5000, 0.5000, 0.5000])
+        """
         if self.occurs_logits is None:
             return None
         return self.logits_to_probs(self.occurs_logits)
 
     @property
     def censor_probs(self) -> torch.Tensor | None:
+        """Sigmoid probabilities for the censor head, or ``None`` if logits are absent.
+
+        Examples:
+            >>> EveryQueryOutput(last_hidden_state=None).censor_probs is None
+            True
+            >>> out = EveryQueryOutput(last_hidden_state=None, censor_logits=torch.zeros(2, 1))
+            >>> out.censor_probs
+            tensor([0.5000, 0.5000])
+        """
         if self.censor_logits is None:
             return None
         return self.logits_to_probs(self.censor_logits)
@@ -230,10 +278,14 @@ class EveryQueryModel(torch.nn.Module):
         do_demo: bool = False,
         do_grad_ckpt: bool = False,
         mlp_dropout: float = 0.1,
+        model_name_or_config: str | ModernBertConfig = "answerdotai/ModernBERT-base",
     ):
         super().__init__()
 
-        self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained("answerdotai/ModernBERT-base")
+        if isinstance(model_name_or_config, ModernBertConfig):
+            self.HF_model_config = model_name_or_config
+        else:
+            self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained(model_name_or_config)
 
         extra_kwargs = {"torch_dtype": self.PRECISION_TO_MODEL_WEIGHTS_DTYPE.get(precision)}
 
@@ -285,6 +337,7 @@ class EveryQueryModel(torch.nn.Module):
             "precision": precision,
             "do_demo": do_demo,
             "mlp_dropout": self.HF_model.config.mlp_dropout,
+            "model_name_or_config": model_name_or_config,
         }
 
     @property
@@ -317,6 +370,56 @@ class EveryQueryModel(torch.nn.Module):
             ValueError: If the input sequence length exceeds the model's maximum sequence length.
             AssertionError: If the input contains out-of-vocabulary tokens or if it contains inf or nan
                 values.
+
+        Examples:
+            >>> valid = Mock(mode="SM", code=torch.tensor([[1, 2, 3]]), duration_days=None, PAD_INDEX=0)
+            >>> demo_model._check_inputs(valid)
+
+            >>> bad_mode = Mock(mode="JNRT")
+            >>> demo_model._check_inputs(bad_mode)
+            Traceback (most recent call last):
+                ...
+            ValueError: Batch mode JNRT is not supported.
+
+            >>> short = Mock(mode="SM", code=torch.tensor([[5]]), duration_days=None, PAD_INDEX=0)
+            >>> demo_model._check_inputs(short)
+            Traceback (most recent call last):
+                ...
+            ValueError: Input sequence length 1 is too short. Minimum sequence length is 2.
+
+            >>> oov = Mock(mode="SM", code=torch.tensor([[1, 200]]), duration_days=None, PAD_INDEX=0)
+            >>> demo_model._check_inputs(oov)
+            Traceback (most recent call last):
+                ...
+            AssertionError: ...out-of-vocabulary...
+
+            Sequence exceeding ``max_position_embeddings`` (128 for the demo model):
+
+            >>> long_code = torch.ones(1, 129, dtype=torch.long)
+            >>> demo_model._check_inputs(Mock(mode="SM", code=long_code, duration_days=None, PAD_INDEX=0))
+            Traceback (most recent call last):
+                ...
+            ValueError: ...exceeds model max sequence length...
+
+            Duration token adds +1, so seq_len=128 trips the limit:
+
+            >>> demo_model._check_inputs(Mock(
+            ...     mode="SM", code=torch.ones(1, 128, dtype=torch.long),
+            ...     duration_days=torch.tensor([30.0]), PAD_INDEX=0,
+            ... ))
+            Traceback (most recent call last):
+                ...
+            ValueError: ...exceeds model max sequence length...
+
+            All-padding batch:
+
+            >>> demo_model._check_inputs(Mock(
+            ...     mode="SM", code=torch.zeros(1, 3, dtype=torch.long),
+            ...     duration_days=None, PAD_INDEX=0,
+            ... ))
+            Traceback (most recent call last):
+                ...
+            AssertionError: ...only padding tokens...
         """
 
         code = batch.code
@@ -422,11 +525,44 @@ class EveryQueryModel(torch.nn.Module):
 
         Returns:
             A dictionary of inputs for the Hugging Face model.
+
+        Examples:
+            Without ``duration_days``, returns ``input_ids`` and ``attention_mask``:
+
+            >>> no_dur = Mock(
+            ...     mode="SM",
+            ...     code=torch.tensor([[1, 2, 3], [4, 5, 0]]),
+            ...     duration_days=None, PAD_INDEX=0,
+            ... )
+            >>> hf_in = demo_model._hf_inputs(no_dur)
+            >>> sorted(hf_in.keys())
+            ['attention_mask', 'input_ids']
+            >>> hf_in['attention_mask']
+            tensor([[ True,  True,  True],
+                    [ True,  True, False]])
+
+            With ``duration_days``, embeds a duration token at position 1:
+
+            >>> with torch.no_grad():
+            ...     hf_dur = demo_model._hf_inputs(sample_batch)
+            >>> sorted(hf_dur.keys())
+            ['attention_mask', 'inputs_embeds']
+            >>> hf_dur['inputs_embeds'].shape[1] == sample_batch.code.shape[1] + 1
+            True
+            >>> hf_dur['inputs_embeds'].shape[2] == demo_model_config.hidden_size
+            True
+            >>> hf_dur['attention_mask'].shape[1] == sample_batch.code.shape[1] + 1
+            True
         """
         attention_mask = batch.code != batch.PAD_INDEX  # (batch_size, seq_len)
 
         if batch.duration_days is not None:
-            word_embeds = self.HF_model.embeddings.word_embeddings(batch.code)  # (B, seq_len, H)
+            # tok_embeddings in newer transformers, word_embeddings in older
+            embed_layer = (
+                getattr(self.HF_model.embeddings, "tok_embeddings", None)
+                or self.HF_model.embeddings.word_embeddings
+            )
+            word_embeds = embed_layer(batch.code)  # (B, seq_len, H)
             dur_norm = (batch.duration_days / 365.0).unsqueeze(-1)  # (B, 1)
             dur_emb = self.duration_embed(dur_norm).unsqueeze(1)  # (B, 1, H)
             # Insert duration embedding at position 1 (after query token at position 0)
@@ -451,6 +587,26 @@ class EveryQueryModel(torch.nn.Module):
         return out
 
     def _get_loss(self, logits, target, mask=None):
+        """Computes BCE-with-logits loss, optionally masked.
+
+        Examples:
+            >>> logits = torch.tensor([[0.5], [-0.5]])
+            >>> target = torch.tensor([1, 0])
+            >>> loss = demo_model._get_loss(logits, target)
+            >>> loss.shape
+            torch.Size([])
+            >>> loss.isfinite()
+            tensor(True)
+
+            >>> mask = torch.tensor([True, False])
+            >>> demo_model._get_loss(logits, target, mask=mask).isfinite()
+            tensor(True)
+
+            Known value: logit 0, target 1 gives -log(sigmoid(0)) = log(2):
+
+            >>> round(demo_model._get_loss(torch.tensor([[0.0]]), torch.tensor([1])).item(), 4)
+            0.6931
+        """
         target = target.float().unsqueeze(1)
         if mask is not None:
             logits = logits[mask]
@@ -459,6 +615,34 @@ class EveryQueryModel(torch.nn.Module):
         return self.criterion(logits, target)
 
     def _forward(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
+        """Runs the model forward pass: HF backbone, query pooling, task heads, and loss.
+
+        Examples:
+            >>> with torch.no_grad():
+            ...     loss, outputs = demo_model._forward(sample_batch)
+            >>> loss.isfinite()
+            tensor(True)
+            >>> isinstance(outputs, EveryQueryOutput)
+            True
+            >>> outputs.query_embed.shape == (sample_batch.batch_size, demo_model_config.hidden_size)
+            True
+            >>> outputs.censor_logits.shape == (sample_batch.batch_size, 1)
+            True
+            >>> outputs.occurs_logits.shape == (sample_batch.batch_size, 1)
+            True
+
+            Loss decomposes into the two sub-losses:
+
+            >>> outputs.censor_loss.isfinite() and outputs.occurs_loss.isfinite()
+            tensor(True)
+            >>> torch.allclose(loss, outputs.censor_loss + outputs.occurs_loss)
+            True
+
+            ``do_demo=True`` preserves hidden states in the output:
+
+            >>> outputs.last_hidden_state is not None
+            True
+        """
         outputs = self.HF_model(**self._hf_inputs(batch))
         embeddings = outputs.last_hidden_state  # (batch_size, seq_len + query_len, hidden_size)
         query_embed = embeddings[:, 0, :]  # 0 is query_index (batch_size, hidden_size)

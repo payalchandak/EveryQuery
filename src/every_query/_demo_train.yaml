@@ -1,0 +1,97 @@
+# Minimal Hydra config for CPU-only integration tests.
+#
+# Usage (tests override the ??? paths via Hydra CLI or compose API):
+#   python -m every_query.train --config-name=_demo_train \
+#       output_dir=/tmp/eq_test \
+#       query.task_dir=/tmp/tasks \
+#       datamodule.config.tensorized_cohort_dir=/tmp/cohort
+
+defaults:
+  - _self_
+
+output_dir: ???
+do_overwrite: true
+do_resume: false
+seed: 1
+only_preprocess: false
+collate_only_held_out: false
+
+query:
+  task_dir: ???
+  sample_times_per_subject: 5
+  codes:
+    - "HR"
+    - "TEMP"
+  duration_min: 30
+  duration_max: 32
+
+datamodule:
+  _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
+  data_class: every_query.dataset.EveryQueryPytorchDataset
+  config:
+    _target_: meds_torchdata.MEDSTorchDataConfig
+    tensorized_cohort_dir: ???
+    task_labels_dir: ???
+    static_inclusion_mode: omit
+    seq_sampling_strategy: to_end
+    max_seq_len: 64
+    batch_mode: SM
+  batch_size: 2
+  num_workers: 0
+  pin_memory: false
+
+lightning_module:
+  _target_: every_query.lightning_module.EveryQueryLightningModule
+  model:
+    _target_: every_query.model.EveryQueryModel
+    precision: "32-true"
+    do_demo: true
+    do_grad_ckpt: false
+    mlp_dropout: 0.1
+    model_name_or_config:
+      _target_: transformers.ModernBertConfig
+      hidden_size: 64
+      num_hidden_layers: 2
+      num_attention_heads: 2
+      intermediate_size: 128
+      max_position_embeddings: 128
+      vocab_size: 100
+      pad_token_id: 0
+      cls_token_id: 1
+      bos_token_id: 1
+      sep_token_id: 2
+      eos_token_id: 2
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: true
+    lr: 1e-4
+    weight_decay: 0.01
+  LR_scheduler: null
+
+trainer:
+  _target_: lightning.pytorch.trainer.Trainer
+  logger: false
+  callbacks:
+    _target_: every_query.train.values_as_list
+    model_checkpoint:
+      _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      dirpath: ${output_dir}/checkpoints
+      monitor: "tuning/loss"
+      verbose: false
+      save_last: true
+      save_top_k: 1
+      mode: "min"
+      save_weights_only: false
+  default_root_dir: ${output_dir}
+  min_epochs: 0
+  max_epochs: 1
+  max_steps: 2
+  accelerator: cpu
+  devices: 1
+  accumulate_grad_batches: 1
+  log_every_n_steps: 1
+  check_val_every_n_epoch: null
+  val_check_interval: 1
+  limit_val_batches: 2
+  deterministic: true
+  gradient_clip_val: 1.0
