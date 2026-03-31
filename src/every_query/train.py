@@ -27,12 +27,12 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 logger = logging.getLogger(__name__)
 
 
-@OmegaConfResolver
+@OmegaConfResolver(replace=True)
 def list_len(x):
     return builtins.len(x)
 
 
-@OmegaConfResolver
+@OmegaConfResolver(replace=True)
 def int_prod(x: int, y: int) -> int:
     """Returns the closest integer to the product of x and y (available as an OmegaConf resolver).
 
@@ -52,6 +52,32 @@ def values_as_list(**kwargs) -> list[Any]:
 
 
 def save_resolved_config(cfg: DictConfig, fp: Path) -> bool:
+    """Resolve all interpolations in *cfg* and write the result to *fp*.
+
+    Returns ``True`` on success, ``False`` (with a warning) on failure.
+
+    Examples:
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     cfg = OmegaConf.create({"a": 1, "b": "${a}"})
+        ...     save_resolved_config(cfg, Path(d) / "out.yaml")
+        True
+
+        Interpolations are fully expanded in the saved file:
+
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     cfg = OmegaConf.create({"a": 1, "b": "${a}"})
+        ...     fp = Path(d) / "out.yaml"
+        ...     _ = save_resolved_config(cfg, fp)
+        ...     OmegaConf.load(fp).b
+        1
+
+        Unresolvable interpolation returns ``False``:
+
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     cfg = OmegaConf.create({"a": "${missing}"})
+        ...     save_resolved_config(cfg, Path(d) / "out.yaml")
+        False
+    """
     try:
         # Create a copy and resolve all interpolations
         resolved_cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
@@ -63,6 +89,72 @@ def save_resolved_config(cfg: DictConfig, fp: Path) -> bool:
 
 
 def find_checkpoint_path(output_dir: Path) -> Path | None:
+    """Return the latest checkpoint under ``output_dir/checkpoints``, or ``None``.
+
+    Prefers ``last.ckpt``; otherwise picks the file with the highest
+    ``(epoch, step)`` pair.
+
+    Raises:
+        NotADirectoryError: If the checkpoints path is a regular file.
+
+    Examples:
+        No checkpoints directory:
+
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     find_checkpoint_path(Path(d)) is None
+        True
+
+        Empty checkpoints directory:
+
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     (Path(d) / "checkpoints").mkdir()
+        ...     find_checkpoint_path(Path(d)) is None
+        True
+
+        ``last.ckpt`` is preferred when present:
+
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     ckpt = Path(d) / "checkpoints"; ckpt.mkdir()
+        ...     (ckpt / "last.ckpt").touch()
+        ...     find_checkpoint_path(Path(d)) == ckpt / "last.ckpt"
+        True
+
+        ``last.ckpt`` takes priority even when epoch checkpoints exist:
+
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     ckpt = Path(d) / "checkpoints"; ckpt.mkdir()
+        ...     (ckpt / "last.ckpt").touch()
+        ...     (ckpt / "epoch=5-step=999.ckpt").touch()
+        ...     find_checkpoint_path(Path(d)) == ckpt / "last.ckpt"
+        True
+
+        Falls back to the latest ``epoch=*-step=*.ckpt``:
+
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     ckpt = Path(d) / "checkpoints"; ckpt.mkdir()
+        ...     (ckpt / "epoch=0-step=100.ckpt").touch()
+        ...     (ckpt / "epoch=1-step=50.ckpt").touch()
+        ...     (ckpt / "epoch=1-step=200.ckpt").touch()
+        ...     find_checkpoint_path(Path(d)) == ckpt / "epoch=1-step=200.ckpt"
+        True
+
+        Non-matching files in the directory are ignored:
+
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     ckpt = Path(d) / "checkpoints"; ckpt.mkdir()
+        ...     (ckpt / "some_other_file.txt").touch()
+        ...     find_checkpoint_path(Path(d)) is None
+        True
+
+        Raises when the checkpoints path is a file:
+
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     (Path(d) / "checkpoints").touch()
+        ...     find_checkpoint_path(Path(d))
+        Traceback (most recent call last):
+            ...
+        NotADirectoryError: ...
+    """
     checkpoints_dir = output_dir / "checkpoints"
 
     if checkpoints_dir.is_file():

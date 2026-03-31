@@ -182,3 +182,6 @@ src/every_query/aces_to_eq/query_codes/
 
 # Generated train code YAMLs
 src/every_query/train_codes/
+
+# Cursor
+.cursor/

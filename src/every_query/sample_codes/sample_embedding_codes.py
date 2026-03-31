@@ -25,33 +25,32 @@ def stable_hash_list(items: list[str]) -> str:
     return h.hexdigest()[:12]
 
 
-# -------------------
-# Load + filter codes
-# -------------------
-df = pl.read_parquet(PARQUET_PATH)
-codes = df["code"].unique().sort().to_list()
-print(f"num all codes {len(codes)}")
+if __name__ == "__main__":
+    # -------------------
+    # Load + filter codes
+    # -------------------
+    df = pl.read_parquet(PARQUET_PATH)
+    codes = df["code"].unique().sort().to_list()
+    print(f"num all codes {len(codes)}")
 
-time_codes = [code for code in codes if "TIME" in code]
-print(f"{len(time_codes)} TIME Codes removed:")
-print(time_codes)
+    time_codes = [code for code in codes if "TIME" in code]
+    print(f"{len(time_codes)} TIME Codes removed:")
+    print(time_codes)
 
-# Filter out time codes
-filtered_codes = [code for code in codes if "TIME" not in code]
-print(f"num codes after filtering: {len(filtered_codes)}")
+    # Filter out time codes
+    filtered_codes = [code for code in codes if "TIME" not in code]
+    print(f"num codes after filtering: {len(filtered_codes)}")
 
-os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(OUT_DIR, exist_ok=True)
 
+    sampled_embed_queries = random.sample(filtered_codes, N_SAMPLES)
+    hash = stable_hash_list(sampled_embed_queries)
 
-sampled_embed_queries = random.sample(filtered_codes, N_SAMPLES)
-hash = stable_hash_list(sampled_embed_queries)
+    # ---- write file ----
+    out_path = f"{OUT_DIR}/embed_{N_SAMPLES}_{hash}.yaml"
+    with open(out_path, "x") as f:
+        for code in sampled_embed_queries:
+            f.write(f'- "{code}"\n')
 
-# ---- write file ----
-out_path = f"{OUT_DIR}/embed_{N_SAMPLES}_{hash}.yaml"
-with open(out_path, "x") as f:
-    for code in sampled_embed_queries:
-        f.write(f'- "{code}"\n')
-
-
-print(f"Done sampling {N_SAMPLES} queries for embedding plots")
-print(f"Saved @ {out_path}")
+    print(f"Done sampling {N_SAMPLES} queries for embedding plots")
+    print(f"Saved @ {out_path}")
