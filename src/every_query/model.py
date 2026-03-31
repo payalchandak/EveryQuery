@@ -426,7 +426,7 @@ class EveryQueryModel(torch.nn.Module):
         attention_mask = batch.code != batch.PAD_INDEX  # (batch_size, seq_len)
 
         if batch.duration_days is not None:
-            word_embeds = self.HF_model.embeddings.word_embeddings(batch.code)  # (B, seq_len, H)
+            word_embeds = self.HF_model.embeddings.tok_embeddings(batch.code)  # (B, seq_len, H)
             dur_norm = (batch.duration_days / 365.0).unsqueeze(-1)  # (B, 1)
             dur_emb = self.duration_embed(dur_norm).unsqueeze(1)  # (B, 1, H)
             # Insert duration embedding at position 1 (after query token at position 0)
