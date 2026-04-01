@@ -104,6 +104,7 @@ trainer:
   max_steps: 40000
   accelerator: "auto"
   devices: "auto"
+  strategy: "ddp"
   accumulate_grad_batches: 8 # set to 1 for no gradient accumulation, >1 for gradient accumulation
   log_every_n_steps: 50
   # perform a validation loop every N training epochs
