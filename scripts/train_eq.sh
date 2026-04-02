@@ -5,9 +5,8 @@
 #SBATCH --mail-type=END,FAIL
 
 #SBATCH --nodes=1               # Explicitly define 1 node
-#SBATCH --ntasks-per-node=2     # Tasks per node
+#SBATCH --ntasks-per-node=1     # 1 task; Lightning spawns DDP workers internally
 #SBATCH --gres=gpu:2            # Total GPUs per node
-#SBATCH --gpus-per-task=1       # GPU allocation per task
 
 # #SBATCH --cpus-per-task=20
 #SBATCH --cpus-per-task=2
@@ -47,7 +46,7 @@ set +a
 
 export HYDRA_FULL_ERROR=1
 
-srun $UVENV/bin/python src/every_query/train.py
+$UVENV/bin/python src/every_query/train.py
 
 echo "Finished at $(date)"
 
