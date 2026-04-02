@@ -104,7 +104,9 @@ trainer:
   max_steps: 40000
   accelerator: "auto"
   devices: 2
-  strategy: "ddp"
+  strategy:
+    _target_: lightning.pytorch.strategies.DDPStrategy
+    find_unused_parameters: true
   accumulate_grad_batches: 5 # set to 1 for no gradient accumulation, >1 for gradient accumulation
   log_every_n_steps: 50
   # perform a validation loop every N training epochs
