@@ -5,7 +5,7 @@
 #SBATCH --mail-type=END,FAIL
 
 #SBATCH --nodes=1               # Explicitly define 1 node
-#SBATCH --ntasks-per-node=1     # 1 task; Lightning spawns DDP workers internally
+#SBATCH --ntasks-per-node=2     # Must match Lightning devices count for DDP
 #SBATCH --gres=gpu:2            # Total GPUs per node
 
 # #SBATCH --cpus-per-task=20
