@@ -15,6 +15,9 @@ echo "=== NCCL Smoke Test ==="
 echo "Host: $(hostname) | Date: $(date)"
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 
+export MASTER_ADDR=$(hostname)
+export MASTER_PORT=29500
+
 UVENV="$HOME/eq_stuff/eq"
 
 srun $UVENV/bin/python -c "
