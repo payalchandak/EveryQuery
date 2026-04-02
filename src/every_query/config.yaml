@@ -103,7 +103,7 @@ trainer:
   max_epochs: null # We don't control the max epochs, we control the max steps.
   max_steps: 40000
   accelerator: "auto"
-  devices: 2
+  devices: 1
   strategy: "ddp"
   accumulate_grad_batches: 5 # set to 1 for no gradient accumulation, >1 for gradient accumulation
   log_every_n_steps: 50
