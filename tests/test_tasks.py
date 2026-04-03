@@ -190,7 +190,10 @@ class TestCensorRegressionEdgeCases:
         """
         min_context = 3
         base = datetime(2020, 1, 1)
-        rows = [{"subject_id": 1, "time": base + timedelta(days=i), "code": "ICD//A01"} for i in range(min_context)]
+        rows = [
+            {"subject_id": 1, "time": base + timedelta(days=i), "code": "ICD//A01"}
+            for i in range(min_context)
+        ]
         events_df = pl.DataFrame(rows).sort(["subject_id", "time"])
 
         for days in [30, 90]:
@@ -313,7 +316,9 @@ class TestCensorRegressionEdgeCases:
     def test_single_subject(self):
         """Regression with n=1 subject to catch any aggregation edge cases."""
         base = datetime(2020, 1, 1)
-        rows = [{"subject_id": 1, "time": base + timedelta(days=i * 5), "code": "ICD//A01"} for i in range(20)]
+        rows = [
+            {"subject_id": 1, "time": base + timedelta(days=i * 5), "code": "ICD//A01"} for i in range(20)
+        ]
         events_df = pl.DataFrame(rows).sort(["subject_id", "time"])
         query_codes = ["ICD//A01"]
         min_context = 5

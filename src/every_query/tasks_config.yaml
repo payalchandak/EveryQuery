@@ -1,5 +1,5 @@
 shard_index: ${oc.env:SLURM_ARRAY_TASK_ID,null}
-n_durations: 200 
+n_durations: 200
 duration_seed: 140799
 min_context: 50
 

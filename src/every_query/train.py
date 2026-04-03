@@ -108,50 +108,33 @@ def _collate_shard(
     n_codes = len(codes)
     rng = np.random.default_rng(seed)
 
-    # --- PASS 1: Generate the Index Pool ---
-    # We collect all available timestamps across all durations.
-    index_frames = []
-    for d in durations:
-        idx = (
-            pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}")
-            .select("subject_id", "prediction_time")
-            .with_columns(pl.lit(d).alias("duration_days"))
-            .collect()
-        )
-        index_frames.append(idx)
+    # --- PASS 1: Sample prediction times per subject ---
+    # Prediction times are identical across durations, so read only the first.
+    d0 = durations[0]
+    base_idx = (
+        pl.scan_parquet(f"{task_dir}/{d0}/{split}/{file_name}")
+        .select("subject_id", "prediction_time")
+        .collect()
+    )
 
-    if not index_frames:
+    if base_idx.is_empty():
         return
 
-    all_indices = pl.concat(index_frames)
-    del index_frames
-
-    # --- PASS 2: Sample Labels Statistically Identical to Original ---
-    # To match the original distribution, we must sample from (Time * Code) space.
-    # Instead of exploding 10k codes (memory heavy), we assign random code indices.
-
-    # We repeat the indices enough times to ensure we can hit the sample target
-    # even if a subject has very few timestamps.
-    oversample_factor = min(n_codes, 10)
-
-    sampled_labels = (
-        all_indices.select(pl.all(), pl.lit(list(range(oversample_factor))).alias("_rep"))
-        .explode("_rep")
-        .with_columns(
-            # Randomly assign a code index to every "slot"
-            pl.lit(rng.integers(0, n_codes, size=len(all_indices) * oversample_factor)).alias("code_idx")
-        )
-        # Global shuffle across all times/durations/codes for this shard
-        .sample(fraction=1, shuffle=True, seed=seed)
+    # Sample up to sample_times_per_subject rows per subject
+    sampled = (
+        base_idx.sample(fraction=1, shuffle=True, seed=seed)
         .group_by("subject_id")
         .head(sample_times_per_subject)
-        .with_columns(
-            # Map index back to the actual column name
-            pl.col("code_idx").map_elements(lambda i: codes[i], return_dtype=pl.String).alias("query")
-        )
-        .drop("_rep", "code_idx")
     )
-    del all_indices
+
+    n_sampled = len(sampled)
+
+    # --- PASS 2: Assign random duration and code to each sampled row ---
+    sampled_labels = sampled.with_columns(
+        pl.Series("duration_days", rng.choice(durations, size=n_sampled)),
+        pl.Series("query", [codes[i] for i in rng.integers(0, n_codes, size=n_sampled)]),
+    )
+    del base_idx, sampled
 
     # --- PASS 3: Selective Extraction ---
     # We only load the columns and rows we actually selected in Pass 2.

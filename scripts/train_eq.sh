@@ -49,4 +49,3 @@ export HYDRA_FULL_ERROR=1
 srun $UVENV/bin/python src/every_query/train.py
 
 echo "Finished at $(date)"
-
