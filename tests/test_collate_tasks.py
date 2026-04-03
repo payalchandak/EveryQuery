@@ -4,9 +4,7 @@ import json
 import os
 from datetime import datetime, timedelta
 
-import numpy as np
 import polars as pl
-import pytest
 from omegaconf import OmegaConf
 
 from every_query.train import _collate_shard, collate_tasks
@@ -36,8 +34,15 @@ def _make_shard_df(n_subjects: int = 3, n_pred_times: int = 5) -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-def _build_task_dir(tmp_path, durations=DURATIONS, codes=CODES, splits=("train", "tuning"),
-                    n_subjects=3, n_pred_times=5, shard_name="0.parquet"):
+def _build_task_dir(
+    tmp_path,
+    durations=DURATIONS,
+    codes=CODES,
+    splits=("train", "tuning"),
+    n_subjects=3,
+    n_pred_times=5,
+    shard_name="0.parquet",
+):
     """Create a fake task directory tree with parquet shards for each duration/split."""
     task_dir = tmp_path / "tasks"
     shard_df = _make_shard_df(n_subjects, n_pred_times)
@@ -55,8 +60,6 @@ def _make_cfg(task_dir, codes=CODES, durations=None, seed=42, sample_times_per_s
         "query": {
             "task_dir": task_dir,
             "codes": list(codes),
-            "duration_min": 30,
-            "duration_max": 181,
             "sample_times_per_subject": sample_times_per_subject,
         },
         "seed": seed,
@@ -77,8 +80,16 @@ class TestCollateShardReproducibility:
         for run in ("run1", "run2"):
             write_dir = str(tmp_path / run)
             os.makedirs(f"{write_dir}/train", exist_ok=True)
-            _collate_shard("0.parquet", "train", write_dir, task_dir,
-                           DURATIONS, CODES, sample_times_per_subject=20, seed=42)
+            _collate_shard(
+                "0.parquet",
+                "train",
+                write_dir,
+                task_dir,
+                DURATIONS,
+                CODES,
+                sample_times_per_subject=20,
+                seed=42,
+            )
 
         df1 = pl.read_parquet(str(tmp_path / "run1" / "train" / "0.parquet"))
         df2 = pl.read_parquet(str(tmp_path / "run2" / "train" / "0.parquet"))
@@ -89,8 +100,16 @@ class TestCollateShardReproducibility:
         for seed, run in [(42, "run1"), (99, "run2")]:
             write_dir = str(tmp_path / run)
             os.makedirs(f"{write_dir}/train", exist_ok=True)
-            _collate_shard("0.parquet", "train", write_dir, task_dir,
-                           DURATIONS, CODES, sample_times_per_subject=20, seed=seed)
+            _collate_shard(
+                "0.parquet",
+                "train",
+                write_dir,
+                task_dir,
+                DURATIONS,
+                CODES,
+                sample_times_per_subject=20,
+                seed=seed,
+            )
 
         df1 = pl.read_parquet(str(tmp_path / "run1" / "train" / "0.parquet"))
         df2 = pl.read_parquet(str(tmp_path / "run2" / "train" / "0.parquet"))
@@ -106,15 +125,14 @@ class TestCollateShardSamplingCap:
         task_dir, _ = _build_task_dir(tmp_path, n_subjects=3, n_pred_times=10)
         write_dir = str(tmp_path / "out")
         os.makedirs(f"{write_dir}/train", exist_ok=True)
-        _collate_shard("0.parquet", "train", write_dir, task_dir,
-                       DURATIONS, CODES, sample_times_per_subject=cap, seed=42)
+        _collate_shard(
+            "0.parquet", "train", write_dir, task_dir, DURATIONS, CODES, sample_times_per_subject=cap, seed=42
+        )
 
         df = pl.read_parquet(str(tmp_path / "out" / "train" / "0.parquet"))
         # Each sampled prediction_time gets exactly one row (one duration+code),
         # so the number of unique prediction_times per subject is bounded by cap.
-        per_subj = df.group_by("subject_id").agg(
-            pl.col("prediction_time").n_unique().alias("n_times")
-        )
+        per_subj = df.group_by("subject_id").agg(pl.col("prediction_time").n_unique().alias("n_times"))
         assert per_subj["n_times"].max() <= cap
 
     def test_cap_larger_than_available(self, tmp_path):
@@ -123,8 +141,9 @@ class TestCollateShardSamplingCap:
         task_dir, _ = _build_task_dir(tmp_path, n_subjects=1, n_pred_times=n_pred)
         write_dir = str(tmp_path / "out")
         os.makedirs(f"{write_dir}/train", exist_ok=True)
-        _collate_shard("0.parquet", "train", write_dir, task_dir,
-                       DURATIONS, CODES, sample_times_per_subject=100, seed=42)
+        _collate_shard(
+            "0.parquet", "train", write_dir, task_dir, DURATIONS, CODES, sample_times_per_subject=100, seed=42
+        )
 
         df = pl.read_parquet(str(tmp_path / "out" / "train" / "0.parquet"))
         assert df.get_column("prediction_time").n_unique() <= n_pred
@@ -137,20 +156,21 @@ class TestCollateShardOutputSchema:
         task_dir, _ = _build_task_dir(tmp_path)
         write_dir = str(tmp_path / "out")
         os.makedirs(f"{write_dir}/train", exist_ok=True)
-        _collate_shard("0.parquet", "train", write_dir, task_dir,
-                       DURATIONS, CODES, sample_times_per_subject=20, seed=42)
+        _collate_shard(
+            "0.parquet", "train", write_dir, task_dir, DURATIONS, CODES, sample_times_per_subject=20, seed=42
+        )
 
         df = pl.read_parquet(str(tmp_path / "out" / "train" / "0.parquet"))
-        expected_cols = {"subject_id", "prediction_time", "boolean_value",
-                         "duration_days", "query", "occurs"}
+        expected_cols = {"subject_id", "prediction_time", "boolean_value", "duration_days", "query", "occurs"}
         assert set(df.columns) == expected_cols
 
     def test_no_null_in_occurs(self, tmp_path):
         task_dir, _ = _build_task_dir(tmp_path)
         write_dir = str(tmp_path / "out")
         os.makedirs(f"{write_dir}/train", exist_ok=True)
-        _collate_shard("0.parquet", "train", write_dir, task_dir,
-                       DURATIONS, CODES, sample_times_per_subject=20, seed=42)
+        _collate_shard(
+            "0.parquet", "train", write_dir, task_dir, DURATIONS, CODES, sample_times_per_subject=20, seed=42
+        )
 
         df = pl.read_parquet(str(tmp_path / "out" / "train" / "0.parquet"))
         assert df["occurs"].null_count() == 0
@@ -163,8 +183,9 @@ class TestCollateShardValueValidity:
         task_dir, _ = _build_task_dir(tmp_path)
         write_dir = str(tmp_path / "out")
         os.makedirs(f"{write_dir}/train", exist_ok=True)
-        _collate_shard("0.parquet", "train", write_dir, task_dir,
-                       DURATIONS, CODES, sample_times_per_subject=20, seed=42)
+        _collate_shard(
+            "0.parquet", "train", write_dir, task_dir, DURATIONS, CODES, sample_times_per_subject=20, seed=42
+        )
 
         df = pl.read_parquet(str(tmp_path / "out" / "train" / "0.parquet"))
         assert set(df["duration_days"].unique().to_list()).issubset(set(DURATIONS))
@@ -173,8 +194,9 @@ class TestCollateShardValueValidity:
         task_dir, _ = _build_task_dir(tmp_path)
         write_dir = str(tmp_path / "out")
         os.makedirs(f"{write_dir}/train", exist_ok=True)
-        _collate_shard("0.parquet", "train", write_dir, task_dir,
-                       DURATIONS, CODES, sample_times_per_subject=20, seed=42)
+        _collate_shard(
+            "0.parquet", "train", write_dir, task_dir, DURATIONS, CODES, sample_times_per_subject=20, seed=42
+        )
 
         df = pl.read_parquet(str(tmp_path / "out" / "train" / "0.parquet"))
         assert set(df["query"].unique().to_list()).issubset(set(CODES))
@@ -188,15 +210,17 @@ class TestCollateShardIdempotency:
         write_dir = str(tmp_path / "out")
         os.makedirs(f"{write_dir}/train", exist_ok=True)
 
-        _collate_shard("0.parquet", "train", write_dir, task_dir,
-                       DURATIONS, CODES, sample_times_per_subject=20, seed=42)
+        _collate_shard(
+            "0.parquet", "train", write_dir, task_dir, DURATIONS, CODES, sample_times_per_subject=20, seed=42
+        )
 
         out_path = tmp_path / "out" / "train" / "0.parquet"
         mtime_before = out_path.stat().st_mtime
 
         # Run again — should skip
-        _collate_shard("0.parquet", "train", write_dir, task_dir,
-                       DURATIONS, CODES, sample_times_per_subject=20, seed=99)
+        _collate_shard(
+            "0.parquet", "train", write_dir, task_dir, DURATIONS, CODES, sample_times_per_subject=20, seed=99
+        )
 
         mtime_after = out_path.stat().st_mtime
         assert mtime_before == mtime_after
@@ -208,12 +232,14 @@ class TestCollateShardEdgeCases:
     def test_empty_shard(self, tmp_path):
         """Empty source parquet → no output file written."""
         task_dir = str(tmp_path / "tasks")
-        empty_df = pl.DataFrame({
-            "subject_id": pl.Series([], dtype=pl.Int64),
-            "prediction_time": pl.Series([], dtype=pl.Datetime),
-            "censored": pl.Series([], dtype=pl.Boolean),
-            "ICD//A01": pl.Series([], dtype=pl.Boolean),
-        })
+        empty_df = pl.DataFrame(
+            {
+                "subject_id": pl.Series([], dtype=pl.Int64),
+                "prediction_time": pl.Series([], dtype=pl.Datetime),
+                "censored": pl.Series([], dtype=pl.Boolean),
+                "ICD//A01": pl.Series([], dtype=pl.Boolean),
+            }
+        )
         for d in DURATIONS:
             split_dir = tmp_path / "tasks" / str(d) / "train"
             split_dir.mkdir(parents=True)
@@ -221,8 +247,16 @@ class TestCollateShardEdgeCases:
 
         write_dir = str(tmp_path / "out")
         os.makedirs(f"{write_dir}/train", exist_ok=True)
-        _collate_shard("0.parquet", "train", write_dir, task_dir,
-                       DURATIONS, ["ICD//A01"], sample_times_per_subject=20, seed=42)
+        _collate_shard(
+            "0.parquet",
+            "train",
+            write_dir,
+            task_dir,
+            DURATIONS,
+            ["ICD//A01"],
+            sample_times_per_subject=20,
+            seed=42,
+        )
 
         assert not os.path.exists(f"{write_dir}/train/0.parquet")
 
@@ -233,8 +267,9 @@ class TestCollateShardEdgeCases:
         task_dir, _ = _build_task_dir(tmp_path, durations=durations, codes=["ICD//A01"])
         write_dir = str(tmp_path / "out")
         os.makedirs(f"{write_dir}/train", exist_ok=True)
-        _collate_shard("0.parquet", "train", write_dir, task_dir,
-                       durations, codes, sample_times_per_subject=20, seed=42)
+        _collate_shard(
+            "0.parquet", "train", write_dir, task_dir, durations, codes, sample_times_per_subject=20, seed=42
+        )
 
         df = pl.read_parquet(str(tmp_path / "out" / "train" / "0.parquet"))
         assert df["duration_days"].unique().to_list() == [30]
@@ -245,8 +280,9 @@ class TestCollateShardEdgeCases:
         task_dir, _ = _build_task_dir(tmp_path, n_subjects=2, n_pred_times=4)
         write_dir = str(tmp_path / "out")
         os.makedirs(f"{write_dir}/train", exist_ok=True)
-        _collate_shard("0.parquet", "train", write_dir, task_dir,
-                       DURATIONS, CODES, sample_times_per_subject=20, seed=42)
+        _collate_shard(
+            "0.parquet", "train", write_dir, task_dir, DURATIONS, CODES, sample_times_per_subject=20, seed=42
+        )
 
         df = pl.read_parquet(str(tmp_path / "out" / "train" / "0.parquet"))
         n_unique_keys = df.select("subject_id", "prediction_time").unique().height
@@ -346,23 +382,8 @@ class TestCollateTasksDurationSource:
 
         # The hash should incorporate these custom durations
         import hashlib
+
         task_str = f"{'|'.join(sorted(CODES))}_{'|'.join(str(d) for d in sorted(custom_durations))}"
-        expected_hash = hashlib.md5(task_str.encode()).hexdigest()
-        assert expected_hash in write_dir
-
-    def test_falls_back_to_range(self, tmp_path):
-        """Without sampled_durations.json, uses range(duration_min, duration_max)."""
-        durations_from_range = list(range(30, 181))
-        task_dir, _ = _build_task_dir(tmp_path, durations=durations_from_range)
-        # No sampled_durations.json written
-
-        cfg = _make_cfg(task_dir, codes=CODES)
-        cfg.query.duration_min = 30
-        cfg.query.duration_max = 181
-        write_dir = collate_tasks(cfg)
-
-        import hashlib
-        task_str = f"{'|'.join(sorted(CODES))}_{'|'.join(str(d) for d in sorted(durations_from_range))}"
         expected_hash = hashlib.md5(task_str.encode()).hexdigest()
         assert expected_hash in write_dir
 

@@ -1,5 +1,6 @@
 import builtins
 import hashlib
+import json
 import logging
 import os
 
@@ -188,13 +189,8 @@ def _collate_shard(
 def collate_tasks(cfg: DictConfig) -> str:
     task_dir = cfg.query.task_dir
     durations_path = f"{task_dir}/sampled_durations.json"
-    if os.path.exists(durations_path):
-        import json
-
-        with open(durations_path) as f:
-            durations = json.load(f)
-    else:
-        durations = list(range(cfg.query.duration_min, cfg.query.duration_max))
+    with open(durations_path) as f:
+        durations = json.load(f)
 
     task_str = f"{'|'.join(sorted(cfg.query.codes))}_{'|'.join(str(d) for d in sorted(durations))}"
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
