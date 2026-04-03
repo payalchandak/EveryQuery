@@ -13,7 +13,7 @@ index_time_hash: 7573f855c4b050a9d79d57fefd8a139c
 # task_set_dir should point to gen_task.py output: out_root_dir/{index_hash}
 # which contains {duration}/{code_slug}/ subdirectories
 task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index/${index_time_hash}
-ckpt_path: last
+ckpt_path: best
 
 # Random Codes (queries) to eval
 id_codes: ${eval_codes.id}
