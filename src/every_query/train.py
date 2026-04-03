@@ -120,11 +120,13 @@ def _collate_shard(
     if base_idx.is_empty():
         return
 
-    # Sample up to sample_times_per_subject rows per subject
+    # Sample up to sample_times_per_subject rows per subject.
+    # Sort after group_by to ensure deterministic row order for reproducible RNG assignment.
     sampled = (
         base_idx.sample(fraction=1, shuffle=True, seed=seed)
         .group_by("subject_id")
         .head(sample_times_per_subject)
+        .sort("subject_id", "prediction_time")
     )
 
     n_sampled = len(sampled)
@@ -176,6 +178,8 @@ def _collate_shard(
     # --- PASS 4: Final Write ---
     if batch_results:
         shard = pl.concat(batch_results)
+        # Sort before shuffle for reproducibility (joins/unpivot don't guarantee order)
+        shard = shard.sort("subject_id", "prediction_time", "duration_days", "query")
         # Final shuffle so the file isn't ordered by duration
         shard = shard.sample(fraction=1, shuffle=True, seed=seed)
         shard.write_parquet(out_path)
