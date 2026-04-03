@@ -4,7 +4,7 @@ defaults:
 
 # Models to evaluate (list of run directories)
 model_run_dirs:
-  - /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49/
+  - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-56-55
 
 # Durations (in days) to evaluate at
 durations: [30, 60, 90, 180, 365, 731]
