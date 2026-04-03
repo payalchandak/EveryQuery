@@ -1,12 +1,19 @@
 defaults:
   - _self_
-  - eval_codes: hosp_admin_codes
+  - eval_codes: 10000_ID__8db2be6fadf8
 
-# inputs
-model_run_dir: /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49/
+# Models to evaluate (list of run directories)
+model_run_dirs:
+  - /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49/
+
+# Durations (in days) to evaluate at
+durations: [30, 60, 90, 180, 365, 731]
+
 index_time_hash: readmiss_30d/held_out
-task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/aces/${index_time_hash}/
-ckpt_path: last
+# task_set_dir should point to gen_task.py output: out_root_dir/{index_hash}
+# which contains {duration}/{code_slug}/ subdirectories
+task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index/${index_time_hash}
+ckpt_path: best
 
 # Random Codes (queries) to eval
 id_codes: ${eval_codes.id}
@@ -14,9 +21,7 @@ ood_codes: ${eval_codes.ood}
 # Hand selected codes to eval model on
 manual_codes: [MEDS_DEATH]
 # where to save eval outputs (outside hydra run dir if you want)
-output_root: ${model_run_dir}/eval/${index_time_hash}/
-#
-#output_root: /users/gbk2114/eq_stuff/dump/${index_time_hash}
+output_root: /users/gbk2114/eq_stuff/eval_results/
 query_codes: ${eval_codes}
 
 do_overwrite: true
