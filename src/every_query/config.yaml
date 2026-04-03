@@ -6,7 +6,7 @@ output_dir: ${oc.env:OUTPUT_DIR}/${hydra:run.dir}/
 do_overwrite: true
 do_resume: false
 seed: 140799
-only_preprocess: true
+only_preprocess: false
 collate_only_held_out: false
 
 query:
@@ -23,8 +23,8 @@ datamodule:
     task_labels_dir: ???
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
-    max_seq_len: 2048
-  batch_size: 12
+    max_seq_len: 256
+  batch_size: 128
   num_workers: 1
   pin_memory: True
 
@@ -36,6 +36,7 @@ lightning_module:
     do_demo: false
     do_grad_ckpt: false
     mlp_dropout: 0.1
+    num_hidden_layers: null
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true
@@ -99,9 +100,9 @@ trainer:
   max_epochs: null # We don't control the max epochs, we control the max steps.
   max_steps: 40000
   accelerator: "auto"
-  devices: 2
-  strategy: "ddp"
-  accumulate_grad_batches: 5 # set to 1 for no gradient accumulation, >1 for gradient accumulation
+  devices: 1
+  strategy: "auto"
+  accumulate_grad_batches: 1 # set to 1 for no gradient accumulation, >1 for gradient accumulation
   log_every_n_steps: 50
   # perform a validation loop every N training epochs
   check_val_every_n_epoch: 1

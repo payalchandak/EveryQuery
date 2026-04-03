@@ -6,12 +6,11 @@
 
 #SBATCH --nodes=1               # Explicitly define 1 node
 #SBATCH --ntasks-per-node=1     # Must match Lightning devices count for DDP
-# #SBATCH --gres=gpu:2            # Total GPUs per node
-#SBATCH --partition=cpu
-#SBATCH --cpus-per-task=20
-# #SBATCH --cpus-per-task=2
-#SBATCH --mem=512G
-#SBATCH --time=100:00:00
+#SBATCH --gres=gpu:1            # Total GPUs per node
+#SBATCH --partition=gpu
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=256G
+#SBATCH --time=200:00:00
 
 echo "Allocated GPUs:"
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
@@ -46,6 +45,6 @@ set +a
 
 export HYDRA_FULL_ERROR=1
 
-srun $UVENV/bin/python src/every_query/train.py
+srun $UVENV/bin/python src/every_query/train.py "$@"
 
 echo "Finished at $(date)"

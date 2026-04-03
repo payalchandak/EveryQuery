@@ -230,10 +230,14 @@ class EveryQueryModel(torch.nn.Module):
         do_demo: bool = False,
         do_grad_ckpt: bool = False,
         mlp_dropout: float = 0.1,
+        num_hidden_layers: int | None = None,
     ):
         super().__init__()
 
         self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained("answerdotai/ModernBERT-base")
+
+        if num_hidden_layers is not None:
+            self.HF_model_config.num_hidden_layers = num_hidden_layers
 
         extra_kwargs = {"torch_dtype": self.PRECISION_TO_MODEL_WEIGHTS_DTYPE.get(precision)}
 
@@ -285,6 +289,7 @@ class EveryQueryModel(torch.nn.Module):
             "precision": precision,
             "do_demo": do_demo,
             "mlp_dropout": self.HF_model.config.mlp_dropout,
+            "num_hidden_layers": self.HF_model_config.num_hidden_layers,
         }
 
     @property
