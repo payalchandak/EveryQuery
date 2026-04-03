@@ -37,8 +37,14 @@ def _setup_model(model_run_dir: str | Path):
     logger.info("Setting torch float32 matmul precision to 'medium'.")
     torch.set_float32_matmul_precision("medium")
 
-    logger.info("Instantiating lightning module (architecture only)...")
-    M = instantiate(train_cfg.lightning_module)
+    ckpt_path = model_run_dir / "best_model.ckpt"
+    if not ckpt_path.is_file():
+        raise FileNotFoundError(f"No best_model.ckpt found in {model_run_dir}")
+
+    logger.info(f"Loading lightning module from checkpoint: {ckpt_path}")
+    from every_query.lightning_module import EveryQueryLightningModule
+
+    M = EveryQueryLightningModule.load_from_checkpoint(str(ckpt_path))
 
     logger.info("Instantiating trainer...")
     trainer = instantiate(train_cfg.trainer)
@@ -80,7 +86,7 @@ def _run_test(
             D = instantiate(train_cfg.datamodule)
 
             t0 = time.time()
-            out = trainer.test(model=M, datamodule=D, ckpt_path=cfg.ckpt_path)
+            out = trainer.test(model=M, datamodule=D, ckpt_path=None)
             eval_time = time.time() - t0
             m = out[0] if out else {}
 
@@ -127,7 +133,7 @@ def _run_predict(
             train_cfg.datamodule.config.task_labels_dir = task_labels_dir
             D = instantiate(train_cfg.datamodule)
 
-            pred_batches = trainer.predict(model=M, datamodule=D, ckpt_path=cfg.ckpt_path)
+            pred_batches = trainer.predict(model=M, datamodule=D, ckpt_path=None)
 
             s_ids, p_times, o_probs, q_embeds = [], [], [], []
             for b in pred_batches:
