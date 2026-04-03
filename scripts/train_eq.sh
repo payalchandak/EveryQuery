@@ -10,7 +10,7 @@
 #SBATCH --partition=gpu
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=256G
-#SBATCH --time=200:00:00
+#SBATCH --time=300:00:00
 
 echo "Allocated GPUs:"
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"

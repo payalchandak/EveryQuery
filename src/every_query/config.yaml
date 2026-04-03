@@ -23,8 +23,8 @@ datamodule:
     task_labels_dir: ???
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
-    max_seq_len: 256
-  batch_size: 128
+    max_seq_len: 2048
+  batch_size: 40
   num_workers: 1
   pin_memory: True
 
@@ -36,7 +36,7 @@ lightning_module:
     do_demo: false
     do_grad_ckpt: false
     mlp_dropout: 0.1
-    num_hidden_layers: null
+    num_hidden_layers: 6
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true
@@ -102,7 +102,7 @@ trainer:
   accelerator: "auto"
   devices: 1
   strategy: "auto"
-  accumulate_grad_batches: 1 # set to 1 for no gradient accumulation, >1 for gradient accumulation
+  accumulate_grad_batches: 3  # set to 1 for no gradient accumulation, >1 for gradient accumulation
   log_every_n_steps: 50
   # perform a validation loop every N training epochs
   check_val_every_n_epoch: 1
