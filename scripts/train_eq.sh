@@ -5,11 +5,11 @@
 #SBATCH --mail-type=END,FAIL
 
 #SBATCH --nodes=1               # Explicitly define 1 node
-#SBATCH --ntasks-per-node=2     # Must match Lightning devices count for DDP
-#SBATCH --gres=gpu:2            # Total GPUs per node
-
-# #SBATCH --cpus-per-task=20
-#SBATCH --cpus-per-task=2
+#SBATCH --ntasks-per-node=1     # Must match Lightning devices count for DDP
+# #SBATCH --gres=gpu:2            # Total GPUs per node
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=20
+# #SBATCH --cpus-per-task=2
 #SBATCH --mem=512G
 #SBATCH --time=100:00:00
 
