@@ -11,6 +11,6 @@ durations: [30, 60, 90, 180, 365, 731]
 paths:
   index_times_dir: /users/gbk2114/eq_stuff/tasks/eval/index_times/${index_hash}/held_out
   task_dir_base: /users/gbk2114/eq_stuff/tasks
-  out_root_dir: /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index
+  out_root_dir: /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index_new
 
 skip_existing: false
