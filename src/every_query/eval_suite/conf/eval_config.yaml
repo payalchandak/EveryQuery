@@ -4,9 +4,12 @@ defaults:
 
 # Models to evaluate (list of run directories)
 model_run_dirs:
-  - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-56-55 # 1028 seq length, 6 layers
-  - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-43-55 # 16
-  - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-43-54 # 22
+  - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-58-42 #1028, 12
+  - /users/gbk2114/EveryQuery/results/outputs/2026-04-03/13-28-12 # 256, 6
+  - /users/gbk2114/EveryQuery/results/outputs/2026-04-03/12-58-10 # 256, 12 
+  # - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-56-55 # 1028 seq length, 6 layers
+  # - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-43-55 # 256,16
+  # - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-43-54 # 256,22
 
 # Durations (in days) to evaluate at
 durations: [30,180]
