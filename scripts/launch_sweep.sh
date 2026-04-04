@@ -25,7 +25,7 @@ if [ ! -f "$SWEEP_CONFIG" ]; then
 fi
 
 echo "Creating W&B sweep from $SWEEP_CONFIG ..."
-SWEEP_OUTPUT=$(wandb sweep "$SWEEP_CONFIG" 2>&1)
+SWEEP_OUTPUT=$(uv run wandb sweep "$SWEEP_CONFIG" 2>&1)
 echo "$SWEEP_OUTPUT"
 
 # Parse the sweep ID from wandb output (last line contains the ID)
