@@ -9,7 +9,7 @@ io:
   out_root: /users/gbk2114/eq_stuff/tasks/eval/
 
 sampling:
-  splits: [held_out]
+  splits: ["tuning"]
   sample_times_per_subject: 1
 
   # deterministic shuffle seed
