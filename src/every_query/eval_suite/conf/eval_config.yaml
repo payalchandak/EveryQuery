@@ -5,19 +5,19 @@ defaults:
 # Models to evaluate (list of run directories)
 model_run_dirs:
   - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-56-55 # 1028, 6
-  # - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-58-42 # 1028, 12
-  # - /users/gbk2114/EveryQuery/results/outputs/2026-04-04/14-08-24 # 1028, 16
-  # - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-54-43 # 1028, 22
-  # - /users/gbk2114/EveryQuery/results/outputs/2026-04-03/13-28-12 # 256, 6
-  # - /users/gbk2114/EveryQuery/results/outputs/2026-04-03/12-58-10 # 256, 12 
-  # - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-43-55 # 256, 16
-  # - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-43-54 # 256, 22
+  - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-58-42 # 1028, 12
+  - /users/gbk2114/EveryQuery/results/outputs/2026-04-04/14-08-24 # 1028, 16
+  - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-54-43 # 1028, 22
+  - /users/gbk2114/EveryQuery/results/outputs/2026-04-03/13-28-12 # 256, 6
+  - /users/gbk2114/EveryQuery/results/outputs/2026-04-03/12-58-10 # 256, 12 
+  - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-43-55 # 256, 16
+  - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-43-54 # 256, 22
 
 # Durations (in days) to evaluate at
 durations: [30,180]
 
 index_time_hash: 7573f855c4b050a9d79d57fefd8a139c
-split: held_out
+split: tuning
 # task_set_dir should point to gen_task.py output: out_root_dir/{index_hash}/{split}
 # which contains {duration}/{code_slug}/ subdirectories
 task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index_new/${index_time_hash}/${split}
