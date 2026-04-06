@@ -103,6 +103,8 @@ def _run_test(
                     "censor_auc": float(m.get("held_out/censor_auc"))
                     if m.get("held_out/censor_auc") is not None
                     else None,
+                    "num_layers": M.model.HF_model_config.num_hidden_layers,
+                    "max_seq_len": M.model.max_seq_len,
                     "eval_time": eval_time,
                 }
             )
