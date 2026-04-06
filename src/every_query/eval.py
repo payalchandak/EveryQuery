@@ -89,10 +89,14 @@ def _run_test(
             D = instantiate(train_cfg.datamodule)
 
             t0 = time.time()
-            out = trainer.test(model=M, datamodule=D, ckpt_path=None)
+            if cfg.split == "tuning":
+                out = trainer.validate(model=M, datamodule=D, ckpt_path=None)
+            else:
+                out = trainer.test(model=M, datamodule=D, ckpt_path=None)
             eval_time = time.time() - t0
             m = out[0] if out else {}
 
+            metric_prefix = "tuning" if cfg.split == "tuning" else "held_out"
             rows.append(
                 {
                     "model": model_name,
@@ -100,11 +104,11 @@ def _run_test(
                     "code": code,
                     "code_slug": slug,
                     "bucket": "ood" if code in cfg.ood_codes else "id",
-                    "occurs_auc": float(m.get("held_out/occurs_auc"))
-                    if m.get("held_out/occurs_auc") is not None
+                    "occurs_auc": float(m.get(f"{metric_prefix}/occurs_auc"))
+                    if m.get(f"{metric_prefix}/occurs_auc") is not None
                     else None,
-                    "censor_auc": float(m.get("held_out/censor_auc"))
-                    if m.get("held_out/censor_auc") is not None
+                    "censor_auc": float(m.get(f"{metric_prefix}/censor_auc"))
+                    if m.get(f"{metric_prefix}/censor_auc") is not None
                     else None,
                     "num_layers": M.model.HF_model_config.num_hidden_layers,
                     "max_seq_len": M.model.max_seq_len,
