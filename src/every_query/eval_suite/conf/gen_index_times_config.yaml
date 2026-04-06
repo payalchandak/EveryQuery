@@ -13,7 +13,7 @@ sampling:
   sample_times_per_subject: 1
 
   # deterministic shuffle seed
-  seed: 43
+  seed: 42
 
 behavior:
   skip_existing: true

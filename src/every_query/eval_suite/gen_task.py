@@ -32,27 +32,28 @@ def process_eval_tasks(
     index_hash: str,
     codes: list[str],
     durations: list[int],
+    split: str,
     skip_existing: bool = False,
 ) -> None:
     """Generate per-code, per-duration eval task parquets from index times and duration-specific task data."""
     index_shards = list_parquets(index_dir)
 
     for duration in durations:
-        dur_task_dir = task_dir_base / str(duration) / "held_out"
+        dur_task_dir = task_dir_base / str(duration) / split
         if not dur_task_dir.is_dir():
-            print(f"WARNING: task dir missing for duration={duration}: {dur_task_dir}, skipping")
+            print(f"WARNING: task dir missing for duration={duration}, split={split}: {dur_task_dir}, skipping")
             continue
 
         dur_shards = list_parquets(dur_task_dir)
         assert [p.name for p in index_shards] == [p.name for p in dur_shards], (
-            f"Shard mismatch for duration={duration}: index has {len(index_shards)}, "
+            f"Shard mismatch for duration={duration}, split={split}: index has {len(index_shards)}, "
             f"tasks has {len(dur_shards)}"
         )
 
         for shard_idx, (idx_fp, task_fp) in tqdm(
             enumerate(zip(index_shards, dur_shards, strict=True)),
             total=len(index_shards),
-            desc=f"duration={duration}",
+            desc=f"split={split}, duration={duration}",
         ):
             # Index times: just the (subject_id, prediction_time) pairs to evaluate
             index_df = pl.read_parquet(idx_fp).select(["subject_id", "prediction_time"])
@@ -62,7 +63,7 @@ def process_eval_tasks(
 
             for code in codes:
                 slug = code_slug(code)
-                code_dir = out_root / index_hash / str(duration) / slug
+                code_dir = out_root / index_hash / split / str(duration) / slug
                 code_dir.mkdir(parents=True, exist_ok=True)
 
                 out_fp = code_dir / f"{shard_idx}.parquet"
@@ -101,15 +102,26 @@ def process_eval_tasks(
 
 @hydra.main(config_path="./conf", config_name="gen_tasks_config", version_base=None)
 def main(cfg: DictConfig) -> None:
-    process_eval_tasks(
-        index_dir=Path(cfg.paths.index_times_dir),
-        task_dir_base=Path(cfg.paths.task_dir_base),
-        out_root=Path(cfg.paths.out_root_dir),
-        index_hash=str(cfg.index_hash),
-        codes=_resolve_codes(cfg.eval_codes),
-        durations=list(cfg.durations),
-        skip_existing=bool(cfg.skip_existing),
-    )
+    codes = _resolve_codes(cfg.eval_codes)
+    extra = list(cfg.get("extra_codes", []))
+    if extra:
+        codes = codes + [c for c in extra if c not in codes]
+    durations = list(cfg.durations)
+    splits = list(cfg.splits)
+    index_times_base = Path(cfg.paths.index_times_base)
+
+    for split in splits:
+        print(f"\n=== Processing split: {split} ===")
+        process_eval_tasks(
+            index_dir=index_times_base / split,
+            task_dir_base=Path(cfg.paths.task_dir_base),
+            out_root=Path(cfg.paths.out_root_dir),
+            index_hash=str(cfg.index_hash),
+            codes=codes,
+            durations=durations,
+            split=split,
+            skip_existing=bool(cfg.skip_existing),
+        )
 
 
 if __name__ == "__main__":
