@@ -260,7 +260,7 @@ class EveryQueryLightningModule(L.LightningModule):
                 if mask is not None:
                     preds = preds[mask]
                     target = target[mask]
-                if preds.numel() > 0 and target.unique().numel() == 2:
+                if preds.numel() > 0:
                     self._update_metric(name="occurs_auc", split=split, preds=preds, target=target)
 
     def training_step(self, batch: EveryQueryBatch) -> torch.Tensor:
