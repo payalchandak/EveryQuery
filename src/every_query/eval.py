@@ -230,7 +230,7 @@ def main(cfg: DictConfig) -> None:
         if not all_test_dfs:
             logger.warning("No test results were generated.")
             return
-        out_fp = out_dir / f"eval_aucs_{timestamp}.parquet"
+        out_fp = out_dir / f"eval_aucs_{cfg.split}_{timestamp}.parquet"
         if out_fp.exists() and not cfg.do_overwrite:
             logger.info(f"Output exists at {out_fp}. Set do_overwrite=true to overwrite.")
             return

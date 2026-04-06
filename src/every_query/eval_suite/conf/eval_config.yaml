@@ -15,9 +15,10 @@ model_run_dirs:
 durations: [30,180]
 
 index_time_hash: 7573f855c4b050a9d79d57fefd8a139c
-# task_set_dir should point to gen_task.py output: out_root_dir/{index_hash}
+split: tuning
+# task_set_dir should point to gen_task.py output: out_root_dir/{index_hash}/{split}
 # which contains {duration}/{code_slug}/ subdirectories
-task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index_new/${index_time_hash}
+task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index_new/${index_time_hash}/${split}
 ckpt_path: best
 
 # Random Codes (queries) to eval
