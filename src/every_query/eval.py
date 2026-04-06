@@ -39,7 +39,7 @@ def _setup_model(model_run_dir: str | Path):
 
     ckpt_path = model_run_dir / "best_model.ckpt"
     if not ckpt_path.is_file():
-        ckpt_path = model_run_dir / "last.ckpt"
+        ckpt_path = model_run_dir / "checkpoints" / "last.ckpt"
         logger.warning(f"best_model.ckpt not found, falling back to {ckpt_path}")
     if not ckpt_path.is_file():
         raise FileNotFoundError(f"No best_model.ckpt or last.ckpt found in {model_run_dir}")
