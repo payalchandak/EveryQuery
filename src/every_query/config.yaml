@@ -24,7 +24,7 @@ datamodule:
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
     max_seq_len: 1028
-  batch_size: 40
+  batch_size: 32
   num_workers: 1
   pin_memory: True
 
@@ -40,7 +40,7 @@ lightning_module:
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true
-    lr: 1e-5 # starting point (common LR for transformers)
+    lr: 3e-5 # starting point (common LR for transformers)
     weight_decay: 0.05 # recommended for regularization
     eps: 1.0e-8 # default epsilon
     betas: [0.9, 0.999] # default betas (standard)
@@ -102,7 +102,7 @@ trainer:
   accelerator: "auto"
   devices: 1
   strategy: "auto"
-  accumulate_grad_batches: 4  # set to 1 for no gradient accumulation, >1 for gradient accumulation
+  accumulate_grad_batches: 5  # set to 1 for no gradient accumulation, >1 for gradient accumulation
   log_every_n_steps: 50
   # perform a validation loop every N training epochs
   check_val_every_n_epoch: 1
