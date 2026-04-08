@@ -23,8 +23,8 @@ datamodule:
     task_labels_dir: ???
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
-    max_seq_len: 1028
-  batch_size: 32
+    max_seq_len: 2048
+  batch_size: 24
   num_workers: 1
   pin_memory: True
 
@@ -36,11 +36,11 @@ lightning_module:
     do_demo: false
     do_grad_ckpt: false
     mlp_dropout: 0.1
-    num_hidden_layers: 16
+    num_hidden_layers: 12
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true
-    lr: 3e-5 # starting point (common LR for transformers)
+    lr: 1e-5 # starting point (common LR for transformers)
     weight_decay: 0.05 # recommended for regularization
     eps: 1.0e-8 # default epsilon
     betas: [0.9, 0.999] # default betas (standard)
@@ -49,7 +49,7 @@ lightning_module:
   LR_scheduler:
     _target_: transformers.get_cosine_schedule_with_warmup
     _partial_: true
-    num_warmup_steps: ${int_prod:0.05,${.num_training_steps}} # ~10% of training steps
+    num_warmup_steps: ${int_prod:0.10,${.num_training_steps}} # ~10% of training steps
     num_training_steps: ${trainer.max_steps}
     num_cycles: 0.5
 
