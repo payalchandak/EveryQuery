@@ -119,7 +119,7 @@ def _run_test(
                     if m.get(f"{metric_prefix}/censor_auc") is not None
                     else None,
                     "num_layers": M.model.HF_model_config.num_hidden_layers,
-                    "max_seq_len": D.config.max_seq_len,
+                    "max_seq_len": train_cfg.datamodule.config.max_seq_len,
                     "eval_time": eval_time,
                     "ckpt": cfg.ckpt_path,
                 }
