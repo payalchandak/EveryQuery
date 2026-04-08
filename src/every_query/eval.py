@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-def _setup_model(model_run_dir: str | Path):
+def _setup_model(model_run_dir: str | Path, ckpt_name: str | None = None):
     model_run_dir = Path(model_run_dir)
     if not model_run_dir.is_dir():
         raise NotADirectoryError(f"{model_run_dir} is not a directory")
@@ -37,12 +37,20 @@ def _setup_model(model_run_dir: str | Path):
     logger.info("Setting torch float32 matmul precision to 'medium'.")
     torch.set_float32_matmul_precision("medium")
 
-    ckpt_path = model_run_dir / "best_model.ckpt"
-    if not ckpt_path.is_file():
-        ckpt_path = model_run_dir / "checkpoints" / "last.ckpt"
-        logger.warning(f"best_model.ckpt not found, falling back to {ckpt_path}")
-    if not ckpt_path.is_file():
-        raise FileNotFoundError(f"No best_model.ckpt or last.ckpt found in {model_run_dir}")
+    # Resolve checkpoint: explicit name → best_model.ckpt → last.ckpt
+    candidates = (
+        [model_run_dir / "checkpoints" / f"{ckpt_name}.ckpt"]
+        if ckpt_name is not None and ckpt_name != "best"
+        else [
+            model_run_dir / "best_model.ckpt",
+            model_run_dir / "checkpoints" / "last.ckpt",
+        ]
+    )
+    ckpt_path = next((p for p in candidates if p.is_file()), None)
+    if ckpt_path is None:
+        raise FileNotFoundError(f"No checkpoint found in {model_run_dir} (tried {[str(p) for p in candidates]})")
+    if ckpt_path != candidates[0]:
+        logger.warning(f"{candidates[0].name} not found, falling back to {ckpt_path}")
 
     logger.info(f"Loading lightning module from checkpoint: {ckpt_path}")
     from every_query.lightning_module import EveryQueryLightningModule
@@ -103,7 +111,7 @@ def _run_test(
                     "duration_days": duration,
                     "code": code,
                     "code_slug": slug,
-                    "bucket": "ood" if code in cfg.ood_codes else "id",
+                    "bucket": "ood" if cfg.ood_codes and code in cfg.ood_codes else "id",
                     "occurs_auc": float(m.get(f"{metric_prefix}/occurs_auc"))
                     if m.get(f"{metric_prefix}/occurs_auc") is not None
                     else None,
@@ -111,8 +119,9 @@ def _run_test(
                     if m.get(f"{metric_prefix}/censor_auc") is not None
                     else None,
                     "num_layers": M.model.HF_model_config.num_hidden_layers,
-                    "max_seq_len": M.model.max_seq_len,
+                    "max_seq_len": D.config.max_seq_len,
                     "eval_time": eval_time,
+                    "ckpt": cfg.ckpt_path,
                 }
             )
 
@@ -210,7 +219,7 @@ def main(cfg: DictConfig) -> None:
         model_name = _model_name(model_run_dir)
         logger.info(f"=== Evaluating model: {model_name} ({model_run_dir}) ===")
 
-        train_cfg, M, trainer = _setup_model(model_run_dir)
+        train_cfg, M, trainer = _setup_model(model_run_dir, ckpt_name=cfg.get("ckpt_path"))
 
         if cfg.mode == "predict":
             pred_df, embed_df = _run_predict(cfg, train_cfg, M, trainer, task_set_dir, model_name, durations)

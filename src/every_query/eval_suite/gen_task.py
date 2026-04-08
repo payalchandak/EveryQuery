@@ -41,7 +41,9 @@ def process_eval_tasks(
     for duration in durations:
         dur_task_dir = task_dir_base / str(duration) / split
         if not dur_task_dir.is_dir():
-            print(f"WARNING: task dir missing for duration={duration}, split={split}: {dur_task_dir}, skipping")
+            print(
+                f"WARNING: task dir missing for duration={duration}, split={split}: {dur_task_dir}, skipping"
+            )
             continue
 
         dur_shards = list_parquets(dur_task_dir)

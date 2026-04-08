@@ -340,15 +340,11 @@ class TestGenTaskCensorSource:
         all_df = _read_all_outputs(out_root, INDEX_HASH)
 
         # At duration=30, subject 1 should be censored (True)
-        row_30_s1 = all_df.filter(
-            (pl.col("duration_days") == 30) & (pl.col("subject_id") == 1)
-        )
+        row_30_s1 = all_df.filter((pl.col("duration_days") == 30) & (pl.col("subject_id") == 1))
         assert row_30_s1["boolean_value"][0] is True
 
         # At duration=90, subject 1 should NOT be censored (False)
-        row_90_s1 = all_df.filter(
-            (pl.col("duration_days") == 90) & (pl.col("subject_id") == 1)
-        )
+        row_90_s1 = all_df.filter((pl.col("duration_days") == 90) & (pl.col("subject_id") == 1))
         assert row_90_s1["boolean_value"][0] is False
 
 
@@ -414,8 +410,8 @@ class TestGenTaskShardMismatch:
 
 class TestGenTaskRowCounts:
     def test_row_count_per_duration_code(self, tmp_path):
-        """Each (duration, code) combination should have the same number of rows
-        (since we use the same index times and same base task data)."""
+        """Each (duration, code) combination should have the same number of rows (since we use the same index
+        times and same base task data)."""
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path)
         process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS)
 
