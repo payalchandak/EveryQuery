@@ -69,7 +69,14 @@ def _model_name(model_run_dir: str) -> str:
 
 
 def _run_test(
-    cfg: DictConfig, train_cfg, M, trainer, task_set_dir: Path, model_name: str, durations: list[int]
+    cfg: DictConfig,
+    train_cfg,
+    M,
+    trainer,
+    task_set_dir: Path,
+    model_name: str,
+    durations: list[int],
+    ckpt_name: str | None = None,
 ) -> pl.DataFrame:
     codes: list[str] = []
     if cfg.id_codes is not None:
@@ -121,7 +128,7 @@ def _run_test(
                     "num_layers": M.model.HF_model_config.num_hidden_layers,
                     "max_seq_len": train_cfg.datamodule.config.max_seq_len,
                     "eval_time": eval_time,
-                    "ckpt": cfg.ckpt_path,
+                    "ckpt": ckpt_name,
                 }
             )
 
@@ -215,22 +222,27 @@ def main(cfg: DictConfig) -> None:
     all_pred_dfs = []
     all_embed_dfs = []
 
+    ckpt_names = list(cfg.ckpt_names) if cfg.get("ckpt_names") else [cfg.get("ckpt_path")]
+
     for model_run_dir in model_run_dirs:
-        model_name = _model_name(model_run_dir)
-        logger.info(f"=== Evaluating model: {model_name} ({model_run_dir}) ===")
+        for ckpt_name in ckpt_names:
+            model_name = f"{_model_name(model_run_dir)}/{ckpt_name}"
+            logger.info(f"=== Evaluating model: {model_name} ({model_run_dir}) ===")
 
-        train_cfg, M, trainer = _setup_model(model_run_dir, ckpt_name=cfg.get("ckpt_path"))
+            train_cfg, M, trainer = _setup_model(model_run_dir, ckpt_name=ckpt_name)
 
-        if cfg.mode == "predict":
-            pred_df, embed_df = _run_predict(cfg, train_cfg, M, trainer, task_set_dir, model_name, durations)
-            if not pred_df.is_empty():
-                all_pred_dfs.append(pred_df)
-            if not embed_df.is_empty():
-                all_embed_dfs.append(embed_df)
-        else:
-            test_df = _run_test(cfg, train_cfg, M, trainer, task_set_dir, model_name, durations)
-            if not test_df.is_empty():
-                all_test_dfs.append(test_df)
+            if cfg.mode == "predict":
+                pred_df, embed_df = _run_predict(
+                    cfg, train_cfg, M, trainer, task_set_dir, model_name, durations
+                )
+                if not pred_df.is_empty():
+                    all_pred_dfs.append(pred_df)
+                if not embed_df.is_empty():
+                    all_embed_dfs.append(embed_df)
+            else:
+                test_df = _run_test(cfg, train_cfg, M, trainer, task_set_dir, model_name, durations, ckpt_name)
+                if not test_df.is_empty():
+                    all_test_dfs.append(test_df)
 
     if cfg.mode == "predict":
         if not all_pred_dfs:

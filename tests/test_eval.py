@@ -504,3 +504,80 @@ class TestRunPredictRowGeneration:
             pred_df, _ = _run_predict(cfg, train_cfg, M, trainer, task_set_dir, "m", [30])
         expected_ids = list(range(100, 105))
         assert pred_df["subject_id"].to_list() == expected_ids
+
+
+# ---------------------------------------------------------------------------
+# Multi-checkpoint loop (ckpt_names feature)
+# ---------------------------------------------------------------------------
+
+
+class TestMultiCheckpointLoop:
+    """Tests for evaluating multiple checkpoints from the same run directory."""
+
+    CKPT_NAMES = ["epoch=0-step=100", "epoch=0-step=200", "epoch=0-step=300"]
+
+    def _make_multi_ckpt_run_dir(self, tmp_path):
+        ckpt_locations = [f"checkpoints/{name}.ckpt" for name in self.CKPT_NAMES]
+        return _make_model_run_dir(tmp_path, ckpt_locations)
+
+    def test_multiple_ckpts_produce_distinct_model_names(self, tmp_path):
+        run_dir = self._make_multi_ckpt_run_dir(tmp_path)
+        task_set_dir = _make_task_dirs(tmp_path, [30], CODES[:1])
+        metrics = {"held_out/occurs_auc": 0.8, "held_out/censor_auc": 0.7}
+
+        all_dfs = []
+        for ckpt_name in self.CKPT_NAMES:
+            model_name = f"{run_dir.name}/{ckpt_name}"
+            with (
+                patch(_SETUP_PATCHES["load"], return_value=MagicMock()),
+                patch(_SETUP_PATCHES["instantiate"], return_value=MagicMock()),
+                patch(_SETUP_PATCHES["seed"]),
+            ):
+                train_cfg, M, trainer = _setup_model(run_dir, ckpt_name=ckpt_name)
+
+            trainer = _make_mock_trainer(test_return=[metrics])
+            cfg = _make_run_test_cfg(id_codes=CODES[:1], ood_codes=[])
+            with patch("every_query.eval.instantiate", return_value=MagicMock()):
+                df = _run_test(cfg, _make_train_cfg(), M, trainer, task_set_dir, model_name, [30])
+            all_dfs.append(df)
+
+        combined = pl.concat(all_dfs, how="vertical")
+        model_names = combined["model"].unique().to_list()
+        assert len(model_names) == 3
+        for ckpt_name in self.CKPT_NAMES:
+            assert any(ckpt_name in m for m in model_names)
+
+    def test_ckpt_names_fallback_to_ckpt_path(self):
+        # Simulates the resolution logic from main()
+        cfg_with_names = OmegaConf.create({"ckpt_names": ["a", "b"], "ckpt_path": "best"})
+        result = list(cfg_with_names.ckpt_names) if cfg_with_names.get("ckpt_names") else [cfg_with_names.get("ckpt_path")]
+        assert result == ["a", "b"]
+
+        cfg_without_names = OmegaConf.create({"ckpt_names": None, "ckpt_path": "best"})
+        result = list(cfg_without_names.ckpt_names) if cfg_without_names.get("ckpt_names") else [cfg_without_names.get("ckpt_path")]
+        assert result == ["best"]
+
+    def test_all_ckpts_results_in_single_dataframe(self, tmp_path):
+        run_dir = self._make_multi_ckpt_run_dir(tmp_path)
+        task_set_dir = _make_task_dirs(tmp_path, DURATIONS, CODES[:2])
+        metrics = {"held_out/occurs_auc": 0.85, "held_out/censor_auc": 0.90}
+
+        all_dfs = []
+        for ckpt_name in self.CKPT_NAMES:
+            model_name = f"{run_dir.name}/{ckpt_name}"
+            with (
+                patch(_SETUP_PATCHES["load"], return_value=MagicMock()),
+                patch(_SETUP_PATCHES["instantiate"], return_value=MagicMock()),
+                patch(_SETUP_PATCHES["seed"]),
+            ):
+                train_cfg, M, trainer = _setup_model(run_dir, ckpt_name=ckpt_name)
+
+            trainer = _make_mock_trainer(test_return=[metrics])
+            cfg = _make_run_test_cfg(id_codes=CODES[:2], ood_codes=[])
+            with patch("every_query.eval.instantiate", return_value=MagicMock()):
+                df = _run_test(cfg, _make_train_cfg(), M, trainer, task_set_dir, model_name, DURATIONS)
+            all_dfs.append(df)
+
+        combined = pl.concat(all_dfs, how="vertical")
+        # 3 ckpts × 2 codes × 2 durations = 12 rows
+        assert len(combined) == 3 * 2 * 2
