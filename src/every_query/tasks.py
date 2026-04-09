@@ -245,7 +245,10 @@ def main(cfg: DictConfig) -> None:
     read_dir = os.environ["INTERMEDIATE"]
     task_dir = os.environ["TASK_DIR"]
 
-    durations = sample_durations(cfg.n_durations, 1, 731, cfg.duration_seed)
+    if cfg.durations is not None:
+        durations = sorted(cfg.durations)
+    else:
+        durations = sample_durations(cfg.n_durations, 1, 731, cfg.duration_seed)
 
     # Build deterministic flat list of (split, file_name) pairs
     all_shards: list[tuple[str, str]] = []
