@@ -4,14 +4,14 @@ defaults:
 
 # Models to evaluate (list of run directories)
 model_run_dirs:
-  - /users/gbk2114/EveryQuery/results/outputs/2026-04-08/16-38-46/checkpoints/epoch=0-step=1382.ckpt
-  - /users/gbk2114/EveryQuery/results/outputs/2026-04-08/16-38-46/checkpoints/epoch=0-step=2764.ckpt
-  - /users/gbk2114/EveryQuery/results/outputs/2026-04-08/16-38-46/checkpoints/epoch=0-step=4146.ckpt
-  - /users/gbk2114/EveryQuery/results/outputs/2026-04-08/16-38-46/checkpoints/epoch=0-step=5529.ckpt
-  - /users/gbk2114/EveryQuery/results/outputs/2026-04-08/16-38-46/checkpoints/epoch=0-step=6911.ckpt
-  - /users/gbk2114/EveryQuery/results/outputs/2026-04-08/16-38-46/checkpoints/epoch=0-step=8293.ckpt
-  - /users/gbk2114/EveryQuery/results/outputs/2026-04-08/16-38-46/checkpoints/epoch=0-step=9675.ckpt
-  - /users/gbk2114/EveryQuery/results/outputs/2026-04-08/16-38-46/checkpoints/epoch=0-step=11058.ckpt
+  - "epoch=0-step=1382.ckpt"
+  - "epoch=0-step=2764.ckpt"
+  - "epoch=0-step=4146.ckpt"
+  - "epoch=0-step=5529.ckpt"
+  - "epoch=0-step=6911.ckpt"
+  - "epoch=0-step=8293.ckpt"
+  - "epoch=0-step=9675.ckpt"
+  - "epoch=0-step=11058.ckpt"
 
 
   # - /users/gbk2114/EveryQuery/results/outputs/2026-04-04/14-08-24 # 1028, 16
