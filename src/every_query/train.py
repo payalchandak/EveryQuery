@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+from datetime import datetime
 
 NUM_CPUS = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
 FILES_AT_ONCE = 10
@@ -26,6 +27,17 @@ from MEDS_transforms.configs.utils import OmegaConfResolver
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 logger = logging.getLogger(__name__)
+
+
+_RUN_ID = None
+
+
+@OmegaConfResolver
+def run_id():
+    global _RUN_ID
+    if _RUN_ID is None:
+        _RUN_ID = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
+    return _RUN_ID
 
 
 @OmegaConfResolver

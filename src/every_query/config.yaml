@@ -2,7 +2,7 @@ defaults:
   - _self_
   - train_codes: "10000_ID__8db2be6fadf8"
 
-output_dir: ${oc.env:OUTPUT_DIR}/${hydra:run.dir}/
+output_dir: ${oc.env:OUTPUT_DIR}/${run_id:}/
 do_overwrite: true
 do_resume: false
 seed: 140799
@@ -57,7 +57,7 @@ trainer:
   _target_: lightning.pytorch.trainer.Trainer
   logger:
     _target_: pytorch_lightning.loggers.wandb.WandbLogger
-    name: "queries=${list_len:${query.codes}}_${now:%Y%m%d_%H%M%S}"
+    name: "queries=${list_len:${query.codes}}_${run_id:}"
     save_dir: "${trainer.default_root_dir}/loggers"
     offline: False
     id: null # pass correct id to resume experiment!

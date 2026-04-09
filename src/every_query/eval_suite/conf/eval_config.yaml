@@ -40,12 +40,10 @@ id_codes: ${eval_codes.id}
 ood_codes: ${eval_codes.ood}
 # Hand selected codes to eval model on
 manual_codes: [MEDS_DEATH]
-# where to save eval outputs (outside hydra run dir if you want)
-output_root: /users/gbk2114/eq_stuff/eval_results/
+# eval outputs are written to {model_run_dir}/eval/{ckpt_name}/
 query_codes: ${eval_codes}
 
-do_overwrite: true
+do_overwrite: false
 do_resume: false
 seed: 140799
-only_preprocess: true
 mode: test

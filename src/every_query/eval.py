@@ -215,12 +215,6 @@ def main(cfg: DictConfig) -> None:
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
     hc = HydraConfig.get()
     eval_codes_choice_str = hc.runtime.choices["eval_codes"]
-    out_dir = Path(cfg.output_root)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    all_test_dfs = []
-    all_pred_dfs = []
-    all_embed_dfs = []
 
     ckpt_names = list(cfg.ckpt_names) if cfg.get("ckpt_names") else [cfg.get("ckpt_path")]
 
@@ -229,41 +223,35 @@ def main(cfg: DictConfig) -> None:
             model_name = f"{_model_name(model_run_dir)}/{ckpt_name}"
             logger.info(f"=== Evaluating model: {model_name} ({model_run_dir}) ===")
 
+            out_dir = Path(model_run_dir) / "eval" / ckpt_name
+            out_dir.mkdir(parents=True, exist_ok=True)
+
             train_cfg, M, trainer = _setup_model(model_run_dir, ckpt_name=ckpt_name)
 
             if cfg.mode == "predict":
                 pred_df, embed_df = _run_predict(
                     cfg, train_cfg, M, trainer, task_set_dir, model_name, durations
                 )
-                if not pred_df.is_empty():
-                    all_pred_dfs.append(pred_df)
-                if not embed_df.is_empty():
-                    all_embed_dfs.append(embed_df)
+                if pred_df.is_empty():
+                    logger.warning(f"No predictions generated for {model_name} — all codes were skipped.")
+                    continue
+                out_fp = out_dir / f"eval_preds_{eval_codes_choice_str}_{timestamp}.parquet"
+                embed_fp = out_dir / f"eval_embeds_{eval_codes_choice_str}_{timestamp}.parquet"
+                pred_df.write_parquet(out_fp)
+                embed_df.write_parquet(embed_fp)
+                logger.info(f"Saved predictions to {out_fp}")
+                logger.info(f"Saved embeddings to {embed_fp}")
             else:
                 test_df = _run_test(cfg, train_cfg, M, trainer, task_set_dir, model_name, durations, ckpt_name)
-                if not test_df.is_empty():
-                    all_test_dfs.append(test_df)
-
-    if cfg.mode == "predict":
-        if not all_pred_dfs:
-            logger.warning("No predictions were generated — all codes were skipped.")
-            return
-        out_fp = out_dir / f"eval_preds_{eval_codes_choice_str}_{timestamp}.parquet"
-        embed_fp = out_dir / f"eval_embeds_{eval_codes_choice_str}_{timestamp}.parquet"
-        pl.concat(all_pred_dfs, how="vertical").write_parquet(out_fp)
-        pl.concat(all_embed_dfs, how="vertical").write_parquet(embed_fp)
-        logger.info(f"Saved predictions to {out_fp}")
-        logger.info(f"Saved embeddings to {embed_fp}")
-    else:
-        if not all_test_dfs:
-            logger.warning("No test results were generated.")
-            return
-        out_fp = out_dir / f"eval_aucs_{cfg.split}_{timestamp}.parquet"
-        if out_fp.exists() and not cfg.do_overwrite:
-            logger.info(f"Output exists at {out_fp}. Set do_overwrite=true to overwrite.")
-            return
-        pl.concat(all_test_dfs, how="vertical").write_parquet(out_fp)
-        logger.info(f"Saved test results to {out_fp}")
+                if test_df.is_empty():
+                    logger.warning(f"No test results generated for {model_name}.")
+                    continue
+                out_fp = out_dir / f"eval_aucs_{cfg.split}_{timestamp}.parquet"
+                if out_fp.exists() and not cfg.do_overwrite:
+                    logger.info(f"Output exists at {out_fp}. Set do_overwrite=true to overwrite.")
+                    continue
+                test_df.write_parquet(out_fp)
+                logger.info(f"Saved test results to {out_fp}")
 
 
 if __name__ == "__main__":
