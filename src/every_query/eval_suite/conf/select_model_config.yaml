@@ -13,4 +13,4 @@ split: tuning
 
 # Directory to write model_selection_<split>_<ts>.parquet and
 # win_matrix_<split>_<ts>.parquet. If null, writes to the Hydra run dir.
-output_dir: null
+output_dir: ${oc.env:PROJECT_DIR}/src/every_query/eval_suite/outputs/model_selection/${split}
