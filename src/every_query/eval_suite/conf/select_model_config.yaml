@@ -1,0 +1,10 @@
+# Model run directories to compare. Each contributes one model (best ckpt) to the ranking.
+model_run_dirs:
+  - /users/gbk2114/EveryQuery/results/outputs/2026-04-02/23-43-54
+
+# Eval split to select on. Must match what was passed to eval.py.
+split: tuning
+
+# Directory to write model_selection_<split>_<ts>.parquet and
+# win_matrix_<split>_<ts>.parquet. If null, writes to the Hydra run dir.
+output_dir: null
