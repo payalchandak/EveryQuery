@@ -23,4 +23,7 @@
 #   # Then submit:
 #   sbatch --array=0-$N scripts/run_tasks.sh
 
+cd ~/EveryQuery
+uv sync --locked
+
 uv run python src/every_query/tasks.py --shard-index "$SLURM_ARRAY_TASK_ID"

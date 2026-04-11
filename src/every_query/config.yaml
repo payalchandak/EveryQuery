@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - train_codes: "10000_ID__8db2be6fadf8"
+  - train_codes: 10000_ID__8db2be6fadf8
 
 output_dir: ${oc.env:OUTPUT_DIR}/${run_id:}/
 do_overwrite: true

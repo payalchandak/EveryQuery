@@ -28,12 +28,11 @@ mkdir -p logs
 echo "Starting job on $(hostname) at $(date)"
 echo "SLURM CPU PER TASK: $SLURM_CPUS_PER_TASK"
 
-UVENV="$HOME/eq_stuff/eq"
-
-echo "Using python: $UVENV/bin/python"
-$UVENV/bin/python -c "import sys; print('Executable:', sys.executable)"
-
 cd ~/EveryQuery
+uv sync --locked
+
+echo "Using python: $(uv run which python)"
+uv run python -c "import sys; print('Executable:', sys.executable)"
 
 set -a
 . ./.env
@@ -41,6 +40,6 @@ set +a
 
 export HYDRA_FULL_ERROR=1
 
-srun $UVENV/bin/python src/every_query/train.py --config-name=fast_config "$@"
+srun uv run python src/every_query/train.py --config-name=fast_config "$@"
 
 echo "Finished at $(date)"

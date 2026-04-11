@@ -29,14 +29,11 @@ export PYTHONNOUSERSITE=1
 mkdir -p logs
 echo "Starting job on $(hostname) at $(date)"
 echo "SLURM CPU PER TASK: $SLURM_CPUS_PER_TASK"
-# Path to uv env
-UVENV="$HOME/eq_stuff/eq"
-
-# Debug — should output eq_uv Python
-echo "Using python: $UVENV/bin/python"
-$UVENV/bin/python -c "import sys; print('Executable:', sys.executable)"
-
 cd ~/EveryQuery
+uv sync --locked
+
+echo "Using python: $(uv run which python)"
+uv run python -c "import sys; print('Executable:', sys.executable)"
 
 # Load .env variables
 set -a
@@ -45,6 +42,6 @@ set +a
 
 export HYDRA_FULL_ERROR=1
 
-srun $UVENV/bin/python src/every_query/train.py "$@"
+srun uv run python src/every_query/train.py "$@"
 
 echo "Finished at $(date)"

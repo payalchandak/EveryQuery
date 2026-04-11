@@ -24,6 +24,8 @@ if [ ! -f "$SWEEP_CONFIG" ]; then
     exit 1
 fi
 
+uv sync --locked
+
 echo "Creating W&B sweep from $SWEEP_CONFIG ..."
 SWEEP_OUTPUT=$(uv run wandb sweep "$SWEEP_CONFIG" 2>&1)
 echo "$SWEEP_OUTPUT"

@@ -27,9 +27,8 @@ export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
 mkdir -p logs
 echo "Sweep agent on $(hostname) at $(date)"
 
-UVENV="$HOME/eq_stuff/eq"
-
 cd ~/EveryQuery
+uv sync --locked
 
 set -a
 . ./.env
@@ -37,6 +36,6 @@ set +a
 
 export HYDRA_FULL_ERROR=1
 
-srun $UVENV/bin/python -m wandb agent --count 1 "$SWEEP_ID"
+srun uv run python -m wandb agent --count 1 "$SWEEP_ID"
 
 echo "Sweep agent finished at $(date)"
