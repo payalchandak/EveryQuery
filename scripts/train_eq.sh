@@ -29,16 +29,18 @@ export PYTHONNOUSERSITE=1
 mkdir -p logs
 echo "Starting job on $(hostname) at $(date)"
 echo "SLURM CPU PER TASK: $SLURM_CPUS_PER_TASK"
-cd ~/EveryQuery
+# Move to the repo root (directory from which sbatch was invoked).
+cd "${SLURM_SUBMIT_DIR:-$PWD}"
+
+# Load .env variables (portable: all machine-specific paths live here).
+set -a
+. ./.env
+set +a
+
 uv sync --locked
 
 echo "Using python: $(uv run which python)"
 uv run python -c "import sys; print('Executable:', sys.executable)"
-
-# Load .env variables
-set -a
-. ./.env
-set +a
 
 export HYDRA_FULL_ERROR=1
 

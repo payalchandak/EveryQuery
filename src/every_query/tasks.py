@@ -4,12 +4,13 @@ import os
 import hydra
 import numpy as np
 import polars as pl
-from dotenv import load_dotenv
 from meds import held_out_split, train_split, tuning_split
 from omegaconf import DictConfig
 from tqdm import tqdm
 
-load_dotenv()
+from every_query._env import ensure_env
+
+ensure_env()
 
 
 def read_event_shard(file_path: str) -> pl.DataFrame:

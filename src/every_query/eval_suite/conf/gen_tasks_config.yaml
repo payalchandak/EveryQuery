@@ -12,9 +12,9 @@ durations: [60, 90, 365, 731]
 splits: ["held_out"]
 
 paths:
-  index_times_base: /users/gbk2114/eq_stuff/tasks/eval/index_times/${index_hash}
-  task_dir_base: /users/gbk2114/eq_stuff/tasks
-  out_root_dir: /users/gbk2114/eq_stuff/tasks/eval/tasks_from_index_new
+  index_times_base: ${oc.env:TASK_DIR}/eval/index_times/${index_hash}
+  task_dir_base: ${oc.env:TASK_DIR}
+  out_root_dir: ${oc.env:TASK_DIR}/eval/tasks_from_index_new
 
 skip_existing: false
 

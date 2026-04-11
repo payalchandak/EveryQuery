@@ -27,12 +27,13 @@ export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
 mkdir -p logs
 echo "Sweep agent on $(hostname) at $(date)"
 
-cd ~/EveryQuery
-uv sync --locked
+cd "${SLURM_SUBMIT_DIR:-$PWD}"
 
 set -a
 . ./.env
 set +a
+
+uv sync --locked
 
 export HYDRA_FULL_ERROR=1
 

@@ -5,6 +5,10 @@ import logging
 import os
 from datetime import datetime
 
+from every_query._env import ensure_env
+
+ensure_env()
+
 NUM_CPUS = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
 FILES_AT_ONCE = 10
 THREADS_PER_FILE = max(1, NUM_CPUS // FILES_AT_ONCE)

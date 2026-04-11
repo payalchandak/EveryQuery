@@ -65,7 +65,7 @@ trainer:
     project: EveryQuery
     log_model: False # upload lightning ckpts
     prefix: "" # a string to put at the beginning of metric keys
-    entity: "gregkondas9-columbia-university"
+    entity: ${oc.env:WANDB_ENTITY}
     config:
       query_codes: ${train_codes.codes}
       num_query_codes: ${list_len:${train_codes.codes}}
