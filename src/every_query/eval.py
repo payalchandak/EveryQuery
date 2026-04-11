@@ -1,3 +1,4 @@
+
 import logging
 import time
 from datetime import UTC, datetime
@@ -68,6 +69,25 @@ def _model_name(model_run_dir: str) -> str:
     return Path(model_run_dir).name
 
 
+def _collect_codes(cfg: DictConfig) -> tuple[list[str], dict[str, str]]:
+    """Combine id/ood/manual codes into a flat list plus a code→bucket map."""
+    codes: list[str] = []
+    bucket: dict[str, str] = {}
+    for c in cfg.id_codes or []:
+        if c not in bucket:
+            codes.append(c)
+            bucket[c] = "id"
+    for c in cfg.ood_codes or []:
+        if c not in bucket:
+            codes.append(c)
+            bucket[c] = "ood"
+    for c in cfg.manual_codes or []:
+        if c not in bucket:
+            codes.append(c)
+            bucket[c] = "manual"
+    return codes, bucket
+
+
 def _run_test(
     cfg: DictConfig,
     train_cfg,
@@ -78,13 +98,7 @@ def _run_test(
     durations: list[int],
     ckpt_name: str | None = None,
 ) -> pl.DataFrame:
-    codes: list[str] = []
-    if cfg.id_codes is not None:
-        codes += cfg.id_codes
-    if cfg.ood_codes is not None:
-        codes += cfg.ood_codes
-    if cfg.manual_codes is not None:
-        codes += cfg.manual_codes
+    codes, bucket = _collect_codes(cfg)
 
     rows: list[dict[str, Any]] = []
 
@@ -118,7 +132,7 @@ def _run_test(
                     "duration_days": duration,
                     "code": code,
                     "code_slug": slug,
-                    "bucket": "ood" if cfg.ood_codes and code in cfg.ood_codes else "id",
+                    "bucket": bucket[code],
                     "occurs_auc": float(m.get(f"{metric_prefix}/occurs_auc"))
                     if m.get(f"{metric_prefix}/occurs_auc") is not None
                     else None,
@@ -138,9 +152,9 @@ def _run_test(
 def _run_predict(
     cfg: DictConfig, train_cfg, M, trainer, task_set_dir: Path, model_name: str, durations: list[int]
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    codes: list[str] = cfg.query_codes
+    codes, bucket = _collect_codes(cfg)
 
-    rows = []
+    pred_rows = []
     embed_rows = []
 
     for duration in durations:
@@ -171,7 +185,7 @@ def _run_predict(
             occurs_probs = torch.cat(o_probs).numpy()
             query_embeds = torch.cat(q_embeds).numpy()
 
-            rows.append(
+            pred_rows.append(
                 pl.DataFrame(
                     {
                         "subject_id": subject_id,
@@ -180,6 +194,7 @@ def _run_predict(
                     }
                 ).with_columns(
                     pl.lit(code).alias("code"),
+                    pl.lit(bucket[code]).alias("bucket"),
                     pl.lit(duration).alias("duration_days"),
                     pl.lit(model_name).alias("model"),
                 )
@@ -193,12 +208,13 @@ def _run_predict(
                     }
                 ).with_columns(
                     pl.Series("embedding", query_embeds),
+                    pl.lit(bucket[code]).alias("bucket"),
                     pl.lit(duration).alias("duration_days"),
                     pl.lit(model_name).alias("model"),
                 )
             )
 
-    pred_df = pl.concat(rows, how="vertical") if rows else pl.DataFrame()
+    pred_df = pl.concat(pred_rows, how="vertical") if pred_rows else pl.DataFrame()
     embed_df = pl.concat(embed_rows, how="vertical") if embed_rows else pl.DataFrame()
     return pred_df, embed_df
 

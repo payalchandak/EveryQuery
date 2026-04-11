@@ -323,9 +323,9 @@ class TestRunTestBucketLabeling:
         df = self._run(tmp_path, id_codes=["ICD//A01"], ood_codes=[])
         assert df["bucket"].to_list() == ["id"]
 
-    def test_manual_code_not_in_ood_labeled_id(self, tmp_path):
+    def test_manual_code_labeled_manual(self, tmp_path):
         df = self._run(tmp_path, manual_codes=["ICD//A01"], ood_codes=[])
-        assert df["bucket"].to_list() == ["id"]
+        assert df["bucket"].to_list() == ["manual"]
 
     def test_ood_codes_none_handled(self, tmp_path):
         """After bug fix, ood_codes=None should not crash; all codes get bucket='id'."""
@@ -407,23 +407,41 @@ def run_predict_deps(tmp_path):
     return task_set_dir, M, train_cfg
 
 
-def _make_predict_cfg(query_codes: list[str]) -> "DictConfig":  # noqa: F821
-    return OmegaConf.create({"query_codes": query_codes})
+def _make_predict_cfg(
+    id_codes: list[str] | None = None,
+    ood_codes: list[str] | None = None,
+    manual_codes: list[str] | None = None,
+) -> "DictConfig":  # noqa: F821
+    return OmegaConf.create(
+        {
+            "id_codes": id_codes,
+            "ood_codes": ood_codes,
+            "manual_codes": manual_codes,
+        }
+    )
 
 
 class TestRunPredictOutputSchema:
     def test_pred_df_columns(self, run_predict_deps):
         task_set_dir, M, train_cfg = run_predict_deps
-        cfg = _make_predict_cfg(CODES[:1])
+        cfg = _make_predict_cfg(id_codes=CODES[:1])
         trainer = MagicMock()
         trainer.predict.return_value = [_make_predict_batch(3)]
         with patch("every_query.eval.instantiate", return_value=MagicMock()):
             pred_df, _ = _run_predict(cfg, train_cfg, M, trainer, task_set_dir, "m", [30])
-        assert set(pred_df.columns) == {"subject_id", "prediction_time", "occurs_probs", "code", "duration_days", "model"}
+        assert set(pred_df.columns) == {
+            "subject_id",
+            "prediction_time",
+            "occurs_probs",
+            "code",
+            "bucket",
+            "duration_days",
+            "model",
+        }
 
     def test_embed_df_columns(self, run_predict_deps):
         task_set_dir, M, train_cfg = run_predict_deps
-        cfg = _make_predict_cfg(CODES[:1])
+        cfg = _make_predict_cfg(id_codes=CODES[:1])
         trainer = MagicMock()
         trainer.predict.return_value = [_make_predict_batch(3)]
         with patch("every_query.eval.instantiate", return_value=MagicMock()):
@@ -433,6 +451,7 @@ class TestRunPredictOutputSchema:
             "prediction_time",
             "code",
             "embedding",
+            "bucket",
             "duration_days",
             "model",
         }
@@ -445,7 +464,7 @@ class TestRunPredictRowGeneration:
         # Only create dir for first code, first duration
         (task_set_dir / "30" / code_slug(CODES[0])).mkdir(parents=True)
 
-        cfg = _make_predict_cfg(CODES[:2])
+        cfg = _make_predict_cfg(id_codes=CODES[:2])
         trainer = MagicMock()
         trainer.predict.return_value = [_make_predict_batch(5)]
         M = _make_mock_model()
@@ -459,7 +478,7 @@ class TestRunPredictRowGeneration:
     def test_all_missing_returns_empty(self, tmp_path):
         task_set_dir = tmp_path / "task_set"
         task_set_dir.mkdir()
-        cfg = _make_predict_cfg(CODES)
+        cfg = _make_predict_cfg(id_codes=CODES)
         trainer = MagicMock()
         M = _make_mock_model()
         train_cfg = _make_train_cfg()
@@ -470,7 +489,7 @@ class TestRunPredictRowGeneration:
 
     def test_batch_concatenation_count(self, run_predict_deps):
         task_set_dir, M, train_cfg = run_predict_deps
-        cfg = _make_predict_cfg(CODES[:1])
+        cfg = _make_predict_cfg(id_codes=CODES[:1])
         trainer = MagicMock()
         # 3 batches of 10 samples each
         trainer.predict.return_value = [_make_predict_batch(10, start_id=i * 10) for i in range(3)]
@@ -482,7 +501,7 @@ class TestRunPredictRowGeneration:
         task_set_dir, M, train_cfg = run_predict_deps
         codes = CODES[:2]
         durations = [30, 90]
-        cfg = _make_predict_cfg(codes)
+        cfg = _make_predict_cfg(id_codes=codes)
         trainer = MagicMock()
         trainer.predict.return_value = [_make_predict_batch(5)]
         with patch("every_query.eval.instantiate", return_value=MagicMock()):
@@ -496,7 +515,7 @@ class TestRunPredictRowGeneration:
 
     def test_subject_ids_preserved(self, run_predict_deps):
         task_set_dir, M, train_cfg = run_predict_deps
-        cfg = _make_predict_cfg(CODES[:1])
+        cfg = _make_predict_cfg(id_codes=CODES[:1])
         trainer = MagicMock()
         batch = _make_predict_batch(5, start_id=100)
         trainer.predict.return_value = [batch]
