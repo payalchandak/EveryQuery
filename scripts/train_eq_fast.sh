@@ -6,10 +6,10 @@
 
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:l40s:1
+#SBATCH --gres=gpu:1
 #SBATCH --partition=gpu
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=64G
+#SBATCH --mem=120G
 #SBATCH --time=00:15:00
 
 echo "Allocated GPUs:"

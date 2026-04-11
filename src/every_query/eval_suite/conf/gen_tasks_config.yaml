@@ -6,10 +6,10 @@ defaults:
 index_hash: 7573f855c4b050a9d79d57fefd8a139c
 
 # Durations (in days) to generate eval tasks for
-durations: [30, 60, 90, 180, 365, 731]
+durations: [60, 90, 365, 731]
 
 # Splits to generate tasks for
-splits: ["tuning"]
+splits: ["held_out"]
 
 paths:
   index_times_base: /users/gbk2114/eq_stuff/tasks/eval/index_times/${index_hash}
