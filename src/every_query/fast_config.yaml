@@ -1,0 +1,31 @@
+# @package _global_
+# Fast-iteration training config: ~5 min/run on one L40S for tokenization sweeps.
+# Inherits from config.yaml and overrides only the speed-critical knobs.
+defaults:
+  - config
+  - _self_
+
+datamodule:
+  config:
+    max_seq_len: 256
+  batch_size: 64
+  num_workers: 2
+
+lightning_module:
+  model:
+    precision: "bf16-mixed"
+    num_hidden_layers: 4
+  optimizer:
+    lr: 1.0e-4
+
+trainer:
+  max_steps: 400
+  accumulate_grad_batches: 1
+  val_check_interval: 100
+  check_val_every_n_epoch: null
+  limit_val_batches: 20
+  callbacks:
+    early_stopping:
+      patience: 5
+    model_checkpoint:
+      save_top_k: 1
