@@ -93,6 +93,10 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+notebooks/
+
+#Wandb
+wandb/
 
 # IPython
 profile_default/
