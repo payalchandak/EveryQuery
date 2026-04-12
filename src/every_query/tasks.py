@@ -1,5 +1,6 @@
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import hydra
 import numpy as np
@@ -9,8 +10,6 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 
 from every_query._env import ensure_env
-
-ensure_env()
 
 
 def read_event_shard(file_path: str) -> pl.DataFrame:
@@ -169,8 +168,7 @@ def precompute_min_deltas_wide(
         "prediction_time",
     )
 
-    code_cols: list[pl.DataFrame] = []
-    for code in query_codes:
+    def _compute_code_delta(code: str) -> pl.DataFrame:
         code_events = (
             events_df.filter(pl.col("code") == code)
             .select(["subject_id", "time"])
@@ -183,14 +181,17 @@ def precompute_min_deltas_wide(
             right_on="time",
             strategy="forward",
         )
-        # time is the first code event strictly after prediction_time (or null if none)
         delta_col = (
             pl.when(pl.col("time").is_not_null())
             .then(pl.col("time") - pl.col("prediction_time"))
             .otherwise(pl.lit(None).cast(pl.Duration("us")))
             .alias(code)
         )
-        code_cols.append(asof.select(delta_col))
+        return asof.select(delta_col)
+
+    max_workers = min(len(query_codes), int(os.environ.get("OMP_NUM_THREADS", os.cpu_count() or 4)))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        code_cols = list(pool.map(_compute_code_delta, query_codes))
 
     return pl.concat([pred_sorted, *code_cols], how="horizontal")
 
@@ -240,6 +241,7 @@ def sample_durations(n: int, low: int, high: int, seed: int) -> list[int]:
 
 @hydra.main(version_base=None, config_path=".", config_name="tasks_config")
 def main(cfg: DictConfig) -> None:
+    ensure_env()
     shard_index = int(cfg.shard_index) if cfg.shard_index is not None else None
 
     read_codes_dir = os.environ["PROCESSED"]
