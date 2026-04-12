@@ -1,3 +1,4 @@
+import gc
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -190,10 +191,16 @@ def precompute_min_deltas_wide(
         return asof.select(delta_col)
 
     max_workers = min(len(query_codes), int(os.environ.get("OMP_NUM_THREADS", os.cpu_count() or 4)))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        code_cols = list(pool.map(_compute_code_delta, query_codes))
+    batch_size = max_workers * 4
+    result = pred_sorted
+    for i in range(0, len(query_codes), batch_size):
+        batch = query_codes[i : i + batch_size]
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            code_cols = list(pool.map(_compute_code_delta, batch))
+        result = pl.concat([result, *code_cols], how="horizontal")
+        del code_cols
 
-    return pl.concat([pred_sorted, *code_cols], how="horizontal")
+    return result
 
 
 def build_task_for_duration(
@@ -269,18 +276,23 @@ def main(cfg: DictConfig) -> None:
 
     shards_to_process = [all_shards[shard_index]] if shard_index is not None else all_shards
 
+    query_codes = read_query_codes(read_codes_dir)
+    print("Completed read_query_codes")
+
     for split, file_name in shards_to_process:
         shard_directory = f"{read_dir}/data/{split}"
         events_df = read_event_shard(f"{shard_directory}/{file_name}")
         print(f"Completed read_event_shard for {split}/{file_name}")
-        query_codes = read_query_codes(read_codes_dir)
-        print("Completed read_query_codes")
 
         # One-time precomputation per shard
         base_df = compute_base_prediction_times(events_df, cfg.min_context)
         print("Completed compute_base_prediction_times")
         min_deltas = precompute_min_deltas_wide(events_df, base_df, query_codes)
         print("Completed precompute_min_deltas_wide")
+
+        # events_df and base_df are no longer needed — free before the duration loop
+        del events_df, base_df
+        gc.collect()
 
         # Fast per-duration loop
         for days in tqdm(durations, desc=f"{split}/{file_name}"):
@@ -291,6 +303,10 @@ def main(cfg: DictConfig) -> None:
             os.makedirs(write_directory, exist_ok=True)
             task_df = build_task_for_duration(min_deltas, query_codes, {"days": days})
             task_df.write_parquet(out_path)
+
+        # Free the wide min_deltas before loading the next shard
+        del min_deltas
+        gc.collect()
 
 
 if __name__ == "__main__":
