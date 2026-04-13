@@ -245,6 +245,7 @@ def main(cfg: DictConfig) -> None:
             train_cfg, M, trainer = _setup_model(model_run_dir, ckpt_name=ckpt_name)
 
             if cfg.mode == "predict":
+                train_cfg.datamodule._target_ = "every_query.lit_datamodule.Datamodule"
                 pred_df, embed_df = _run_predict(
                     cfg, train_cfg, M, trainer, task_set_dir, model_name, durations
                 )
