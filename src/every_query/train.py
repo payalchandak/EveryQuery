@@ -1,13 +1,27 @@
 import builtins
 import hashlib
+import json
 import logging
 import os
+from datetime import datetime
+
+from every_query._env import ensure_env
+
+ensure_env()
+
+NUM_CPUS = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+FILES_AT_ONCE = 10
+THREADS_PER_FILE = max(1, NUM_CPUS // FILES_AT_ONCE)
+os.environ["POLARS_MAX_THREADS"] = str(THREADS_PER_FILE)
+os.environ["OMP_NUM_THREADS"] = str(THREADS_PER_FILE)
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import hydra
+import numpy as np
 import polars as pl
 import torch
 from hydra.utils import instantiate
@@ -19,12 +33,23 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 logger = logging.getLogger(__name__)
 
 
-@OmegaConfResolver(replace=True)
+_RUN_ID = None
+
+
+@OmegaConfResolver
+def run_id():
+    global _RUN_ID
+    if _RUN_ID is None:
+        _RUN_ID = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
+    return _RUN_ID
+
+
+@OmegaConfResolver
 def list_len(x):
     return builtins.len(x)
 
 
-@OmegaConfResolver(replace=True)
+@OmegaConfResolver
 def int_prod(x: int, y: int) -> int:
     """Returns the closest integer to the product of x and y (available as an OmegaConf resolver).
 
@@ -44,32 +69,6 @@ def values_as_list(**kwargs) -> list[Any]:
 
 
 def save_resolved_config(cfg: DictConfig, fp: Path) -> bool:
-    """Resolve all interpolations in *cfg* and write the result to *fp*.
-
-    Returns ``True`` on success, ``False`` (with a warning) on failure.
-
-    Examples:
-        >>> with tempfile.TemporaryDirectory() as d:
-        ...     cfg = OmegaConf.create({"a": 1, "b": "${a}"})
-        ...     save_resolved_config(cfg, Path(d) / "out.yaml")
-        True
-
-        Interpolations are fully expanded in the saved file:
-
-        >>> with tempfile.TemporaryDirectory() as d:
-        ...     cfg = OmegaConf.create({"a": 1, "b": "${a}"})
-        ...     fp = Path(d) / "out.yaml"
-        ...     _ = save_resolved_config(cfg, fp)
-        ...     OmegaConf.load(fp).b
-        1
-
-        Unresolvable interpolation returns ``False``:
-
-        >>> with tempfile.TemporaryDirectory() as d:
-        ...     cfg = OmegaConf.create({"a": "${missing}"})
-        ...     save_resolved_config(cfg, Path(d) / "out.yaml")
-        False
-    """
     try:
         # Create a copy and resolve all interpolations
         resolved_cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
@@ -81,72 +80,6 @@ def save_resolved_config(cfg: DictConfig, fp: Path) -> bool:
 
 
 def find_checkpoint_path(output_dir: Path) -> Path | None:
-    """Return the latest checkpoint under ``output_dir/checkpoints``, or ``None``.
-
-    Prefers ``last.ckpt``; otherwise picks the file with the highest
-    ``(epoch, step)`` pair.
-
-    Raises:
-        NotADirectoryError: If the checkpoints path is a regular file.
-
-    Examples:
-        No checkpoints directory:
-
-        >>> with tempfile.TemporaryDirectory() as d:
-        ...     find_checkpoint_path(Path(d)) is None
-        True
-
-        Empty checkpoints directory:
-
-        >>> with tempfile.TemporaryDirectory() as d:
-        ...     (Path(d) / "checkpoints").mkdir()
-        ...     find_checkpoint_path(Path(d)) is None
-        True
-
-        ``last.ckpt`` is preferred when present:
-
-        >>> with tempfile.TemporaryDirectory() as d:
-        ...     ckpt = Path(d) / "checkpoints"; ckpt.mkdir()
-        ...     (ckpt / "last.ckpt").touch()
-        ...     find_checkpoint_path(Path(d)) == ckpt / "last.ckpt"
-        True
-
-        ``last.ckpt`` takes priority even when epoch checkpoints exist:
-
-        >>> with tempfile.TemporaryDirectory() as d:
-        ...     ckpt = Path(d) / "checkpoints"; ckpt.mkdir()
-        ...     (ckpt / "last.ckpt").touch()
-        ...     (ckpt / "epoch=5-step=999.ckpt").touch()
-        ...     find_checkpoint_path(Path(d)) == ckpt / "last.ckpt"
-        True
-
-        Falls back to the latest ``epoch=*-step=*.ckpt``:
-
-        >>> with tempfile.TemporaryDirectory() as d:
-        ...     ckpt = Path(d) / "checkpoints"; ckpt.mkdir()
-        ...     (ckpt / "epoch=0-step=100.ckpt").touch()
-        ...     (ckpt / "epoch=1-step=50.ckpt").touch()
-        ...     (ckpt / "epoch=1-step=200.ckpt").touch()
-        ...     find_checkpoint_path(Path(d)) == ckpt / "epoch=1-step=200.ckpt"
-        True
-
-        Non-matching files in the directory are ignored:
-
-        >>> with tempfile.TemporaryDirectory() as d:
-        ...     ckpt = Path(d) / "checkpoints"; ckpt.mkdir()
-        ...     (ckpt / "some_other_file.txt").touch()
-        ...     find_checkpoint_path(Path(d)) is None
-        True
-
-        Raises when the checkpoints path is a file:
-
-        >>> with tempfile.TemporaryDirectory() as d:
-        ...     (Path(d) / "checkpoints").touch()
-        ...     find_checkpoint_path(Path(d))
-        Traceback (most recent call last):
-            ...
-        NotADirectoryError: ...
-    """
     checkpoints_dir = output_dir / "checkpoints"
 
     if checkpoints_dir.is_file():
@@ -173,52 +106,140 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
     return sorted_checkpoints[-1] if sorted_checkpoints else None
 
 
+def _collate_shard(
+    file_name: str,
+    split: str,
+    write_dir: str,
+    task_dir: str,
+    durations: list,
+    codes: list,
+    sample_times_per_subject: int,
+    seed: int,
+) -> None:
+    out_path = f"{write_dir}/{split}/{file_name}"
+    if os.path.exists(out_path):
+        logger.info(f"Skipping shard. Already collated at {out_path}.")
+        return
+
+    logger.info(f"Collating {out_path}")
+    n_codes = len(codes)
+    rng = np.random.default_rng(seed)
+
+    # --- PASS 1: Sample prediction times per subject ---
+    # Prediction times are identical across durations, so read only the first.
+    d0 = durations[0]
+    base_idx = (
+        pl.scan_parquet(f"{task_dir}/{d0}/{split}/{file_name}")
+        .select("subject_id", "prediction_time")
+        .collect()
+    )
+
+    if base_idx.is_empty():
+        return
+
+    # Sample up to sample_times_per_subject rows per subject.
+    # Sort after group_by to ensure deterministic row order for reproducible RNG assignment.
+    sampled = (
+        base_idx.sample(fraction=1, shuffle=True, seed=seed)
+        .group_by("subject_id")
+        .head(sample_times_per_subject)
+        .sort("subject_id", "prediction_time")
+    )
+
+    n_sampled = len(sampled)
+
+    # --- PASS 2: Assign random duration and code to each sampled row ---
+    sampled_labels = sampled.with_columns(
+        pl.Series("duration_days", rng.choice(durations, size=n_sampled)),
+        pl.Series("query", [codes[i] for i in rng.integers(0, n_codes, size=n_sampled)]),
+    )
+    del base_idx, sampled
+
+    # --- PASS 3: Selective Extraction ---
+    # We only load the columns and rows we actually selected in Pass 2.
+    batch_results = []
+    for d in durations:
+        kept_for_duration = sampled_labels.filter(pl.col("duration_days") == d)
+        if kept_for_duration.is_empty():
+            continue
+
+        unique_times = kept_for_duration.select("subject_id", "prediction_time").unique()
+        needed_codes = kept_for_duration.get_column("query").unique().to_list()
+
+        # Only read the subset of 10k columns that were actually sampled
+        load_cols = ["subject_id", "prediction_time", "censored", *needed_codes]
+
+        wide_df = (
+            pl.scan_parquet(f"{task_dir}/{d}/{split}/{file_name}")
+            .select(load_cols)
+            .join(unique_times.lazy(), on=["subject_id", "prediction_time"], how="inner")
+            .collect()
+        )
+
+        narrow_df = (
+            wide_df.with_columns(pl.lit(d).alias("duration_days"))
+            .unpivot(
+                index=["subject_id", "prediction_time", "censored", "duration_days"],
+                variable_name="query",
+                value_name="occurs",
+            )
+            # Inner join ensures we only keep the specific (Time, Code) pairs from Pass 2
+            .join(
+                kept_for_duration, on=["subject_id", "prediction_time", "duration_days", "query"], how="inner"
+            )
+            .rename({"censored": "boolean_value"})
+            .with_columns(pl.col("occurs").fill_null(False))
+        )
+        batch_results.append(narrow_df)
+
+    # --- PASS 4: Final Write ---
+    if batch_results:
+        shard = pl.concat(batch_results)
+        # Sort before shuffle for reproducibility (joins/unpivot don't guarantee order)
+        shard = shard.sort("subject_id", "prediction_time", "duration_days", "query")
+        # Final shuffle so the file isn't ordered by duration
+        shard = shard.sample(fraction=1, shuffle=True, seed=seed)
+        shard.write_parquet(out_path)
+
+
 def collate_tasks(cfg: DictConfig) -> str:
     task_dir = cfg.query.task_dir
-    durations = list(range(cfg.query.duration_min, cfg.query.duration_max))
+    durations_path = f"{task_dir}/sampled_durations.json"
+    with open(durations_path) as f:
+        durations = json.load(f)
 
     task_str = f"{'|'.join(sorted(cfg.query.codes))}_{'|'.join(str(d) for d in sorted(durations))}"
     hash_hex = hashlib.md5(task_str.encode()).hexdigest()
     write_dir = f"{task_dir}/collated/{hash_hex}"
 
     first_duration = durations[0]
+    codes = list(cfg.query.codes)
+    seed = cfg.get("seed", 1)
+    sample_times_per_subject = cfg.query.sample_times_per_subject
 
     # Eval tasks generated in separate file
     for split in [train_split, tuning_split]:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)
+        file_names = os.listdir(f"{task_dir}/{first_duration}/{split}")
 
-        for file_name in os.listdir(f"{task_dir}/{first_duration}/{split}"):
-            f = f"{write_dir}/{split}/{file_name}"
-            logger.info(f"Collating {f}")
-
-            if os.path.exists(f):
-                logger.info(f"Skipping shard. Already collated at {f}.")
-                continue
-
-            duration_shards = []
-            for duration in durations:
-                duration_shards.append(
-                    pl.read_parquet(
-                        source=f"{task_dir}/{duration}/{split}/{file_name}",
-                        columns=["subject_id", "prediction_time", "censored", *cfg.query.codes],
-                    )
-                    .with_columns(pl.lit(duration).alias("duration_days"))
-                    .unpivot(
-                        index=["subject_id", "prediction_time", "censored", "duration_days"],
-                        variable_name="query",
-                        value_name="occurs",
-                    )
+        with ThreadPoolExecutor(max_workers=FILES_AT_ONCE) as executor:
+            futures = [
+                executor.submit(
+                    _collate_shard,
+                    file_name,
+                    split,
+                    write_dir,
+                    task_dir,
+                    durations,
+                    codes,
+                    sample_times_per_subject,
+                    seed,
                 )
+                for file_name in file_names
+            ]
+            for future in as_completed(futures):
+                future.result()
 
-            shard = (
-                pl.concat(duration_shards)
-                .rename({"censored": "boolean_value"})
-                .with_columns(pl.col("occurs").fill_null(False))
-                .sample(fraction=1, shuffle=True, seed=cfg.get("seed", 1))
-                .group_by(["subject_id"])
-                .head(cfg.query.sample_times_per_subject)
-            )
-            shard.write_parquet(f)
         logger.info(f"Tasks collated for {split} and written to {hash_hex}.")
 
     return write_dir

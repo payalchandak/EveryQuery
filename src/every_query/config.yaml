@@ -1,8 +1,8 @@
 defaults:
   - _self_
-  - train_codes: "10000_ID__8db2be6fadf8"
+  - train_codes: 10000_ID__8db2be6fadf8
 
-output_dir: ${oc.env:OUTPUT_DIR}/${hydra:run.dir}/
+output_dir: ${oc.env:OUTPUT_DIR}/${run_id:}/
 do_overwrite: true
 do_resume: false
 seed: 140799
@@ -13,8 +13,6 @@ query:
   task_dir: ${oc.env:TASK_DIR}
   sample_times_per_subject: 20
   codes: ${train_codes.codes}
-  duration_min: 30
-  duration_max: 366
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
@@ -25,8 +23,8 @@ datamodule:
     task_labels_dir: ???
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
-    max_seq_len: 256
-  batch_size: 128
+    max_seq_len: 1028
+  batch_size: 32
   num_workers: 1
   pin_memory: True
 
@@ -38,6 +36,7 @@ lightning_module:
     do_demo: false
     do_grad_ckpt: false
     mlp_dropout: 0.1
+    num_hidden_layers: 12
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true
@@ -58,7 +57,7 @@ trainer:
   _target_: lightning.pytorch.trainer.Trainer
   logger:
     _target_: pytorch_lightning.loggers.wandb.WandbLogger
-    name: "queries=${list_len:${query.codes}}_${now:%Y%m%d_%H%M%S}"
+    name: "queries=${list_len:${query.codes}}_${run_id:}"
     save_dir: "${trainer.default_root_dir}/loggers"
     offline: False
     id: null # pass correct id to resume experiment!
@@ -66,7 +65,7 @@ trainer:
     project: EveryQuery
     log_model: False # upload lightning ckpts
     prefix: "" # a string to put at the beginning of metric keys
-    entity: "gregkondas9-columbia-university"
+    entity: ${oc.env:WANDB_ENTITY}
     config:
       query_codes: ${train_codes.codes}
       num_query_codes: ${list_len:${train_codes.codes}}
@@ -80,7 +79,7 @@ trainer:
       monitor: "tuning/loss"
       verbose: False
       save_last: True # additionally always save an exact copy of the last checkpoint to a file last.ckpt
-      save_top_k: 2 # save k best models (determined by above metric)
+      save_top_k: -1 # save k best models (determined by above metric)
       mode: "min"
       save_weights_only: False
       every_n_train_steps: null
@@ -101,8 +100,9 @@ trainer:
   max_epochs: null # We don't control the max epochs, we control the max steps.
   max_steps: 40000
   accelerator: "auto"
-  devices: "auto"
-  accumulate_grad_batches: 1 # set to 1 for no gradient accumulation, >1 for gradient accumulation
+  devices: 1
+  strategy: "auto"
+  accumulate_grad_batches: 4  # set to 1 for no gradient accumulation, >1 for gradient accumulation
   log_every_n_steps: 50
   # perform a validation loop every N training epochs
   check_val_every_n_epoch: 1
