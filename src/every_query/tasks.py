@@ -29,89 +29,10 @@ def read_event_shard(file_path: str) -> pl.DataFrame:
     )
 
 
-def compute_censor_dataframe(
-    events_df: pl.DataFrame,
-    min_context_per_subject: int,
-    duration: dict[str, int],
-) -> pl.DataFrame:
-    """Compute per-subject prediction times and whether they are censored.
-
-    Censoring is defined as having less than <duration> of future data after prediction_time. Retain at least
-    min_context_per_subject context tokens (not times) before the first prediction_time.
-    """
-    return (
-        events_df.with_columns(pl.col("time").cum_count().over("subject_id").alias("context_cumsum"))
-        .filter(pl.col("context_cumsum") >= min_context_per_subject)
-        .select(["subject_id", "time"])  # candidate prediction times
-        .unique()
-        .rename({"time": "prediction_time"})
-        .join(
-            events_df.group_by(["subject_id"]).agg(pl.col("time").last().alias("record_end_time")),
-            on="subject_id",
-            how="left",
-        )
-        .with_columns((pl.col("record_end_time") - pl.col("prediction_time")).alias("future_duration"))
-        .with_columns((pl.col("future_duration") < pl.duration(**duration)).alias("censored"))
-        .select(["subject_id", "prediction_time", "censored"])
-    )
-
-
 def read_query_codes(read_dir: str) -> list[str]:
     """Read the universe of possible query codes from metadata/codes.parquet."""
     codes_df = pl.read_parquet(f"{read_dir}/metadata/codes.parquet")
     return codes_df.select("code").unique().to_series().to_list()
-
-
-def build_task_label_matrix(
-    events_df: pl.DataFrame,
-    censor_df: pl.DataFrame,
-    query_codes: list[str],
-    duration: dict[str, int],
-) -> pl.DataFrame:
-    """Create a wide task label matrix.
-
-    - For censored rows: label columns for each query are null (Boolean).
-    - For uncensored rows: label is True if the query event occurs within
-      (prediction_time, prediction_time + duration), else False.
-    """
-    censor_true = censor_df.filter(pl.col("censored"))
-    censor_true_wide = censor_true.with_columns(
-        [pl.lit(None).alias(query).cast(pl.Boolean) for query in query_codes]
-    )
-
-    censor_false = censor_df.filter(pl.col("censored").not_())
-    censor_false_time = censor_false.drop("censored").with_row_index()
-    censor_false_index = censor_false_time.select("index")
-
-    pieces: list[pl.DataFrame] = [censor_false]
-    for query in tqdm(query_codes):
-        pieces.append(
-            censor_false_time.join(
-                events_df.filter(pl.col("code") == query).drop("code").rename({"time": f"{query}_time"}),
-                on="subject_id",
-                how="left",
-            )
-            .filter(
-                (pl.col(f"{query}_time") > pl.col("prediction_time"))
-                & (pl.col(f"{query}_time") < (pl.col("prediction_time") + pl.duration(**duration)))
-            )
-            .select(["index"])
-            .unique()
-            .with_columns(pl.lit(True).alias(query))
-            .join(censor_false_index, on="index", how="right")
-            .with_columns(pl.col(query).fill_null(False))
-            .select([query])
-        )
-
-    censor_false_wide = pl.concat(pieces, how="horizontal")
-    assert sum(censor_false_wide.null_count()).item() == 0  # Ensure no label nulls remain on uncensored rows
-
-    return pl.concat([censor_true_wide, censor_false_wide], how="vertical")
-
-
-# ---------------------------------------------------------------------------
-# Optimized functions
-# ---------------------------------------------------------------------------
 
 
 def compute_base_prediction_times(
@@ -239,7 +160,7 @@ def build_task_for_duration(
 ) -> pl.DataFrame:
     """Build the task label matrix for a specific duration from precomputed min deltas.
 
-    Pure column arithmetic — no joins. Returns the same schema as build_task_label_matrix.
+    Pure column arithmetic — no joins. Returns the same schema as tasks_reference.build_task_label_matrix.
     """
     dur = pl.duration(**duration)
 
@@ -266,13 +187,22 @@ def build_task_for_duration(
 def sample_durations(n: int, low: int, high: int, seed: int) -> list[int]:
     """Sample n durations from a Log-Uniform distribution over [low, high].
 
-    Returns a sorted list of unique integer durations.
+    Returns a sorted list of exactly ``n`` unique integer durations.  Uses an
+    oversampling/retry loop so that deduplication after rounding never yields
+    fewer than ``n`` values.  If fewer than ``n`` distinct integers exist in
+    [low, high], returns all of them.
     """
+    max_possible = high - low + 1
+    n = min(n, max_possible)
     rng = np.random.default_rng(seed)
     log_low, log_high = np.log(low), np.log(high)
-    raw = np.exp(rng.uniform(log_low, log_high, size=n))
-    durations = sorted({round(x) for x in raw})
-    return durations
+    unique: set[int] = set()
+    batch_size = n
+    while len(unique) < n:
+        raw = np.exp(rng.uniform(log_low, log_high, size=batch_size))
+        unique.update(round(x) for x in raw)
+        batch_size = max(n - len(unique), 1) * 2
+    return sorted(unique)[:n]
 
 
 @hydra.main(version_base=None, config_path=".", config_name="tasks_config")

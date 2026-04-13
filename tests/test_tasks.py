@@ -109,24 +109,6 @@ class TestTaskLabelRegression:
             ref_sorted, new_sorted = _align_columns(ref_sorted, new_sorted)
             assert ref_sorted.equals(new_sorted), f"Task label mismatch at duration={days}"
 
-    def test_old_pipeline_matches_reference(self, sample_events_df, query_codes, min_context, test_durations):
-        """Verify the kept old functions in tasks.py still match reference."""
-        for days in test_durations:
-            duration = {"days": days}
-
-            ref_censor = tasks_reference.compute_censor_dataframe(sample_events_df, min_context, duration)
-            ref_labels = tasks_reference.build_task_label_matrix(
-                sample_events_df, ref_censor, query_codes, duration
-            )
-
-            old_censor = tasks.compute_censor_dataframe(sample_events_df, min_context, duration)
-            old_labels = tasks.build_task_label_matrix(sample_events_df, old_censor, query_codes, duration)
-
-            ref_sorted = _sort_df(ref_labels)
-            old_sorted = _sort_df(old_labels)
-            ref_sorted, old_sorted = _align_columns(ref_sorted, old_sorted)
-            assert ref_sorted.equals(old_sorted), f"Old pipeline mismatch at duration={days}"
-
 
 # ---------------------------------------------------------------------------
 # Unit tests for new functions
