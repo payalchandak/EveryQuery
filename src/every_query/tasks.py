@@ -50,7 +50,7 @@ def compute_base_prediction_times(
         .unique()
         .rename({"time": "prediction_time"})
         .join(
-            events_df.group_by(["subject_id"]).agg(pl.col("time").last().alias("record_end_time")),
+            events_df.group_by(["subject_id"]).agg(pl.col("time").max().alias("record_end_time")),
             on="subject_id",
             how="left",
         )
@@ -192,6 +192,8 @@ def sample_durations(n: int, low: int, high: int, seed: int) -> list[int]:
     fewer than ``n`` values.  If fewer than ``n`` distinct integers exist in
     [low, high], returns all of them.
     """
+    if low < 1:
+        raise ValueError(f"low must be >= 1 (got {low}); log-uniform requires positive bounds")
     max_possible = high - low + 1
     n = min(n, max_possible)
     rng = np.random.default_rng(seed)
