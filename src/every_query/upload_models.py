@@ -44,8 +44,8 @@ def resolve_destination_names(run_dirs: list[Path]) -> dict[Path, str]:
     return dest_names
 
 
-def gcloud_cp(src: Path, dst: str, *, dry_run: bool) -> bool:
-    cmd = ["gcloud", "storage", "cp", str(src), dst]
+def gsutil_cp(src: Path, dst: str, *, dry_run: bool) -> bool:
+    cmd = ["gsutil", "-m", "cp", str(src), dst]
     if dry_run:
         print("DRY-RUN:", " ".join(cmd))
         return True
@@ -53,10 +53,10 @@ def gcloud_cp(src: Path, dst: str, *, dry_run: bool) -> bool:
     try:
         subprocess.run(cmd, check=True)
     except FileNotFoundError:
-        logger.error("`gcloud` not found on PATH. Install the Google Cloud SDK first.")
+        logger.error("`gsutil` not found on PATH. Install the Google Cloud SDK (gsutil) first.")
         raise
     except subprocess.CalledProcessError as e:
-        logger.error("gcloud storage cp failed (exit %s) for %s", e.returncode, src)
+        logger.error("gsutil cp failed (exit %s) for %s", e.returncode, src)
         return False
     return True
 
@@ -78,7 +78,7 @@ def upload_run(run_dir: Path, dest_name: str, bucket: str, *, dry_run: bool) -> 
 
     all_ok = True
     for filename in REQUIRED_FILES:
-        ok = gcloud_cp(run_dir / filename, f"{dest_prefix}/{filename}", dry_run=dry_run)
+        ok = gsutil_cp(run_dir / filename, f"{dest_prefix}/{filename}", dry_run=dry_run)
         all_ok = all_ok and ok
 
     for filename in OPTIONAL_FILES:
@@ -86,7 +86,7 @@ def upload_run(run_dir: Path, dest_name: str, bucket: str, *, dry_run: bool) -> 
         if not src.is_file():
             logger.warning("Optional file missing, skipping: %s", src)
             continue
-        ok = gcloud_cp(src, f"{dest_prefix}/{filename}", dry_run=dry_run)
+        ok = gsutil_cp(src, f"{dest_prefix}/{filename}", dry_run=dry_run)
         all_ok = all_ok and ok
 
     return "uploaded" if all_ok else "failed"
@@ -108,7 +108,7 @@ def main() -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print the gcloud commands that would run without executing them.",
+        help="Print the gsutil commands that would run without executing them.",
     )
     args = parser.parse_args()
 
