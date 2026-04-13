@@ -23,6 +23,6 @@ echo "Using python: $(uv run which python)"
 
 export HYDRA_FULL_ERROR=1
 
-uv run numactl --cpunodebind=0 --membind=0 python src/every_query/tasks.py "$@"
+uv run taskset -c 0-55 python src/every_query/tasks.py "$@"
 
 echo "Finished at $(date)"

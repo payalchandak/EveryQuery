@@ -191,8 +191,8 @@ def precompute_min_deltas_wide(
         return asof.select(delta_col)
 
     #max_workers = min(len(query_codes), int(os.environ.get("OMP_NUM_THREADS", os.cpu_count() or 4)))
-    max_workers = 4
-    batch_size = max_workers * 4
+    max_workers = 2
+    batch_size = 8 * max_workers
     result = pred_sorted
     for i in range(0, len(query_codes), batch_size):
         batch = query_codes[i : i + batch_size]
