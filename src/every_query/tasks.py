@@ -151,12 +151,9 @@ def derive_censor_for_duration(
 def precompute_min_deltas_wide(
     events_df: pl.DataFrame,
     base_df: pl.DataFrame,
-    present_codes: list[str],
+    query_codes: list[str],
 ) -> pl.DataFrame:
-    """Precompute the minimum positive time delta to each *present* query code for every prediction time.
-
-    Only codes in ``present_codes`` (i.e. codes that actually appear in ``events_df``) get a column —
-    missing codes are handled downstream in ``build_task_for_duration`` without any join.
+    """Precompute the minimum positive time delta to each query code for every prediction time.
 
     Returns a wide DataFrame with columns:
         subject_id, prediction_time, future_duration, <code_1>, <code_2>, ...
@@ -165,11 +162,11 @@ def precompute_min_deltas_wide(
 
     Uses join_asof(strategy="forward") per code to avoid the O(n_pred * n_events) cross-join
     that caused OOM on large shards. The asof work is chunked in groups of 500 codes with a
-    bounded thread pool so the horizontal concat intermediate never fragments into a 12k-column
-    frame.
+    bounded thread pool so the horizontal concat intermediate never fragments into a wide,
+    memory-thrashing frame.
     """
     pred_sorted = base_df.sort(["subject_id", "prediction_time"])
-    if not present_codes:
+    if not query_codes:
         return pred_sorted
 
     # Shift by 1µs so join_asof(strategy="forward") gives time >= prediction_time+1µs,
@@ -205,8 +202,8 @@ def precompute_min_deltas_wide(
     max_workers = min(4, int(os.environ.get("POLARS_MAX_THREADS", "4")))
     chunk_size = 500
     result = pred_sorted
-    for i in range(0, len(present_codes), chunk_size):
-        chunk = present_codes[i : i + chunk_size]
+    for i in range(0, len(query_codes), chunk_size):
+        chunk = query_codes[i : i + chunk_size]
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             chunk_cols = list(pool.map(_compute_code_delta, chunk))
         result = pl.concat([result, *chunk_cols], how="horizontal")
@@ -220,48 +217,24 @@ def build_task_for_duration(
     min_deltas_wide: pl.DataFrame,
     query_codes: list[str],
     duration: dict[str, int],
-    present_codes: list[str] | None = None,
-    missing_codes: list[str] | None = None,
 ) -> pl.DataFrame:
     """Build the task label matrix for a specific duration from precomputed min deltas.
 
-    Pure column arithmetic — no joins. ``present_codes`` use the precomputed delta columns in
-    ``min_deltas_wide``; ``missing_codes`` (not in the shard) are filled with literal False
-    (or null on censored rows) to skip join work entirely. Output column order follows
-    ``query_codes`` so downstream positional reads stay valid.
-
-    If ``present_codes`` / ``missing_codes`` are not provided, they are derived from the
-    columns actually present in ``min_deltas_wide`` — this preserves the legacy call signature
-    (``min_deltas_wide, query_codes, duration``) when every code has a precomputed delta column.
+    Pure column arithmetic — no joins. Returns the same schema as build_task_label_matrix.
     """
     dur = pl.duration(**duration)
 
     censored_col = (pl.col("future_duration") < dur).alias("censored")
 
-    if present_codes is None or missing_codes is None:
-        wide_cols = set(min_deltas_wide.columns)
-        present_set = {c for c in query_codes if c in wide_cols}
-        missing_set = {c for c in query_codes if c not in wide_cols}
-    else:
-        present_set = set(present_codes)
-        missing_set = set(missing_codes)
-
-    code_cols = []
-    for code in query_codes:
-        if code in present_set:
-            code_cols.append(
-                pl.when(pl.col("future_duration") < dur)
-                .then(pl.lit(None).cast(pl.Boolean))
-                .otherwise((pl.col(code) < dur).fill_null(False))
-                .alias(code)
-            )
-        elif code in missing_set:
-            code_cols.append(
-                pl.when(pl.col("future_duration") < dur)
-                .then(pl.lit(None, dtype=pl.Boolean))
-                .otherwise(pl.lit(False))
-                .alias(code)
-            )
+    # For uncensored rows: code occurred if min_delta < duration; null delta -> False
+    # For censored rows: all code columns are null
+    code_cols = [
+        pl.when(pl.col("future_duration") < dur)
+        .then(pl.lit(None).cast(pl.Boolean))
+        .otherwise((pl.col(code) < dur).fill_null(False))
+        .alias(code)
+        for code in query_codes
+    ]
 
     return min_deltas_wide.select(
         "subject_id",
@@ -323,19 +296,10 @@ def main(cfg: DictConfig) -> None:
             events_df = read_event_shard(f"{shard_directory}/{file_name}")
             print(f"Completed read_event_shard for {split}/{file_name}")
 
-            # Dynamic code filtering: only codes present in this shard need join_asof work.
-            active_codes_in_shard = set(events_df.get_column("code").unique().cast(pl.Utf8).to_list())
-            present_codes = [c for c in query_codes if c in active_codes_in_shard]
-            missing_codes = [c for c in query_codes if c not in active_codes_in_shard]
-            print(
-                f"Shard has {len(present_codes)} present / {len(missing_codes)} missing "
-                f"of {len(query_codes)} query codes"
-            )
-
             # One-time precomputation per shard
             base_df = compute_base_prediction_times(events_df, cfg.min_context)
             print("Completed compute_base_prediction_times")
-            min_deltas = precompute_min_deltas_wide(events_df, base_df, present_codes)
+            min_deltas = precompute_min_deltas_wide(events_df, base_df, query_codes)
             print("Completed precompute_min_deltas_wide")
 
             # events_df and base_df are no longer needed — free before the duration loop
@@ -349,13 +313,7 @@ def main(cfg: DictConfig) -> None:
                 if os.path.exists(out_path):
                     continue
                 os.makedirs(write_directory, exist_ok=True)
-                task_df = build_task_for_duration(
-                    min_deltas,
-                    query_codes,
-                    {"days": days},
-                    present_codes=present_codes,
-                    missing_codes=missing_codes,
-                )
+                task_df = build_task_for_duration(min_deltas, query_codes, {"days": days})
                 task_df.write_parquet(out_path)
 
             # Free the wide min_deltas before loading the next shard
