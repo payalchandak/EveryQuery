@@ -2,9 +2,9 @@
 
 Fixture dependency graph (all session-scoped)::
 
-    demo_model_config ──► demo_model ──► demo_lightning_module
-            │                                    │
-            ▼                                    ▼
+    demo_model ──────────► demo_lightning_module
+                                    │
+                                    ▼
     simple_static_MEDS ──► tensorized_cohort_dir  trained_model_ckpt (Phase 3)
             │                       │
             ▼                       ▼
@@ -74,7 +74,7 @@ def demo_model_config() -> ModernBertConfig:
 
 
 @pytest.fixture(scope="session")
-def demo_model(demo_model_config: ModernBertConfig) -> EveryQueryModel:
+def demo_model() -> EveryQueryModel:
     """Randomly-initialised EveryQueryModel with tiny dimensions."""
     model = EveryQueryModel(
         config_overrides=DEMO_CONFIG_OVERRIDES,
