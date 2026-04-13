@@ -13,6 +13,7 @@ import lightning as L
 import torch
 from torch.utils.data import DataLoader
 
+from conftest import DEMO_CONFIG_OVERRIDES
 from every_query.lightning_module import EveryQueryLightningModule
 from every_query.model import EveryQueryModel, EveryQueryOutput
 
@@ -63,7 +64,7 @@ class TestModelBackward:
 
     def test_gradients_populated_and_finite(self, demo_model_config, sample_batch):
         model = EveryQueryModel(
-            model_name_or_config=demo_model_config,
+            config_overrides=DEMO_CONFIG_OVERRIDES,
             do_demo=True,
             precision="32-true",
         )
@@ -89,7 +90,7 @@ class TestLightningTrainingStep:
 
     def test_returns_finite_scalar_with_grad(self, demo_model_config, sample_batch):
         model = EveryQueryModel(
-            model_name_or_config=demo_model_config,
+            config_overrides=DEMO_CONFIG_OVERRIDES,
             do_demo=True,
             precision="32-true",
         )
@@ -114,7 +115,7 @@ class TestTrainerFitTwoSteps:
 
     def test_fit_completes(self, demo_model_config, demo_dataset):
         model = EveryQueryModel(
-            model_name_or_config=demo_model_config,
+            config_overrides=DEMO_CONFIG_OVERRIDES,
             do_demo=True,
             precision="32-true",
         )
@@ -157,7 +158,7 @@ class TestCheckpointRoundtrip:
 
     def test_hparams_and_weights_survive(self, demo_model_config, demo_dataset, tmp_path):
         model = EveryQueryModel(
-            model_name_or_config=demo_model_config,
+            config_overrides=DEMO_CONFIG_OVERRIDES,
             do_demo=True,
             precision="32-true",
         )
@@ -245,7 +246,7 @@ class TestDemoModeChecks:
 
     def test_nan_injection_logs_warning(self, demo_model_config, sample_batch, caplog):
         model = EveryQueryModel(
-            model_name_or_config=demo_model_config,
+            config_overrides=DEMO_CONFIG_OVERRIDES,
             do_demo=True,
             precision="32-true",
         )

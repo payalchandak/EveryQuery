@@ -1,7 +1,7 @@
 import logging
 import textwrap
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import torch
 from transformers import AutoConfig, ModernBertConfig, ModernBertModel
@@ -230,11 +230,17 @@ class EveryQueryModel(torch.nn.Module):
         do_demo: bool = False,
         do_grad_ckpt: bool = False,
         mlp_dropout: float = 0.1,
+        model_name: str = "answerdotai/ModernBERT-base",
         num_hidden_layers: int | None = None,
+        config_overrides: dict[str, Any] | None = None,
     ):
         super().__init__()
 
-        self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained("answerdotai/ModernBERT-base")
+        self.HF_model_config: ModernBertConfig = AutoConfig.from_pretrained(model_name)
+
+        if config_overrides:
+            for key, value in config_overrides.items():
+                setattr(self.HF_model_config, key, value)
 
         if num_hidden_layers is not None:
             self.HF_model_config.num_hidden_layers = num_hidden_layers
@@ -289,7 +295,9 @@ class EveryQueryModel(torch.nn.Module):
             "precision": precision,
             "do_demo": do_demo,
             "mlp_dropout": self.HF_model.config.mlp_dropout,
+            "model_name": model_name,
             "num_hidden_layers": self.HF_model_config.num_hidden_layers,
+            "config_overrides": dict(config_overrides) if config_overrides else None,
         }
 
     @property

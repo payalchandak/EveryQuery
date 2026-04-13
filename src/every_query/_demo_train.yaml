@@ -48,8 +48,7 @@ lightning_module:
     do_demo: true
     do_grad_ckpt: false
     mlp_dropout: 0.1
-    model_name_or_config:
-      _target_: transformers.ModernBertConfig
+    config_overrides:
       hidden_size: 64
       num_hidden_layers: 2
       num_attention_heads: 2
