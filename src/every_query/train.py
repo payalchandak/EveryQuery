@@ -3,20 +3,10 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime
-
-from every_query._env import ensure_env
-
-ensure_env()
-
-NUM_CPUS = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
-FILES_AT_ONCE = 10
-THREADS_PER_FILE = max(1, NUM_CPUS // FILES_AT_ONCE)
-os.environ["POLARS_MAX_THREADS"] = str(THREADS_PER_FILE)
-os.environ["OMP_NUM_THREADS"] = str(THREADS_PER_FILE)
 import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,11 +22,10 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 
 logger = logging.getLogger(__name__)
 
-
 _RUN_ID = None
 
 
-@OmegaConfResolver
+@OmegaConfResolver(replace=True)
 def run_id():
     global _RUN_ID
     if _RUN_ID is None:
@@ -44,12 +33,12 @@ def run_id():
     return _RUN_ID
 
 
-@OmegaConfResolver
+@OmegaConfResolver(replace=True)
 def list_len(x):
     return builtins.len(x)
 
 
-@OmegaConfResolver
+@OmegaConfResolver(replace=True)
 def int_prod(x: int, y: int) -> int:
     """Returns the closest integer to the product of x and y (available as an OmegaConf resolver).
 
@@ -222,7 +211,7 @@ def collate_tasks(cfg: DictConfig) -> str:
         os.makedirs(f"{write_dir}/{split}", exist_ok=True)
         file_names = os.listdir(f"{task_dir}/{first_duration}/{split}")
 
-        with ThreadPoolExecutor(max_workers=FILES_AT_ONCE) as executor:
+        with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [
                 executor.submit(
                     _collate_shard,
@@ -245,8 +234,21 @@ def collate_tasks(cfg: DictConfig) -> str:
     return write_dir
 
 
+def _init_env() -> None:
+    """Validate required env vars and configure thread counts for polars/OMP."""
+    from every_query._env import ensure_env
+
+    ensure_env()
+    num_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+    threads_per_file = max(1, num_cpus // 10)
+    os.environ["POLARS_MAX_THREADS"] = str(threads_per_file)
+    os.environ["OMP_NUM_THREADS"] = str(threads_per_file)
+
+
 @hydra.main(version_base="1.3", config_path="", config_name="config.yaml")
 def main(cfg: DictConfig) -> float | None:
+    _init_env()
+
     if not isinstance(cfg.query.codes, ListConfig):
         raise ValueError("query.codes must be a list")
 
