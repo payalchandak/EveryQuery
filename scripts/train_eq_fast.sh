@@ -31,6 +31,7 @@ echo "SLURM CPU PER TASK: $SLURM_CPUS_PER_TASK"
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 
 set -a
+# shellcheck source=/dev/null
 . ./.env
 set +a
 

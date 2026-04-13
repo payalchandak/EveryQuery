@@ -34,6 +34,7 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 
 # Load .env variables (portable: all machine-specific paths live here).
 set -a
+# shellcheck source=/dev/null
 . ./.env
 set +a
 

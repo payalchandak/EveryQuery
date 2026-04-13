@@ -8,6 +8,7 @@ echo "Starting job on $(hostname) at $(date)"
 cd "$(git rev-parse --show-toplevel)"
 
 set -a
+# shellcheck source=/dev/null
 . ./.env
 set +a
 
