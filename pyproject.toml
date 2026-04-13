@@ -20,20 +20,21 @@ classifiers = [
 ]
 dependencies = [
   "polars~=1.30.0",
-  "pyarrow",
-  "hydra-core",
-  "numpy",
-  "meds~=0.4.0",
-  "filelock",
-  "pytest",
-  "MEDS-transforms~=0.5.2",
+  "pyarrow==21.0.0",
+  "hydra-core==1.3.2",
+  "numpy==2.3.3",
+  "meds==0.4.0",
+  "filelock==3.19.1",
+  "pytest==8.4.2",
+  "meds-transforms==0.5.3",
   "meds-torch-data[lightning]~=0.6.3",
-  "transformers",
-  "torch",
-  "torchmetrics",
-  "lightning~=2.5.1",
-  "dotenv>=0.9.9",
-  "scikit-learn",
+  "transformers==4.56.1",
+  "torch==2.8.0",
+  "torchmetrics==1.8.2",
+  "lightning==2.5.5",
+  "dotenv==0.9.9",
+  "wandb>=0.22.3",
+  "ipykernel>=7.2.0",
 ] # Add your runtime dependencies here
 
 [dependency-groups]
@@ -62,8 +63,6 @@ addopts = [
   "--ignore=docs",
   "--ignore=AGENTS.md",
   "--ignore=CONTRIBUTORS.md",
-  "--ignore=src/every_query/process_composite",
-  "--ignore=src/every_query/sample_codes",
   "--doctest-glob=*.md",
 ]
 markers = [] # Add any custom pytest markers here
