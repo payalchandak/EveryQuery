@@ -4,7 +4,6 @@ from pathlib import Path
 
 import hydra
 import polars as pl
-from meds import held_out_split
 from omegaconf import DictConfig, OmegaConf
 
 
@@ -26,7 +25,6 @@ def main(cfg: DictConfig) -> None:
     read_dir = task_dir / "all"
     out_root = Path(cfg.io.out_root)
 
-    split = held_out_split
     time_hash = build_time_hash(cfg, read_dir)
     write_root = out_root / "index_times" / time_hash
     write_root.mkdir(parents=True, exist_ok=True)
@@ -37,31 +35,32 @@ def main(cfg: DictConfig) -> None:
         "read_dir": str(read_dir.resolve()),
         "sample_times_per_subject": int(cfg.sampling.sample_times_per_subject),
         "seed": int(cfg.sampling.seed),
+        "splits": list(cfg.sampling.splits),
     }
 
-    in_dir = read_dir / split
-    write_root.mkdir(parents=True, exist_ok=True)
-    write_shards = write_root / split
-    write_shards.mkdir(parents=True, exist_ok=True)
+    for split in cfg.sampling.splits:
+        in_dir = read_dir / split
+        write_shards = write_root / split
+        write_shards.mkdir(parents=True, exist_ok=True)
 
-    for shard_path in list_parquets(in_dir):
-        out_path = write_shards / shard_path.name
-        if out_path.exists() and bool(cfg.behavior.skip_existing):
-            print(f"Skipping {out_path}, already exists")
-            continue
+        for shard_path in list_parquets(in_dir):
+            out_path = write_shards / shard_path.name
+            if out_path.exists() and bool(cfg.behavior.skip_existing):
+                print(f"Skipping {out_path}, already exists")
+                continue
 
-        df = pl.read_parquet(
-            shard_path,
-            columns=["subject_id", "prediction_time", "censored"],
-        )
+            df = pl.read_parquet(
+                shard_path,
+                columns=["subject_id", "prediction_time", "censored"],
+            )
 
-        sampled = (
-            df.sample(fraction=1.0, shuffle=True, seed=int(cfg.sampling.seed))
-            .group_by("subject_id")
-            .head(int(cfg.sampling.sample_times_per_subject))
-        )
+            sampled = (
+                df.sample(fraction=1.0, shuffle=True, seed=int(cfg.sampling.seed))
+                .group_by("subject_id")
+                .head(int(cfg.sampling.sample_times_per_subject))
+            )
 
-        sampled.write_parquet(out_path)
+            sampled.write_parquet(out_path)
 
     (write_root / "meta.json").write_text(json.dumps(meta, indent=2))
     (write_root / "config_resolved.yaml").write_text(OmegaConf.to_yaml(cfg))

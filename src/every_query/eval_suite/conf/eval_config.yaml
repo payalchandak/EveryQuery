@@ -1,26 +1,50 @@
 defaults:
   - _self_
-  - eval_codes: hosp_admin_codes
+  - eval_codes: 10000_ID__8db2be6fadf8
 
-# inputs
-model_run_dir: /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49/
-index_time_hash: readmiss_30d/held_out
-task_set_dir: /users/gbk2114/eq_stuff/tasks/eval/aces/${index_time_hash}/
-ckpt_path: last
+# Model run directory (or list of directories). 
+# Paths are rooted at $OUTPUT_DIR so they move with .env across machines
+model_run_dirs:
+  - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-43-54 # 256, 22
+  - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-54-43 # 1028, 22
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-08/16-38-46/                                                                                     
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-03/00-29-53 #2048,6                                                                       
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-56-55 # 1028, 6                                                                     
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-58-42 # 1028, 12                                                                    
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-04/14-08-24 # 1028, 16                                                                    
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-54-43 # 1028, 22                                                                    
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-03/13-28-12 # 256, 6                                                                      
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-03/12-58-10 # 256, 12                                                                     
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-43-55 # 256, 16
+  
+#
+# Checkpoints to evaluate within each run dir (names without .ckpt extension)
+# Set to null to just use ckpt_path (single checkpoint)
+ckpt_names:
+  # - "best"  
+  # - "epoch=0-step=1382"
+  # - "epoch=0-step=4146"
+  # - "epoch=0-step=6911"
+  # - "epoch=0-step=11058"
+  
+# Durations (in days) to evaluate at; This must be a list!
+durations: [30,90,180,365,731]
+
+index_time_hash: 7573f855c4b050a9d79d57fefd8a139c
+split: held_out
+# task_set_dir should point to gen_task.py output: out_root_dir/{index_hash}/{split}
+# which contains {duration}/{code_slug}/ subdirectories
+task_set_dir: ${oc.env:TASK_DIR}/eval/tasks_from_index_new/${index_time_hash}/${split}
+ckpt_path: best
 
 # Random Codes (queries) to eval
 id_codes: ${eval_codes.id}
 ood_codes: ${eval_codes.ood}
 # Hand selected codes to eval model on
 manual_codes: [MEDS_DEATH]
-# where to save eval outputs (outside hydra run dir if you want)
-output_root: ${model_run_dir}/eval/${index_time_hash}/
-#
-#output_root: /users/gbk2114/eq_stuff/dump/${index_time_hash}
-query_codes: ${eval_codes}
+# eval outputs are written to {model_run_dir}/eval/{ckpt_name}/
 
-do_overwrite: true
+do_overwrite: false
 do_resume: false
 seed: 140799
-only_preprocess: false
 mode: predict
