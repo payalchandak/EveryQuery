@@ -232,7 +232,9 @@ class TestGenTaskCodes:
         out1 = tmp_path / "out1"
         out2 = tmp_path / "out2"
         process_eval_tasks(index_dir, task_dir_base, out1, INDEX_HASH, CODES, DURATIONS, "held_out")
-        process_eval_tasks(index_dir, task_dir_base, out2, INDEX_HASH, list(reversed(CODES)), DURATIONS, "held_out")
+        process_eval_tasks(
+            index_dir, task_dir_base, out2, INDEX_HASH, list(reversed(CODES)), DURATIONS, "held_out"
+        )
 
         df1 = _read_all_outputs(out1, INDEX_HASH).sort("duration_days", "query", "subject_id")
         df2 = _read_all_outputs(out2, INDEX_HASH).sort("duration_days", "query", "subject_id")
@@ -243,7 +245,9 @@ class TestGenTaskCodes:
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path)
         # Add a code that doesn't exist in the data
         codes_with_missing = [*CODES, "FAKE//MISSING"]
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, codes_with_missing, DURATIONS, "held_out")
+        process_eval_tasks(
+            index_dir, task_dir_base, out_root, INDEX_HASH, codes_with_missing, DURATIONS, "held_out"
+        )
 
         df = _read_all_outputs(out_root, INDEX_HASH)
         assert "FAKE//MISSING" not in df["query"].unique().to_list()
