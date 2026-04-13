@@ -164,6 +164,10 @@ def precompute_min_deltas_wide(
     that caused OOM on large shards. The asof work is chunked in groups of 500 codes with a
     bounded thread pool so the horizontal concat intermediate never fragments into a wide,
     memory-thrashing frame.
+
+    Events are bucketed once up front via ``partition_by("code")`` so each worker does a dict
+    lookup instead of a full ``filter`` pass over the whole shard — this turns the per-code
+    cost from O(n_events) into O(n_events_for_that_code).
     """
     pred_sorted = base_df.sort(["subject_id", "prediction_time"])
     if not query_codes:
@@ -175,14 +179,29 @@ def precompute_min_deltas_wide(
         "subject_id",
         (pl.col("prediction_time") + pl.duration(microseconds=1)).alias("_pt_shifted"),
         "prediction_time",
+    ).set_sorted("subject_id")
+
+    # Single pass: bucket events by code so per-code work is a dict lookup, not a full scan.
+    # Sorting by (subject_id, time) once here means every partition slice is already sorted
+    # for join_asof, so we can skip the per-code .sort(...) and set_sorted on "subject_id".
+    raw_partitions = (
+        events_df.select(["subject_id", "time", "code"])
+        .sort(["subject_id", "time"])
+        .partition_by("code", as_dict=True)
     )
+    code_to_events: dict[str, pl.DataFrame] = {}
+    for key, df in raw_partitions.items():
+        code_str = key[0] if isinstance(key, tuple) else key
+        code_to_events[code_str] = df.drop("code").set_sorted("subject_id")
+    del raw_partitions
+
+    # Reusable all-null delta column for codes that do not appear in this shard.
+    null_delta_series = pl.repeat(None, n=pred_sorted.height, dtype=pl.Duration("us"), eager=True)
 
     def _compute_code_delta(code: str) -> pl.DataFrame:
-        code_events = (
-            events_df.filter(pl.col("code") == code)
-            .select(["subject_id", "time"])
-            .sort(["subject_id", "time"])
-        )
+        code_events = code_to_events.get(code)
+        if code_events is None:
+            return null_delta_series.alias(code).to_frame()
         asof = pred_keys.join_asof(
             code_events,
             by="subject_id",
