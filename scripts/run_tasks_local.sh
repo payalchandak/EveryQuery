@@ -11,11 +11,11 @@ set -a
 . ./.env
 set +a
 
-: "${OMP_NUM_THREADS:=10}"
-: "${MKL_NUM_THREADS:=10}"
-: "${OPENBLAS_NUM_THREADS:=10}"
-: "${NUMEXPR_NUM_THREADS:=10}"
-export OMP_NUM_THREADS MKL_NUM_THREADS OPENBLAS_NUM_THREADS NUMEXPR_NUM_THREADS
+
+export POLARS_MAX_THREADS=32
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OMP_NUM_THREADS=1
 
 uv sync --locked
 
@@ -23,6 +23,6 @@ echo "Using python: $(uv run which python)"
 
 export HYDRA_FULL_ERROR=1
 
-uv run python src/every_query/tasks.py "$@"
+uv run numactl --cpunodebind=0 --membind=0 python src/every_query/tasks.py "$@"
 
 echo "Finished at $(date)"
