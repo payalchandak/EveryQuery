@@ -264,12 +264,14 @@ class EveryQueryLightningModule(L.LightningModule):
                     self._update_metric(name="occurs_auc", split=split, preds=preds, target=target)
 
     def training_step(self, batch: EveryQueryBatch) -> torch.Tensor:
+        """Forward pass and metric logging for a single training batch."""
         loss, outputs = self.model(batch)
         self._log_metrics(loss, outputs, batch, train_split)
         return loss
 
     @torch.no_grad()
     def validation_step(self, batch: EveryQueryBatch) -> torch.Tensor:
+        """Forward pass and metric logging for a single validation batch (no gradients)."""
         loss, outputs = self.model(batch)
         self._log_metrics(loss, outputs, batch, tuning_split)
         return loss
@@ -282,6 +284,7 @@ class EveryQueryLightningModule(L.LightningModule):
 
     @torch.no_grad()
     def predict_step(self, batch: EveryQueryBatch) -> dict[str, torch.Tensor]:
+        """Produce prediction outputs (probabilities, embeddings, labels) for one batch."""
         _, outputs = self.model(batch)
 
         return {
@@ -296,6 +299,31 @@ class EveryQueryLightningModule(L.LightningModule):
 
     @staticmethod
     def _is_norm_bias_param(n: str) -> bool:
+        """True when *n* is a bias or layer-norm weight (these get zero weight decay).
+
+        Examples:
+            >>> EveryQueryLightningModule._is_norm_bias_param("encoder.attention.self.query.bias")
+            True
+            >>> EveryQueryLightningModule._is_norm_bias_param("encoder.attention.self.query.weight")
+            False
+            >>> EveryQueryLightningModule._is_norm_bias_param("encoder.layer_norm.weight")
+            True
+            >>> EveryQueryLightningModule._is_norm_bias_param("encoder.layernorm2.weight")
+            True
+
+        CamelCase variant used by HuggingFace models:
+
+            >>> EveryQueryLightningModule._is_norm_bias_param("bert.encoder.layer.0.output.LayerNorm.weight")
+            True
+
+        The regex requires a ``layer`` prefix, so ModernBERT-style norm names
+        (``attn_norm``, ``mlp_norm``, ``final_norm``, bare ``norm``) are **not** matched:
+
+            >>> EveryQueryLightningModule._is_norm_bias_param("layers.1.attn_norm.weight")
+            False
+            >>> EveryQueryLightningModule._is_norm_bias_param("final_norm.weight")
+            False
+        """
         return bool(re.search(r"(bias|layer(_?)norm(\d*)\.weight)", n, re.IGNORECASE))
 
     def _norm_bias_params(self) -> Iterator[torch.nn.parameter.Parameter]:
@@ -328,6 +356,14 @@ class EveryQueryLightningModule(L.LightningModule):
         return new_factory
 
     def configure_optimizers(self):
+        """Builds optimizer (and optional LR scheduler) with norm/bias weight-decay separation.
+
+        Returns an optimizer when no LR scheduler factory is set, or a dict with
+        ``"optimizer"`` and ``"lr_scheduler"`` keys when one is provided.
+
+        Raises:
+            ValueError: If no optimizer factory was provided at init time.
+        """
         if self.optimizer_factory is None:
             raise ValueError("Optimizer factory is not set. Cannot configure optimizers.")
 
@@ -365,6 +401,12 @@ class EveryQueryLightningModule(L.LightningModule):
 
     @classmethod
     def load_from_checkpoint(cls, ckpt_path: str | None = None) -> "EveryQueryLightningModule":
+        """Restore an ``EveryQueryLightningModule`` from a Lightning checkpoint.
+
+        Extracts ``model``, ``optimizer``, and ``LR_scheduler`` hyper-parameters from the
+        checkpoint, reconstructs the corresponding objects, then delegates to the base
+        ``LightningModule.load_from_checkpoint`` for state-dict loading.
+        """
         checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         hparams = checkpoint.get("hyper_parameters", {})
 
