@@ -14,6 +14,18 @@
 set -euo pipefail
 export PYTHONNOUSERSITE=1
 
+BUCKET="gs://every-query-runs"
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 <runs-file> [--dry-run] [extra upload_models.py args...]" >&2
+    echo "  <runs-file>  text file with one run directory per line" >&2
+    echo "  Uploads to ${BUCKET}" >&2
+    exit 2
+fi
+
+RUNS_FILE="$1"
+shift
+
 mkdir -p logs
 echo "Starting upload job on $(hostname) at $(date)"
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
@@ -24,6 +36,9 @@ set +a
 
 uv sync --locked
 
-uv run python src/every_query/upload_models.py "$@"
+uv run python src/every_query/upload_models.py \
+    --runs-file "${RUNS_FILE}" \
+    --bucket "${BUCKET}" \
+    "$@"
 
 echo "Finished at $(date)"
