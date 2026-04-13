@@ -28,7 +28,7 @@ dependencies = [
   "pytest==8.4.2",
   "meds-transforms==0.5.3",
   "meds-torch-data[lightning]~=0.6.3",
-  "transformers==4.56.1",
+  "transformers>=4.48.0",
   "torch==2.8.0",
   "torchmetrics==1.8.2",
   "lightning==2.5.5",

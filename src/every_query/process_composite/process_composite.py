@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import hydra
@@ -89,7 +89,7 @@ def main(cfg: DictConfig) -> None:
     out_df = pl.DataFrame(aucs)
 
     out_dir = Path(cfg.output_path)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
     out_fp = out_dir / f"all_preds_{timestamp}.csv"
 
     if out_fp.exists() and not cfg.do_overwrite:

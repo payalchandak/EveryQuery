@@ -1,4 +1,3 @@
-
 import logging
 import time
 from datetime import UTC, datetime
@@ -13,6 +12,7 @@ from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
 from omegaconf import DictConfig, OmegaConf
 
+from every_query.lightning_module import EveryQueryLightningModule
 from every_query.utils.codes import (  # noqa: F401 (values_as_list used by config.yaml)
     code_slug,
     values_as_list,
@@ -54,8 +54,6 @@ def _setup_model(model_run_dir: str | Path, ckpt_name: str | None = None):
         logger.warning(f"{candidates[0].name} not found, falling back to {ckpt_path}")
 
     logger.info(f"Loading lightning module from checkpoint: {ckpt_path}")
-    from every_query.lightning_module import EveryQueryLightningModule
-
     M = EveryQueryLightningModule.load_from_checkpoint(str(ckpt_path))
 
     logger.info("Instantiating trainer...")
