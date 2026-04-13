@@ -15,14 +15,15 @@ echo "=== NCCL Smoke Test ==="
 echo "Host: $(hostname) | Date: $(date)"
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 
-export MASTER_ADDR=$(hostname)
+MASTER_ADDR=$(hostname)
+export MASTER_ADDR
 export MASTER_PORT=29500
 export NCCL_P2P_DISABLE=1
 export NCCL_SHM_USE_CUDA_MEMCPY=1
 
 UVENV="$HOME/eq_stuff/eq"
 
-srun $UVENV/bin/python -c "
+srun "$UVENV"/bin/python -c "
 import os
 import time
 import torch

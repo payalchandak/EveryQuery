@@ -189,7 +189,7 @@ src/every_query/train_codes/
 
 src/every_query/eval_suite/outputs/
 
-# AI 
+# AI
 .cursor/
 .claude/
 CLAUDE.md

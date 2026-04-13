@@ -1,8 +1,7 @@
 """Load .env and validate that required environment variables are set.
 
-Imported early by both train.py and tasks.py so that a missing .env on a fresh
-machine surfaces a single clear error rather than a mid-run KeyError or Hydra
-InterpolationResolutionError.
+Imported early by both train.py and tasks.py so that a missing .env on a fresh machine surfaces a single clear
+error rather than a mid-run KeyError or Hydra InterpolationResolutionError.
 """
 
 import os
