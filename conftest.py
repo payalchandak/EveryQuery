@@ -153,6 +153,11 @@ def task_parquet_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
             df.write_parquet(split_dir / "0.parquet")
 
+    import json
+
+    with open(task_dir / "sampled_durations.json", "w") as f:
+        json.dump([30, 31], f)
+
     return task_dir
 
 

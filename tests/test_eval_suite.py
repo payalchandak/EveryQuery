@@ -131,7 +131,7 @@ class TestResolveCodes:
 class TestGenTaskOutputSchema:
     def test_columns(self, tmp_path):
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path)
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS)
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS, "held_out")
 
         df = _read_all_outputs(out_root, INDEX_HASH)
         expected = {"subject_id", "prediction_time", "boolean_value", "query", "occurs", "duration_days"}
@@ -140,7 +140,7 @@ class TestGenTaskOutputSchema:
     def test_no_null_occurs(self, tmp_path):
         """Rows with null occurs should be filtered out."""
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path)
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS)
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS, "held_out")
 
         df = _read_all_outputs(out_root, INDEX_HASH)
         assert df["occurs"].null_count() == 0
@@ -155,7 +155,7 @@ class TestGenTaskDurations:
     def test_all_requested_durations_present(self, tmp_path):
         """Output should contain rows for every requested duration."""
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path)
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS)
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS, "held_out")
 
         df = _read_all_outputs(out_root, INDEX_HASH)
         assert set(df["duration_days"].unique().to_list()) == set(DURATIONS)
@@ -163,7 +163,7 @@ class TestGenTaskDurations:
     def test_duration_values_exact(self, tmp_path):
         """duration_days column should only contain values from the requested durations."""
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path)
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS)
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS, "held_out")
 
         df = _read_all_outputs(out_root, INDEX_HASH)
         assert set(df["duration_days"].unique().to_list()).issubset(set(DURATIONS))
@@ -174,8 +174,8 @@ class TestGenTaskDurations:
 
         out1 = tmp_path / "out1"
         out2 = tmp_path / "out2"
-        process_eval_tasks(index_dir, task_dir_base, out1, INDEX_HASH, CODES, [30, 90, 180])
-        process_eval_tasks(index_dir, task_dir_base, out2, INDEX_HASH, CODES, [180, 30, 90])
+        process_eval_tasks(index_dir, task_dir_base, out1, INDEX_HASH, CODES, [30, 90, 180], "held_out")
+        process_eval_tasks(index_dir, task_dir_base, out2, INDEX_HASH, CODES, [180, 30, 90], "held_out")
 
         df1 = _read_all_outputs(out1, INDEX_HASH).sort("duration_days", "query", "subject_id")
         df2 = _read_all_outputs(out2, INDEX_HASH).sort("duration_days", "query", "subject_id")
@@ -184,7 +184,7 @@ class TestGenTaskDurations:
     def test_same_prediction_times_across_durations(self, tmp_path):
         """Same index times should be evaluated at every duration (same subject_id x prediction_time set)."""
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path)
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], DURATIONS)
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], DURATIONS, "held_out")
 
         df = _read_all_outputs(out_root, INDEX_HASH)
         per_duration_keys = {}
@@ -206,7 +206,7 @@ class TestGenTaskDurations:
         """If a duration directory doesn't exist, it should be skipped without error."""
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path, durations=[30, 90])
         # Ask for duration=180 which doesn't exist on disk
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, [30, 90, 180])
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, [30, 90, 180], "held_out")
 
         df = _read_all_outputs(out_root, INDEX_HASH)
         assert set(df["duration_days"].unique().to_list()) == {30, 90}
@@ -220,7 +220,7 @@ class TestGenTaskDurations:
 class TestGenTaskCodes:
     def test_all_requested_codes_present(self, tmp_path):
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path)
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS)
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS, "held_out")
 
         df = _read_all_outputs(out_root, INDEX_HASH)
         assert set(df["query"].unique().to_list()) == set(CODES)
@@ -231,8 +231,8 @@ class TestGenTaskCodes:
 
         out1 = tmp_path / "out1"
         out2 = tmp_path / "out2"
-        process_eval_tasks(index_dir, task_dir_base, out1, INDEX_HASH, CODES, DURATIONS)
-        process_eval_tasks(index_dir, task_dir_base, out2, INDEX_HASH, list(reversed(CODES)), DURATIONS)
+        process_eval_tasks(index_dir, task_dir_base, out1, INDEX_HASH, CODES, DURATIONS, "held_out")
+        process_eval_tasks(index_dir, task_dir_base, out2, INDEX_HASH, list(reversed(CODES)), DURATIONS, "held_out")
 
         df1 = _read_all_outputs(out1, INDEX_HASH).sort("duration_days", "query", "subject_id")
         df2 = _read_all_outputs(out2, INDEX_HASH).sort("duration_days", "query", "subject_id")
@@ -243,7 +243,7 @@ class TestGenTaskCodes:
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path)
         # Add a code that doesn't exist in the data
         codes_with_missing = [*CODES, "FAKE//MISSING"]
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, codes_with_missing, DURATIONS)
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, codes_with_missing, DURATIONS, "held_out")
 
         df = _read_all_outputs(out_root, INDEX_HASH)
         assert "FAKE//MISSING" not in df["query"].unique().to_list()
@@ -259,10 +259,10 @@ class TestGenTaskDirectoryStructure:
     def test_output_organized_by_duration_and_code(self, tmp_path):
         """Output parquets should be at out_root/{hash}/{duration}/{code_slug}/."""
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path, durations=[30], codes=CODES[:1])
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], [30])
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], [30], "held_out")
 
         slug = code_slug(CODES[0])
-        expected_dir = out_root / INDEX_HASH / "30" / slug
+        expected_dir = out_root / INDEX_HASH / "held_out" / "30" / slug
         assert expected_dir.is_dir()
         assert list(expected_dir.glob("*.parquet"))
 
@@ -278,10 +278,10 @@ class TestGenTaskDirectoryStructure:
             (task_dir_base / "30" / "held_out" / "0.parquet").read_bytes()
         )
 
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], [30])
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], [30], "held_out")
 
         slug = code_slug(CODES[0])
-        output_dir = out_root / INDEX_HASH / "30" / slug
+        output_dir = out_root / INDEX_HASH / "held_out" / "30" / slug
         assert (output_dir / "0.parquet").exists()
         assert (output_dir / "1.parquet").exists()
 
@@ -335,7 +335,7 @@ class TestGenTaskCensorSource:
             df.write_parquet(d_dir / "0.parquet")
 
         out_root = tmp_path / "out"
-        process_eval_tasks(index_dir, task_base, out_root, INDEX_HASH, ["ICD//A01"], [30, 90])
+        process_eval_tasks(index_dir, task_base, out_root, INDEX_HASH, ["ICD//A01"], [30, 90], "held_out")
 
         all_df = _read_all_outputs(out_root, INDEX_HASH)
 
@@ -357,28 +357,28 @@ class TestGenTaskSkipExisting:
     def test_skip_existing_preserves_file(self, tmp_path):
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path, durations=[30], codes=CODES[:1])
 
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], [30])
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], [30], "held_out")
 
         slug = code_slug(CODES[0])
-        out_fp = out_root / INDEX_HASH / "30" / slug / "0.parquet"
+        out_fp = out_root / INDEX_HASH / "held_out" / "30" / slug / "0.parquet"
         mtime_before = out_fp.stat().st_mtime
 
         # Run again with skip_existing=True
         process_eval_tasks(
-            index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], [30], skip_existing=True
+            index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], [30], "held_out", skip_existing=True
         )
         assert out_fp.stat().st_mtime == mtime_before
 
     def test_overwrite_when_skip_existing_false(self, tmp_path):
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path, durations=[30], codes=CODES[:1])
 
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], [30])
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], [30], "held_out")
 
         slug = code_slug(CODES[0])
-        out_fp = out_root / INDEX_HASH / "30" / slug / "0.parquet"
+        out_fp = out_root / INDEX_HASH / "held_out" / "30" / slug / "0.parquet"
         # Run again with skip_existing=False (default) — should rewrite
         process_eval_tasks(
-            index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], [30], skip_existing=False
+            index_dir, task_dir_base, out_root, INDEX_HASH, CODES[:1], [30], "held_out", skip_existing=False
         )
         # File should still exist and have same content (deterministic)
         assert out_fp.exists()
@@ -400,7 +400,7 @@ class TestGenTaskShardMismatch:
         src.rename(dst)
 
         with pytest.raises(AssertionError, match="Shard mismatch"):
-            process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, [30])
+            process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, [30], "held_out")
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +413,7 @@ class TestGenTaskRowCounts:
         """Each (duration, code) combination should have the same number of rows (since we use the same index
         times and same base task data)."""
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path)
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS)
+        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS, "held_out")
 
         df = _read_all_outputs(out_root, INDEX_HASH)
         counts = df.group_by("duration_days", "query").len()
