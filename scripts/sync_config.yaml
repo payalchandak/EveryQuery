@@ -5,10 +5,17 @@
 #
 # The server_root values reference environment variables from .env so the same
 # config works across machines.  The sync script resolves them at runtime.
+# For download-only mappings that don't need a server root, omit server_root_env.
 
 bucket: gs://every-query-runs
 
 mappings:
+  # Current bucket contents: mirrors the data/ directory layout.
+  - name: eval-data
+    gcs_prefix: ""
+    local_root: data/
+
+  # Future mappings for server-side uploads:
   - name: outputs
     # Hydra writes run dirs under ${OUTPUT_DIR}/outputs/<date>/<time>/
     server_root_env: OUTPUT_DIR

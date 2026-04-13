@@ -74,6 +74,9 @@ def gsutil_rsync(
 def cmd_upload(mappings: list[dict], bucket: str, *, dry_run: bool) -> int:
     failures = 0
     for m in mappings:
+        if "server_root_env" not in m:
+            logger.info("Skipping [%s]: no server_root_env (download-only mapping).", m["name"])
+            continue
         server_root = resolve_server_root(m)
         gcs_dst = f"{bucket.rstrip('/')}/{m['gcs_prefix'].strip('/')}"
 
@@ -92,7 +95,8 @@ def cmd_upload(mappings: list[dict], bucket: str, *, dry_run: bool) -> int:
 def cmd_download(mappings: list[dict], bucket: str, *, dry_run: bool) -> int:
     failures = 0
     for m in mappings:
-        gcs_src = f"{bucket.rstrip('/')}/{m['gcs_prefix'].strip('/')}"
+        prefix = m["gcs_prefix"].strip("/")
+        gcs_src = f"{bucket.rstrip('/')}/{prefix}" if prefix else bucket.rstrip("/")
         local_dst = REPO_ROOT / m["local_root"]
 
         if not dry_run:

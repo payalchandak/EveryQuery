@@ -156,6 +156,9 @@ addopts = [
   "--ignore=docs",
   "--ignore=AGENTS.md",
   "--ignore=CONTRIBUTORS.md",
+  "--ignore=analysis",
+  "--ignore=scripts",
+  "--ignore=src/every_query/sample_codes",
   "--doctest-glob=*.md",
 ]
 markers = [] # Add any custom pytest markers here
