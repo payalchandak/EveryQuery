@@ -3,11 +3,17 @@
 # Sweep on the cluster with:
 #   python -m every_query.sample_tasks -m input_shard=0,1,2,... task_shard=range(0,K)
 #
-# Defaults pull data paths from the same env vars as tasks.py (see _env.py) so CLI users don't
-# have to repeat them, but tests can inject values directly with `data_dir=/path out_dir=/path`.
+# Path roots are left as `null` in this file and resolved inside `main()` via `load_dotenv()` +
+# env-var fallback, matching the repo convention where `.env` holds machine-specific paths
+# (see `.env.example`, `tasks.py`, and `_env.py`).  Fallbacks:
+#   data_dir  -> $INTERMEDIATE   (event shards live under `{data_dir}/data/{split}/*.parquet`)
+#   codes_dir -> $PROCESSED      (query universe lives under `{codes_dir}/metadata/codes.parquet`)
+#   out_dir   -> $TASK_DIR       (labeled shards and _artifacts/ land here)
+# Tests can inject values directly with `data_dir=/path out_dir=/path codes_dir=/path`.
 
-data_dir: ${oc.env:INTERMEDIATE,null} # root containing data/{split}/*.parquet and metadata/codes.parquet
-out_dir: ${oc.env:TASK_DIR,null} # where labeled shards and _artifacts/ land
+data_dir: null
+codes_dir: null
+out_dir: null
 
 split: train
 input_shard: "0" # basename (without .parquet) of the MEDS shard for this worker

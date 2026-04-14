@@ -388,15 +388,20 @@ def _read_event_shard(file_path: str | Path) -> pl.DataFrame:
     )
 
 
-def _read_query_codes(data_dir: str | Path) -> list[str]:
-    """Read the universe of query codes from ``{data_dir}/metadata/codes.parquet``.
+def _read_query_codes(codes_dir: str | Path) -> list[str]:
+    """Read the universe of query codes from ``{codes_dir}/metadata/codes.parquet``.
+
+    ``codes_dir`` is the metadata root (``$PROCESSED`` in the standard layout), **not** the event
+    shard root (``$INTERMEDIATE``).  ``tasks.py`` reads event shards from ``$INTERMEDIATE/data/...``
+    and query codes from ``$PROCESSED/metadata/codes.parquet`` — these are typically distinct
+    subdirectories of ``$DATA_DIR`` (see ``.env.example``) and the sampler should not conflate them.
 
     The ``.unique()`` result is explicitly sorted because polars' default hash-based unique is
     order-unstable across distinct DataFrame instances — two calls in the same Python session
     can return the codes in different orders, which would make ``sample_tasks`` non-deterministic
     with respect to the tasks seed across workers reading the same metadata file.
     """
-    codes_fp = Path(data_dir) / "metadata" / "codes.parquet"
+    codes_fp = Path(codes_dir) / "metadata" / "codes.parquet"
     return pl.read_parquet(codes_fp).select("code").unique().sort("code").to_series().to_list()
 
 
@@ -539,6 +544,7 @@ def _validate_run_meta(run_meta_fp: Path, current: dict[str, int]) -> None:
 def run_worker(
     data_dir: Path,
     out_dir: Path,
+    codes_dir: Path,
     split: str,
     input_shard: str,
     task_shard: int,
@@ -593,7 +599,7 @@ def run_worker(
         logger.info("Loading tasks from %s", tasks_fp)
         tasks = load_tasks(tasks_fp)
     else:
-        query_codes = _read_query_codes(data_dir)
+        query_codes = _read_query_codes(codes_dir)
         tasks_seed = derive_seed(seed, "tasks", task_shard)
         tasks = sample_tasks(
             n=n_tasks,
@@ -641,20 +647,50 @@ def run_worker(
     return labels_fp
 
 
+def _resolve_path(cfg_value: str | None, env_var: str, name: str) -> Path:
+    """Prefer an explicit cfg value; fall back to ``$env_var``; otherwise raise.
+
+    Used by ``main`` to resolve the three path roots (``data_dir``, ``out_dir``, ``codes_dir``)
+    that default to the same env vars ``tasks.py`` reads from ``.env``.  Kept factored out so tests
+    can exercise the fallback matrix without spinning up a full Hydra run.
+    """
+    if cfg_value is not None:
+        return Path(str(cfg_value))
+    env_value = os.environ.get(env_var)
+    if env_value:
+        return Path(env_value)
+    raise ValueError(
+        f"{name} must be set: pass {name}=... on the CLI, set it in sample_tasks_config.yaml, "
+        f"or export ${env_var} (or define it in .env — sample_tasks calls load_dotenv())."
+    )
+
+
 @hydra.main(version_base=None, config_path=".", config_name="sample_tasks_config")
 def main(cfg: DictConfig) -> None:
     """Hydra entry point.
 
+    Loads ``.env`` via python-dotenv before resolving paths, to match the repo convention where
+    ``$INTERMEDIATE`` / ``$PROCESSED`` / ``$TASK_DIR`` live in a checked-in-but-gitignored ``.env``
+    file rather than being exported by the user.  See ``tasks.py`` / ``_env.py`` for the same
+    pattern.  Path fallbacks (``cfg.data_dir`` → ``$INTERMEDIATE``, ``cfg.codes_dir`` → ``$PROCESSED``,
+    ``cfg.out_dir`` → ``$TASK_DIR``) match the established layout in ``.env.example``.
+
     See :func:`run_worker` for the per-worker pipeline.
     """
-    if cfg.data_dir is None:
-        raise ValueError("data_dir must be set (pass data_dir=... or export $INTERMEDIATE)")
-    if cfg.out_dir is None:
-        raise ValueError("out_dir must be set (pass out_dir=... or export $TASK_DIR)")
+    # Late import so `load_dotenv()` doesn't run at module import time (which would be an
+    # unexpected side effect for programmatic callers / tests of the pure primitives).
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
+    data_dir = _resolve_path(cfg.get("data_dir"), "INTERMEDIATE", "data_dir")
+    out_dir = _resolve_path(cfg.get("out_dir"), "TASK_DIR", "out_dir")
+    codes_dir = _resolve_path(cfg.get("codes_dir"), "PROCESSED", "codes_dir")
 
     run_worker(
-        data_dir=Path(cfg.data_dir),
-        out_dir=Path(cfg.out_dir),
+        data_dir=data_dir,
+        out_dir=out_dir,
+        codes_dir=codes_dir,
         split=str(cfg.split),
         input_shard=str(cfg.input_shard),
         task_shard=int(cfg.task_shard),

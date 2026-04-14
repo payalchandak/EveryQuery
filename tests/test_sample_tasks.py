@@ -481,30 +481,36 @@ def _write_fake_cohort(
     query_codes: list[str],
     split: str = "train",
     shard_name: str = "0",
-) -> Path:
+) -> tuple[Path, Path]:
     """Write a minimal MEDS-shaped cohort so ``run_worker`` can read from it.
 
-    Layout:
-        {data_dir}/data/{split}/{shard_name}.parquet
-        {data_dir}/metadata/codes.parquet
+    Mirrors the split layout of ``.env.example``: ``$INTERMEDIATE`` and ``$PROCESSED`` are sibling
+    directories rather than the same root, so the cohort this helper writes uses:
+
+        {data_dir}/data/{split}/{shard_name}.parquet     <- event shards ($INTERMEDIATE)
+        {codes_dir}/metadata/codes.parquet               <- query universe ($PROCESSED)
+
+    Returns ``(data_dir, codes_dir)`` as two distinct paths so the tests exercise the separation.
     """
-    data_dir = tmp_path / "cohort"
+    data_dir = tmp_path / "intermediate"
     split_dir = data_dir / "data" / split
     split_dir.mkdir(parents=True, exist_ok=True)
     events.write_parquet(split_dir / f"{shard_name}.parquet")
 
-    metadata_dir = data_dir / "metadata"
+    codes_dir = tmp_path / "processed"
+    metadata_dir = codes_dir / "metadata"
     metadata_dir.mkdir(parents=True, exist_ok=True)
     pl.DataFrame({"code": query_codes}).write_parquet(metadata_dir / "codes.parquet")
-    return data_dir
+    return data_dir, codes_dir
 
 
 class TestRunWorkerPipeline:
     def test_writes_all_three_artifacts(self, tmp_path, synthetic_events, synthetic_query_codes):
-        data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         labels_fp = run_worker(
             data_dir=data_dir,
+            codes_dir=codes_dir,
             out_dir=out_dir,
             split="train",
             input_shard="0",
@@ -534,10 +540,11 @@ class TestRunWorkerPipeline:
 
     def test_rerun_is_idempotent_noop(self, tmp_path, synthetic_events, synthetic_query_codes):
         """Second invocation with identical args returns ``None`` and leaves outputs untouched."""
-        data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         kwargs = {
             "data_dir": data_dir,
+            "codes_dir": codes_dir,
             "out_dir": out_dir,
             "split": "train",
             "input_shard": "0",
@@ -564,10 +571,11 @@ class TestRunWorkerPipeline:
         this test only checked that the tasks file existed and was non-None, which would pass even if
         overwrite were silently ignored (Copilot review on #41).
         """
-        data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         kwargs = {
             "data_dir": data_dir,
+            "codes_dir": codes_dir,
             "out_dir": out_dir,
             "split": "train",
             "input_shard": "0",
@@ -604,10 +612,11 @@ class TestRunWorkerPipeline:
 
     def test_task_shard_axis_changes_tasks(self, tmp_path, synthetic_events, synthetic_query_codes):
         """Fixing ``input_shard`` and varying ``task_shard`` must change the sampled tasks."""
-        data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         kwargs = {
             "data_dir": data_dir,
+            "codes_dir": codes_dir,
             "out_dir": out_dir,
             "split": "train",
             "input_shard": "0",
@@ -634,7 +643,9 @@ class TestRunWorkerPipeline:
         each shard's worker draws independent contexts (otherwise parallelism across shards
         would be statistically wasteful).
         """
-        data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes, shard_name="0")
+        data_dir, codes_dir = _write_fake_cohort(
+            tmp_path, synthetic_events, synthetic_query_codes, shard_name="0"
+        )
         # Write a second shard with the same events under a different basename so run_worker has
         # something to load.
         (data_dir / "data" / "train" / "1.parquet").write_bytes(
@@ -644,6 +655,7 @@ class TestRunWorkerPipeline:
         out_dir = tmp_path / "out"
         kwargs = {
             "data_dir": data_dir,
+            "codes_dir": codes_dir,
             "out_dir": out_dir,
             "split": "train",
             "task_shard": 0,
@@ -683,10 +695,11 @@ class TestRunWorkerPipeline:
         artifact filename only keys on ``(split, input_shard, task_shard)``, so changing
         ``seed``, ``n_tasks``, etc. would silently reuse the old output.
         """
-        data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         kwargs = {
             "data_dir": data_dir,
+            "codes_dir": codes_dir,
             "out_dir": out_dir,
             "split": "train",
             "input_shard": "0",
@@ -712,10 +725,11 @@ class TestRunWorkerPipeline:
 
     def test_config_mismatch_raises_on_seed_change(self, tmp_path, synthetic_events, synthetic_query_codes):
         """Changing only ``seed`` is the other obvious way to produce silent staleness."""
-        data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         kwargs = {
             "data_dir": data_dir,
+            "codes_dir": codes_dir,
             "out_dir": out_dir,
             "split": "train",
             "input_shard": "0",
@@ -736,10 +750,11 @@ class TestRunWorkerPipeline:
         This preserves the pre-seeding workflow: a user drops tasks.json by hand (without any
         corresponding meta file) and reruns; the sampler loads the preseeded tasks verbatim.
         """
-        data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         kwargs = {
             "data_dir": data_dir,
+            "codes_dir": codes_dir,
             "out_dir": out_dir,
             "split": "train",
             "input_shard": "0",
@@ -769,9 +784,42 @@ class TestRunWorkerPipeline:
         skipped2 = run_worker(**{**kwargs, "n_tasks": 99})
         assert skipped2 is None
 
+    def test_codes_dir_is_read_from_a_distinct_root(self, tmp_path, synthetic_events, synthetic_query_codes):
+        """Smoke test that codes_dir is actually read *from* codes_dir, not data_dir.
+
+        The ``.env.example`` layout has ``$INTERMEDIATE`` (event shards) and ``$PROCESSED``
+        (metadata/codes.parquet) as sibling directories; the sampler must not conflate them.
+        ``_write_fake_cohort`` writes codes.parquet *only* under ``codes_dir`` — so if
+        ``run_worker`` were still reading codes from ``data_dir`` it would raise ``FileNotFoundError``.
+        """
+        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        # Precondition: codes.parquet lives *only* under codes_dir, not data_dir.
+        assert not (data_dir / "metadata" / "codes.parquet").exists()
+        assert (codes_dir / "metadata" / "codes.parquet").exists()
+
+        out_dir = tmp_path / "out"
+        labels_fp = run_worker(
+            data_dir=data_dir,
+            codes_dir=codes_dir,
+            out_dir=out_dir,
+            split="train",
+            input_shard="0",
+            task_shard=0,
+            seed=1,
+            n_tasks=4,
+            contexts_per_task=1,
+            duration_min=10,
+            duration_max=365,
+            min_context_per_subject=5,
+        )
+        assert labels_fp is not None
+        labels = pl.read_parquet(labels_fp)
+        # The queries in the output must all come from codes.parquet under codes_dir.
+        assert set(labels["query"].to_list()) <= set(synthetic_query_codes)
+
     def test_preseeded_tasks_are_honored(self, tmp_path, synthetic_events, synthetic_query_codes):
         """Dropping a ``tasks.json`` on disk before run → the sampler uses it verbatim."""
-        data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
 
         preset = [TaskSpec("ICD//A01", 30), TaskSpec("MED//D04", 60)]
@@ -780,6 +828,7 @@ class TestRunWorkerPipeline:
 
         labels_fp = run_worker(
             data_dir=data_dir,
+            codes_dir=codes_dir,
             out_dir=out_dir,
             split="train",
             input_shard="0",
@@ -800,6 +849,49 @@ class TestRunWorkerPipeline:
 # ---------------------------------------------------------------------------
 # End-to-end: sampler output → EveryQueryPytorchDataset → model forward
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# main() path resolution (env fallback + dotenv)
+# ---------------------------------------------------------------------------
+
+
+class TestResolvePath:
+    """``_resolve_path`` is how ``main()`` threads ``cfg.data_dir`` / ``$INTERMEDIATE`` / required.
+
+    The three path roots (``data_dir``, ``codes_dir``, ``out_dir``) share this resolution logic,
+    which is why it was factored out.  Directly exercising the helper lets us pin the fallback
+    matrix without spinning up a full Hydra run per case.
+    """
+
+    def test_explicit_cfg_value_wins(self, monkeypatch):
+        monkeypatch.setenv("MY_VAR", "/from/env")
+        result = st._resolve_path("/from/cfg", "MY_VAR", "data_dir")
+        assert result == Path("/from/cfg")
+
+    def test_env_fallback_when_cfg_is_none(self, monkeypatch):
+        monkeypatch.setenv("MY_VAR", "/from/env")
+        result = st._resolve_path(None, "MY_VAR", "data_dir")
+        assert result == Path("/from/env")
+
+    def test_raises_when_both_unset(self, monkeypatch):
+        monkeypatch.delenv("MY_VAR", raising=False)
+        with pytest.raises(ValueError, match="data_dir must be set"):
+            st._resolve_path(None, "MY_VAR", "data_dir")
+
+    def test_error_message_mentions_env_var_and_dotenv(self, monkeypatch):
+        monkeypatch.delenv("INTERMEDIATE", raising=False)
+        with pytest.raises(ValueError) as excinfo:
+            st._resolve_path(None, "INTERMEDIATE", "data_dir")
+        msg = str(excinfo.value)
+        assert "INTERMEDIATE" in msg
+        assert ".env" in msg  # dotenv hint
+
+    def test_empty_env_var_is_treated_as_unset(self, monkeypatch):
+        """An explicitly-empty env var should not be taken as a valid path."""
+        monkeypatch.setenv("MY_VAR", "")
+        with pytest.raises(ValueError, match="must be set"):
+            st._resolve_path(None, "MY_VAR", "data_dir")
 
 
 # Subject IDs and prediction times from conftest / simple_static_MEDS.  Duplicated here rather
