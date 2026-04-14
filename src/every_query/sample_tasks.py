@@ -285,7 +285,9 @@ def evaluate_index_df(
 
     Args:
         index_df: Output of ``build_index_df``. Must have columns ``subject_id``, ``prediction_time``,
-            ``query``, ``duration_days`` (``task_id`` is optional and preserved if present).
+            ``query``, ``duration_days``. If ``task_id`` is present it is ignored and dropped from
+            the returned DataFrame — the published schema is intentionally limited to what
+            ``EveryQueryPytorchDataset`` reads.
         events_df: Shard events with columns ``subject_id``, ``time``, ``code``.
         max_time_per_subject: Output of ``compute_max_time_per_subject``.
 
