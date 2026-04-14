@@ -359,9 +359,15 @@ def _read_event_shard(file_path: str | Path) -> pl.DataFrame:
 
 
 def _read_query_codes(data_dir: str | Path) -> list[str]:
-    """Read the universe of query codes from ``{data_dir}/metadata/codes.parquet``."""
+    """Read the universe of query codes from ``{data_dir}/metadata/codes.parquet``.
+
+    The ``.unique()`` result is explicitly sorted because polars' default hash-based unique is
+    order-unstable across distinct DataFrame instances — two calls in the same Python session
+    can return the codes in different orders, which would make ``sample_tasks`` non-deterministic
+    with respect to the tasks seed across workers reading the same metadata file.
+    """
     codes_fp = Path(data_dir) / "metadata" / "codes.parquet"
-    return pl.read_parquet(codes_fp).select("code").unique().to_series().to_list()
+    return pl.read_parquet(codes_fp).select("code").unique().sort("code").to_series().to_list()
 
 
 def save_tasks(tasks: list[TaskSpec], fp: Path) -> None:
