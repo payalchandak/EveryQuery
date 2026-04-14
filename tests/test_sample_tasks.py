@@ -314,6 +314,161 @@ class TestEvaluateAgainstReference:
         result_zero = evaluate_index_df(index_df_zero, events, max_time_df)
         assert result_zero["occurs"].to_list() == [False]
 
+    def test_unknown_subject_is_treated_as_censored(self, caplog):
+        """An index_df row referencing a subject absent from events_df must not produce null booleans — the
+        torch collate can't consume nulls.
+
+        Policy: treat missing-subject rows as
+        censored (boolean_value=True, occurs=False) and emit a warning so the condition is
+        visible to the user.
+        """
+        events = pl.DataFrame(
+            {
+                "subject_id": [1],
+                "time": [datetime(2020, 1, 1)],
+                "code": ["A"],
+            }
+        ).with_columns(pl.col("time").cast(pl.Datetime("us")))
+
+        index_df = pl.DataFrame(
+            {
+                # Subject 1 is present; subject 2 is not.
+                "subject_id": [1, 2],
+                "prediction_time": [datetime(2020, 1, 1), datetime(2020, 1, 1)],
+                "query": ["A", "A"],
+                "duration_days": [10, 10],
+            }
+        ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
+
+        max_time_df = compute_max_time_per_subject(events)
+        with caplog.at_level("WARNING", logger="every_query.sample_tasks"):
+            result = evaluate_index_df(index_df, events, max_time_df)
+
+        # Neither row produces a null label.
+        assert result["boolean_value"].null_count() == 0
+        assert result["occurs"].null_count() == 0
+
+        # Subject 2 (unknown) → censored, not occurred.
+        unknown = result.filter(pl.col("subject_id") == 2)
+        assert unknown["boolean_value"].to_list() == [True]
+        assert unknown["occurs"].to_list() == [False]
+
+        # Warning was emitted with a count.
+        assert any("not present in events_df" in record.message for record in caplog.records), (
+            f"expected unknown-subject warning, got: {[r.message for r in caplog.records]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# I/O helpers: dtype normalization and atomic writes
+# ---------------------------------------------------------------------------
+
+
+class TestReadEventShardDtypeNormalization:
+    """``_read_event_shard`` must normalize ``code`` → Utf8 and ``time`` → Datetime(us) regardless of how the
+    source parquet encoded them, so ``evaluate_index_df``'s joins stay type-stable."""
+
+    def test_categorical_code_is_normalized_to_utf8(self, tmp_path):
+        fp = tmp_path / "0.parquet"
+        df = pl.DataFrame(
+            {
+                "subject_id": [1, 2],
+                "time": [datetime(2020, 1, 1), datetime(2020, 2, 1)],
+                "code": pl.Series(["A", "B"], dtype=pl.Categorical),
+                "numeric_value": [1.0, 2.0],  # extra column to test `.select` doesn't blow up
+            }
+        )
+        df.write_parquet(fp)
+
+        out = st._read_event_shard(fp)
+        assert out.schema["code"] == pl.Utf8
+        assert out.schema["time"] == pl.Datetime("us")
+        assert set(out.columns) == {"subject_id", "time", "code"}
+        assert sorted(out["code"].to_list()) == ["A", "B"]
+
+    def test_millisecond_time_is_normalized_to_microseconds(self, tmp_path):
+        fp = tmp_path / "0.parquet"
+        df = pl.DataFrame(
+            {
+                "subject_id": [1],
+                "time": pl.Series([datetime(2020, 1, 1)], dtype=pl.Datetime("ms")),
+                "code": ["A"],
+            }
+        )
+        df.write_parquet(fp)
+
+        out = st._read_event_shard(fp)
+        assert out.schema["time"] == pl.Datetime("us")
+
+    def test_normalized_shard_joins_correctly_in_evaluate(self, tmp_path):
+        """End-to-end: a Categorical-coded shard must produce correct labels when fed through
+        ``_read_event_shard`` + ``evaluate_index_df``."""
+        fp = tmp_path / "0.parquet"
+        pl.DataFrame(
+            {
+                "subject_id": [1, 1, 1],
+                "time": [datetime(2020, 1, 1), datetime(2020, 1, 2), datetime(2021, 1, 1)],
+                "code": pl.Series(["A", "A", "B"], dtype=pl.Categorical),
+            }
+        ).write_parquet(fp)
+
+        events = st._read_event_shard(fp)
+        index_df = pl.DataFrame(
+            {
+                "subject_id": [1],
+                "prediction_time": [datetime(2020, 1, 1)],
+                "query": ["A"],
+                "duration_days": [10],
+            }
+        ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
+
+        result = evaluate_index_df(index_df, events, compute_max_time_per_subject(events))
+        # Uncensored (max_time = 2021-01-01 is way past prediction + 10d) and the next "A"
+        # event is 2020-01-02, which is strictly within the window → occurs=True.
+        assert result["boolean_value"].to_list() == [False]
+        assert result["occurs"].to_list() == [True]
+
+
+class TestAtomicWriteConcurrency:
+    """Atomic-write helpers must use unique tmp filenames so two concurrent writers to the same target don't
+    clobber each other.
+
+    We can't directly test a race condition, but we can assert the tmp filename differs across invocations
+    with the same target.
+    """
+
+    def test_unique_tmp_path_changes_between_calls(self, tmp_path):
+        fp = tmp_path / "target.parquet"
+        a = st._unique_tmp_path(fp)
+        b = st._unique_tmp_path(fp)
+        assert a != b, "two _unique_tmp_path calls for the same target must return different names"
+        assert a.parent == fp.parent
+        assert b.parent == fp.parent
+        # Both have the target basename as a prefix so they sit alongside the target.
+        assert fp.name in a.name
+        assert fp.name in b.name
+        # Clean up the placeholder tmpfiles mkstemp creates.
+        a.unlink(missing_ok=True)
+        b.unlink(missing_ok=True)
+
+    def test_atomic_write_text_round_trip(self, tmp_path):
+        fp = tmp_path / "out.json"
+        st._atomic_write_text(fp, '{"hello": "world"}')
+        assert fp.read_text() == '{"hello": "world"}'
+        # No orphan tmpfiles should linger after a successful write.
+        orphans = [p for p in tmp_path.iterdir() if p.name != "out.json"]
+        assert orphans == []
+
+    def test_atomic_write_parquet_round_trip(self, tmp_path):
+        fp = tmp_path / "out.parquet"
+        df = pl.DataFrame({"a": [1, 2, 3]})
+        st._atomic_write_parquet(df, fp)
+        assert fp.exists()
+        loaded = pl.read_parquet(fp)
+        assert loaded.equals(df)
+        orphans = [p for p in tmp_path.iterdir() if p.name != "out.parquet"]
+        assert orphans == []
+
 
 # ---------------------------------------------------------------------------
 # run_worker: artifact-level pipeline tests

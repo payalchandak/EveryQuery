@@ -30,6 +30,8 @@ Design decisions (see issue #33):
 import hashlib
 import json
 import logging
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -323,9 +325,24 @@ def evaluate_index_df(
     )
     joined = joined.join(max_time_per_subject, on="subject_id", how="left")
 
+    # Rows whose subject is not present in max_time_per_subject (typically a pre-seeded or
+    # hand-edited index_df referencing subjects outside this shard) come out of the left join
+    # with max_time=null.  A naïve comparison would produce null booleans, which would break
+    # downstream torch conversion.  Policy: treat unknown-subject rows as fully censored
+    # (boolean_value=True, occurs=False) — the same outcome a real "no future data observed"
+    # row would produce.  We log a warning so the condition is visible.
+    n_unknown = joined.filter(pl.col("max_time").is_null()).height
+    if n_unknown > 0:
+        logger.warning(
+            "%d index_df row(s) reference subjects not present in events_df; "
+            "they will be labeled as censored (boolean_value=True, occurs=False).",
+            n_unknown,
+        )
+
     duration_expr = pl.duration(days=pl.col("duration_days"))
     window_end = pl.col("prediction_time") + duration_expr
-    censored = window_end > pl.col("max_time")
+    # `(window_end > max_time).fill_null(True)` resolves the missing-subject case to censored.
+    censored = (window_end > pl.col("max_time")).fill_null(True)
     event_in_window = pl.col("time").is_not_null() & (pl.col("time") < window_end)
 
     return (
@@ -344,15 +361,28 @@ def evaluate_index_df(
 
 
 def _read_event_shard(file_path: str | Path) -> pl.DataFrame:
-    """Read a shard parquet and return events as ``(subject_id, time, code)`` sorted by subject+time.
+    """Read a shard parquet and return ``(subject_id, time, code)`` sorted by subject+time.
 
-    Unlike ``tasks.read_event_shard``, this keeps ``code`` as ``Utf8`` rather than casting to
-    ``Categorical`` — the sampler joins events against ``query`` (which is a plain Utf8 string column
-    in the index_df), and a mixed Categorical/Utf8 join would error.
+    The parquet schema is normalized explicitly so the returned frame is type-stable regardless
+    of how the source shard encoded strings or timestamps:
+
+    - ``code`` is cast to ``pl.Utf8`` so it compares against the ``query`` column of ``index_df``
+      (also ``Utf8``) in ``evaluate_index_df``'s ``join_asof(by=["subject_id","query"])``.  Mixed
+      ``Categorical``/``Utf8`` or ``<integer vocab index>``/``Utf8`` joins would either raise or
+      silently produce zero matches.  Some upstream stages (e.g. ``tasks.read_event_shard``) cast
+      to ``Categorical``; post-tokenization stages store codes as integer vocab indices.  This
+      helper shouldn't be coupled to either.
+    - ``time`` is cast to ``pl.Datetime("us")`` because ``evaluate_index_df`` implements strict
+      ``>`` via a ``+1µs`` shift on the asof key.  At millisecond precision that shift would
+      round to zero and silently turn the comparison into ``>=``.
     """
     return (
         pl.read_parquet(file_path)
         .select(["subject_id", "time", "code"])
+        .with_columns(
+            pl.col("time").cast(pl.Datetime("us")),
+            pl.col("code").cast(pl.Utf8),
+        )
         .unique()
         .sort(["subject_id", "time"])
     )
@@ -370,24 +400,50 @@ def _read_query_codes(data_dir: str | Path) -> list[str]:
     return pl.read_parquet(codes_fp).select("code").unique().sort("code").to_series().to_list()
 
 
-def _atomic_write_text(fp: Path, text: str) -> None:
-    """Write ``text`` to ``fp`` atomically via tmpfile + rename.
+def _unique_tmp_path(fp: Path) -> Path:
+    """Allocate a unique sibling tmpfile next to ``fp``.
 
-    A failed mid-write leaves no partial file on disk — the next invocation will see no cache and regenerate
-    cleanly instead of loading a corrupt one.
+    ``tempfile.mkstemp`` returns a process-unique filename in the target directory, so two
+    workers with the same ``fp`` (e.g. a SLURM array retry racing a still-running original, or
+    a manual rerun while an old job is still going) won't clobber each other's tmpfile.  We
+    close the fd immediately — the caller writes via its own handle — and rely on ``os.replace``
+    at the end to be the atomicity primitive.
     """
     fp.parent.mkdir(parents=True, exist_ok=True)
-    tmp = fp.with_suffix(fp.suffix + ".tmp")
-    tmp.write_text(text)
-    tmp.replace(fp)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{fp.name}.",
+        suffix=".tmp",
+        dir=str(fp.parent),
+    )
+    os.close(fd)
+    return Path(tmp_name)
+
+
+def _atomic_write_text(fp: Path, text: str) -> None:
+    """Write ``text`` to ``fp`` atomically via a unique sibling tmpfile + ``os.replace``.
+
+    A failed mid-write leaves at most an orphan tmpfile; the target ``fp`` either has its
+    previous contents or the fully-written new contents.  Concurrent writers to the same ``fp``
+    don't corrupt each other because the tmp filename is unique per call.
+    """
+    tmp = _unique_tmp_path(fp)
+    try:
+        tmp.write_text(text)
+        os.replace(tmp, fp)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _atomic_write_parquet(df: pl.DataFrame, fp: Path) -> None:
-    """Write ``df`` to ``fp`` atomically via tmpfile + rename."""
-    fp.parent.mkdir(parents=True, exist_ok=True)
-    tmp = fp.with_suffix(fp.suffix + ".tmp")
-    df.write_parquet(tmp)
-    tmp.replace(fp)
+    """Write ``df`` to ``fp`` atomically via a unique sibling tmpfile + ``os.replace``."""
+    tmp = _unique_tmp_path(fp)
+    try:
+        df.write_parquet(tmp)
+        os.replace(tmp, fp)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def save_tasks(tasks: list[TaskSpec], fp: Path) -> None:
