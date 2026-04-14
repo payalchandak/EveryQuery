@@ -403,6 +403,12 @@ class TestRunWorkerPipeline:
         assert first.read_bytes() == first_bytes  # untouched
 
     def test_overwrite_regenerates(self, tmp_path, synthetic_events, synthetic_query_codes):
+        """``overwrite=True`` must actually regenerate; ``overwrite=False`` must not.
+
+        Captures bytes before and after each rerun and asserts the invariant directly — the earlier version of
+        this test only checked that the tasks file existed and was non-None, which would pass even if
+        overwrite were silently ignored (Copilot review on #41).
+        """
         data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         kwargs = {
@@ -418,13 +424,28 @@ class TestRunWorkerPipeline:
             "min_context_per_subject": 5,
         }
         first = run_worker(seed=1, **kwargs)
+        assert first is not None
+
+        tasks_path = out_dir / "_artifacts" / "tasks" / "train" / "0__0000.json"
+        first_label_bytes = first.read_bytes()
+        first_task_bytes = tasks_path.read_bytes()
+
+        # No-op rerun with same seed: bytes untouched.
+        skipped = run_worker(seed=1, **kwargs)
+        assert skipped is None
+        assert first.read_bytes() == first_label_bytes
+        assert tasks_path.read_bytes() == first_task_bytes
+
+        # Overwrite with a different seed: both labels and tasks must change.
         second = run_worker(seed=2, overwrite=True, **kwargs)
-        # Different seeds + overwrite → different labels file (tasks drawn differently).
-        assert first is not None and second is not None
+        assert second is not None
         assert first == second  # same path
-        # The underlying bytes should change because the tasks re-sampled.
-        first_tasks = (out_dir / "_artifacts" / "tasks" / "train" / "0__0000.json").read_text()
-        assert first_tasks is not None  # tasks file was regenerated
+        assert second.read_bytes() != first_label_bytes, (
+            "overwrite=True with a new seed did not change the labels parquet"
+        )
+        assert tasks_path.read_bytes() != first_task_bytes, (
+            "overwrite=True with a new seed did not change the tasks JSON"
+        )
 
     def test_task_shard_axis_changes_tasks(self, tmp_path, synthetic_events, synthetic_query_codes):
         """Fixing ``input_shard`` and varying ``task_shard`` must change the sampled tasks."""
@@ -450,10 +471,13 @@ class TestRunWorkerPipeline:
         assert tasks_a != tasks_b
 
     def test_input_shard_axis_preserves_tasks(self, tmp_path, synthetic_events, synthetic_query_codes):
-        """Fixing ``task_shard`` and varying ``input_shard`` must keep the same task list.
+        """Fixing ``task_shard`` and varying ``input_shard`` must keep the same task list but still draw
+        *different* contexts.
 
         This is what enables ``hydra -m input_shard=range(K)`` to evaluate *the same* sampled tasks
-        across every shard — a key property for producing a coherent PT dataset.
+        across every shard — a key property for producing a coherent PT dataset — while ensuring
+        each shard's worker draws independent contexts (otherwise parallelism across shards
+        would be statistically wasteful).
         """
         data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes, shard_name="0")
         # Write a second shard with the same events under a different basename so run_worker has
@@ -478,9 +502,117 @@ class TestRunWorkerPipeline:
         run_worker(input_shard="0", **kwargs)
         run_worker(input_shard="1", **kwargs)
 
+        # Same tasks across input shards.
         tasks_0 = (out_dir / "_artifacts" / "tasks" / "train" / "0__0000.json").read_text()
         tasks_1 = (out_dir / "_artifacts" / "tasks" / "train" / "1__0000.json").read_text()
-        assert tasks_0 == tasks_1
+        assert tasks_0 == tasks_1, "tasks should be identical across input_shards at fixed task_shard"
+
+        # ... but the sampled context *pairs* must differ, since the context seed depends on
+        # input_shard.  Compare the (subject_id, prediction_time) multiset rather than the raw
+        # parquet bytes to avoid flakiness from parquet metadata / row-order.
+        index_0 = pl.read_parquet(out_dir / "_artifacts" / "index" / "train" / "0__0000.parquet")
+        index_1 = pl.read_parquet(out_dir / "_artifacts" / "index" / "train" / "1__0000.parquet")
+        pairs_0 = set(index_0.select("subject_id", "prediction_time").iter_rows())
+        pairs_1 = set(index_1.select("subject_id", "prediction_time").iter_rows())
+        assert pairs_0 != pairs_1, (
+            "contexts should differ across input_shards at fixed task_shard "
+            "(contexts_seed depends on both axes)"
+        )
+
+    def test_config_mismatch_raises_without_overwrite(
+        self, tmp_path, synthetic_events, synthetic_query_codes
+    ):
+        """A second run with a different sampling config must not silently reuse stale artifacts.
+
+        Catches the failure mode Copilot flagged on #41: without a meta sidecar check, the
+        artifact filename only keys on ``(split, input_shard, task_shard)``, so changing
+        ``seed``, ``n_tasks``, etc. would silently reuse the old output.
+        """
+        data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        out_dir = tmp_path / "out"
+        kwargs = {
+            "data_dir": data_dir,
+            "out_dir": out_dir,
+            "split": "train",
+            "input_shard": "0",
+            "task_shard": 0,
+            "seed": 1,
+            "contexts_per_task": 1,
+            "duration_min": 10,
+            "duration_max": 365,
+            "min_context_per_subject": 5,
+        }
+        first = run_worker(n_tasks=16, **kwargs)
+        assert first is not None
+
+        # Changing n_tasks without overwrite must fail loudly.
+        with pytest.raises(ValueError, match="worker config"):
+            run_worker(n_tasks=32, **kwargs)
+
+        # overwrite=True bypasses the check and actually regenerates.
+        second = run_worker(n_tasks=32, overwrite=True, **kwargs)
+        assert second is not None
+        labels = pl.read_parquet(second)
+        assert labels.height == 32, "overwrite with n_tasks=32 should produce 32 labels"
+
+    def test_config_mismatch_raises_on_seed_change(self, tmp_path, synthetic_events, synthetic_query_codes):
+        """Changing only ``seed`` is the other obvious way to produce silent staleness."""
+        data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        out_dir = tmp_path / "out"
+        kwargs = {
+            "data_dir": data_dir,
+            "out_dir": out_dir,
+            "split": "train",
+            "input_shard": "0",
+            "task_shard": 0,
+            "n_tasks": 8,
+            "contexts_per_task": 1,
+            "duration_min": 10,
+            "duration_max": 365,
+            "min_context_per_subject": 5,
+        }
+        run_worker(seed=1, **kwargs)
+        with pytest.raises(ValueError, match="seed"):
+            run_worker(seed=999, **kwargs)
+
+    def test_missing_meta_is_tolerated(self, tmp_path, synthetic_events, synthetic_query_codes):
+        """Legacy or hand-injected artifacts without a meta sidecar must still load.
+
+        This preserves the pre-seeding workflow: a user drops tasks.json by hand (without any
+        corresponding meta file) and reruns; the sampler loads the preseeded tasks verbatim.
+        """
+        data_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        out_dir = tmp_path / "out"
+        kwargs = {
+            "data_dir": data_dir,
+            "out_dir": out_dir,
+            "split": "train",
+            "input_shard": "0",
+            "task_shard": 0,
+            "seed": 1,
+            "n_tasks": 8,
+            "contexts_per_task": 1,
+            "duration_min": 10,
+            "duration_max": 365,
+            "min_context_per_subject": 5,
+        }
+        # First run: creates artifacts and meta.
+        first = run_worker(**kwargs)
+        assert first is not None
+
+        # Delete the meta sidecar to simulate a legacy / pre-meta artifact.
+        run_meta_fp = out_dir / "_artifacts" / "runs" / "train" / "0__0000.json"
+        assert run_meta_fp.exists()
+        run_meta_fp.unlink()
+
+        # Rerun with the same config: should succeed (labels already exist, no-op path).
+        skipped = run_worker(**kwargs)
+        assert skipped is None
+
+        # Rerun with a changed config: should also succeed (no meta to validate against);
+        # labels already exist so it's a no-op regardless.
+        skipped2 = run_worker(**{**kwargs, "n_tasks": 99})
+        assert skipped2 is None
 
     def test_preseeded_tasks_are_honored(self, tmp_path, synthetic_events, synthetic_query_codes):
         """Dropping a ``tasks.json`` on disk before run → the sampler uses it verbatim."""

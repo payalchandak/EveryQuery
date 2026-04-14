@@ -370,14 +370,34 @@ def _read_query_codes(data_dir: str | Path) -> list[str]:
     return pl.read_parquet(codes_fp).select("code").unique().sort("code").to_series().to_list()
 
 
-def save_tasks(tasks: list[TaskSpec], fp: Path) -> None:
-    """Serialize a task list to JSON with one entry per task."""
+def _atomic_write_text(fp: Path, text: str) -> None:
+    """Write ``text`` to ``fp`` atomically via tmpfile + rename.
+
+    A failed mid-write leaves no partial file on disk — the next invocation will see no cache and regenerate
+    cleanly instead of loading a corrupt one.
+    """
     fp.parent.mkdir(parents=True, exist_ok=True)
-    fp.write_text(
+    tmp = fp.with_suffix(fp.suffix + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(fp)
+
+
+def _atomic_write_parquet(df: pl.DataFrame, fp: Path) -> None:
+    """Write ``df`` to ``fp`` atomically via tmpfile + rename."""
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    tmp = fp.with_suffix(fp.suffix + ".tmp")
+    df.write_parquet(tmp)
+    tmp.replace(fp)
+
+
+def save_tasks(tasks: list[TaskSpec], fp: Path) -> None:
+    """Serialize a task list to JSON with one entry per task (atomic)."""
+    _atomic_write_text(
+        fp,
         json.dumps(
             [{"code": t.code, "duration_days": t.duration_days} for t in tasks],
             indent=2,
-        )
+        ),
     )
 
 
@@ -397,13 +417,67 @@ def _artifact_paths(
     split: str,
     input_shard: str,
     task_shard: int,
-) -> tuple[Path, Path, Path]:
-    """Resolve the ``(tasks_fp, index_fp, labels_fp)`` triple for one worker."""
+) -> tuple[Path, Path, Path, Path]:
+    """Resolve the ``(tasks_fp, index_fp, labels_fp, run_meta_fp)`` quadruple for one worker."""
     worker_id = f"{input_shard}__{task_shard:04d}"
     tasks_fp = out_dir / "_artifacts" / "tasks" / split / f"{worker_id}.json"
     index_fp = out_dir / "_artifacts" / "index" / split / f"{worker_id}.parquet"
     labels_fp = out_dir / split / f"{worker_id}.parquet"
-    return tasks_fp, index_fp, labels_fp
+    run_meta_fp = out_dir / "_artifacts" / "runs" / split / f"{worker_id}.json"
+    return tasks_fp, index_fp, labels_fp, run_meta_fp
+
+
+def _build_run_meta(
+    seed: int,
+    n_tasks: int,
+    contexts_per_task: int,
+    duration_min: int,
+    duration_max: int,
+    min_context_per_subject: int,
+) -> dict[str, int]:
+    """Capture the sampling parameters that must match for a cached worker's artifacts to be reusable.
+
+    The file-level identity of the worker (``split``, ``input_shard``, ``task_shard``) is encoded
+    in the output path itself and therefore intentionally omitted here — two artifacts with different
+    worker identities can never collide on disk, so comparing them here would be redundant.
+    """
+    return {
+        "seed": int(seed),
+        "n_tasks": int(n_tasks),
+        "contexts_per_task": int(contexts_per_task),
+        "duration_min": int(duration_min),
+        "duration_max": int(duration_max),
+        "min_context_per_subject": int(min_context_per_subject),
+    }
+
+
+def _validate_run_meta(run_meta_fp: Path, current: dict[str, int]) -> None:
+    """Raise ``ValueError`` if an on-disk worker meta file exists and disagrees with ``current``.
+
+    Absent meta is tolerated: legacy artifacts from before the meta sidecar, or hand-pre-seeded
+    tasks/index files dropped by a user debugging the pipeline, have no sidecar to validate against
+    and are assumed to be the user's intent.  Mismatched meta is a hard failure — the whole point
+    of the sidecar is to prevent silent stale-artifact reuse.
+    """
+    if not run_meta_fp.exists():
+        return
+    on_disk = json.loads(run_meta_fp.read_text())
+    if on_disk == current:
+        return
+    diff_lines = []
+    all_keys = sorted(set(on_disk) | set(current))
+    for key in all_keys:
+        on_disk_val = on_disk.get(key, "<missing>")
+        current_val = current.get(key, "<missing>")
+        if on_disk_val != current_val:
+            diff_lines.append(f"  {key}: on_disk={on_disk_val!r}, current={current_val!r}")
+    raise ValueError(
+        "Refusing to reuse cached sampler artifacts: the worker config on disk at "
+        f"{run_meta_fp} differs from the requested config:\n"
+        + "\n".join(diff_lines)
+        + "\nPass overwrite=true to regenerate this worker's artifacts, "
+        "or delete the _artifacts/ subdirectory if you want a clean run."
+    )
 
 
 def run_worker(
@@ -426,11 +500,33 @@ def run_worker(
     labeled parquet are each written on first run and loaded (without resampling) on subsequent
     runs. Set ``overwrite=True`` to force regeneration.
 
+    A per-worker meta sidecar at ``_artifacts/runs/{split}/{worker_id}.json`` captures the
+    sampling parameters the cached artifacts were generated with.  On every non-``overwrite`` rerun
+    those parameters are compared against the requested parameters and any mismatch raises
+    ``ValueError`` rather than silently reusing stale artifacts.  Missing meta (e.g. legacy
+    artifacts or hand-preseeded tasks.json) is tolerated.
+
     Returns:
-        The path of the labeled parquet, or ``None`` if the labels already existed and
-        ``overwrite=False``.
+        The path of the labeled parquet, or ``None`` if the labels already existed, the meta
+        sidecar matched the current config, and ``overwrite=False``.
+
+    Raises:
+        ValueError: If cached artifacts exist alongside a meta sidecar whose recorded config
+            disagrees with the requested config and ``overwrite`` is False.
     """
-    tasks_fp, index_fp, labels_fp = _artifact_paths(out_dir, split, input_shard, task_shard)
+    tasks_fp, index_fp, labels_fp, run_meta_fp = _artifact_paths(out_dir, split, input_shard, task_shard)
+    current_meta = _build_run_meta(
+        seed=seed,
+        n_tasks=n_tasks,
+        contexts_per_task=contexts_per_task,
+        duration_min=duration_min,
+        duration_max=duration_max,
+        min_context_per_subject=min_context_per_subject,
+    )
+
+    if not overwrite:
+        # Reject cached artifacts if their on-disk config disagrees with what we were asked for.
+        _validate_run_meta(run_meta_fp, current_meta)
 
     if labels_fp.exists() and not overwrite:
         logger.info("Labels already exist at %s, skipping.", labels_fp)
@@ -471,17 +567,21 @@ def run_worker(
             seed=contexts_seed,
         )
         index_df = build_index_df(tasks, contexts)
-        index_fp.parent.mkdir(parents=True, exist_ok=True)
-        index_df.write_parquet(index_fp)
+        _atomic_write_parquet(index_df, index_fp)
         logger.info("Wrote %d index rows to %s", index_df.height, index_fp)
 
     # Stage 3: labels
     max_time_df = compute_max_time_per_subject(events_df)
     labeled = evaluate_index_df(index_df, events_df, max_time_df)
-    labels_fp.parent.mkdir(parents=True, exist_ok=True)
-    # Downstream MEDS dataloader does not use task_id; drop it from the published output.
-    labeled.write_parquet(labels_fp)
+    # Downstream MEDS dataloader does not use task_id; it is intentionally absent from the
+    # published schema.
+    _atomic_write_parquet(labeled, labels_fp)
     logger.info("Wrote %d labeled rows to %s", labeled.height, labels_fp)
+
+    # Persist the meta sidecar last so that a crash partway through leaves the cache in a state
+    # where the next rerun will detect an incomplete artifact set (labels missing) and redo the
+    # work, rather than trusting a meta that points at nonexistent artifacts.
+    _atomic_write_text(run_meta_fp, json.dumps(current_meta, indent=2, sort_keys=True))
     return labels_fp
 
 
