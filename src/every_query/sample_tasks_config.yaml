@@ -1,0 +1,34 @@
+# Hydra config for the sampling-first task label generator.
+#
+# Sweep on the cluster with:
+#   python -m every_query.sample_tasks -m input_shard=0,1,2,... task_shard=range(0,K)
+#
+# Defaults pull data paths from the same env vars as tasks.py (see _env.py) so CLI users don't
+# have to repeat them, but tests can inject values directly with `data_dir=/path out_dir=/path`.
+
+data_dir: ${oc.env:INTERMEDIATE,null} # root containing data/{split}/*.parquet and metadata/codes.parquet
+out_dir: ${oc.env:TASK_DIR,null} # where labeled shards and _artifacts/ land
+
+split: train
+input_shard: "0" # basename (without .parquet) of the MEDS shard for this worker
+task_shard: 0 # slice of the task/context axis; vary this under `-m` to cover the task space
+seed: 1
+
+# Per-worker sampling budget.
+n_tasks: 1024
+contexts_per_task: 1
+
+# Task distribution bounds.
+duration_min: 1
+duration_max: 731
+
+# Minimum prior events a subject must have accumulated before a prediction time is valid
+# (mirrors tasks.compute_base_prediction_times).
+min_context_per_subject: 50
+
+overwrite: false
+
+hydra:
+  output_subdir: null
+  job:
+    chdir: false
