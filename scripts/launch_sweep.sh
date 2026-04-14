@@ -44,7 +44,7 @@ echo ""
 echo "Sweep ID: $SWEEP_ID"
 echo "Submitting $NUM_AGENTS agents ..."
 
-for i in $(seq 1 "$NUM_AGENTS"); do
+for _ in $(seq 1 "$NUM_AGENTS"); do
     sbatch scripts/sweep_worker.sh "$SWEEP_ID"
 done
 

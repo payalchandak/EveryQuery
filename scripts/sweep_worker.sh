@@ -30,6 +30,7 @@ echo "Sweep agent on $(hostname) at $(date)"
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 
 set -a
+# shellcheck source=/dev/null
 . ./.env
 set +a
 
