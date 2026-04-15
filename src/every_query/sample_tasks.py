@@ -20,9 +20,9 @@ Design decisions (see issue #33):
   *different* tasks on *different* patients; the full sweep covers the product.
 - **Task composition**: draw ``N`` tasks once and ``N x M`` contexts once, then zip them. Mathematically
   equivalent to ``N`` independent per-task draws under iid sampling, with one seed per side.
-- **Censoring**: computed from ``max_time`` per subject (one groupby up-front per shard). The evaluate
-  function matches ``tasks_reference`` semantics bit-for-bit: censored rows get ``boolean_value=True``
-  and ``occurs=False`` regardless of whether the event actually fired in the window.
+- **Censoring**: computed from ``max_time`` per subject (one groupby up-front per shard). Censored
+  rows get ``boolean_value=True`` and ``occurs=False`` regardless of whether the event actually
+  fired in the window.
 - **Single-pass evaluation**: one ``join_asof(strategy="forward", by=["subject_id","query"])`` across
   the whole ``index_df`` against the events table, regardless of how many distinct codes are present.
 """
@@ -167,7 +167,7 @@ def sample_contexts(
     """Sample ``n`` ``(subject_id, prediction_time)`` contexts iid from the shard with replacement.
 
     A candidate prediction time is any event time at which the subject has already accumulated at
-    least ``min_context_per_subject`` events (mirroring ``tasks.compute_base_prediction_times``).
+    least ``min_context_per_subject`` prior events.
     Sampling is with replacement so the caller can request ``n > n_candidates`` — natural for PT where
     context iid-ness matters more than strict coverage.
 
@@ -265,8 +265,7 @@ def compute_max_time_per_subject(events_df: pl.DataFrame) -> pl.DataFrame:
     """Return a ``(subject_id, max_time)`` DataFrame.
 
     Used once per shard to turn the per-row censoring check into an O(1) lookup inside
-    ``evaluate_index_df``.  Matches the ``record_end_time`` computation in
-    ``tasks_reference.compute_censor_dataframe``.
+    ``evaluate_index_df``.
     """
     return events_df.group_by("subject_id").agg(pl.col("time").max().alias("max_time"))
 
@@ -278,11 +277,11 @@ def evaluate_index_df(
 ) -> pl.DataFrame:
     """Label an index DataFrame with ``(boolean_value, occurs)`` via a single ``join_asof``.
 
-    Semantics (match ``tasks_reference``):
+    Semantics:
         - ``censored = (prediction_time + duration_days) > max_time[subject_id]``
         - ``occurs = (not censored) AND (next event with matching code falls strictly within
           (prediction_time, prediction_time + duration_days))``
-        - ``boolean_value = censored`` (alias expected by ``EveryQueryPytorchDataset``)
+        - ``boolean_value = censored``
 
     The ``>`` on event time is enforced by shifting the asof key by ``+1µs`` since datetimes are
     stored at microsecond precision, which turns ``strategy="forward"``'s ``>=`` into a strict ``>``.
@@ -290,14 +289,13 @@ def evaluate_index_df(
     Args:
         index_df: Output of ``build_index_df``. Must have columns ``subject_id``, ``prediction_time``,
             ``query``, ``duration_days``. If ``task_id`` is present it is ignored and dropped from
-            the returned DataFrame — the published schema is intentionally limited to what
-            ``EveryQueryPytorchDataset`` reads.
+            the output.
         events_df: Shard events with columns ``subject_id``, ``time``, ``code``.
         max_time_per_subject: Output of ``compute_max_time_per_subject``.
 
     Returns:
         DataFrame with columns ``(subject_id, prediction_time, boolean_value, occurs, query,
-        duration_days)`` — the exact schema ``EveryQueryPytorchDataset`` reads.
+        duration_days)``.
     """
     out_schema = {
         "subject_id": index_df.schema.get("subject_id", pl.Int64),
@@ -375,9 +373,8 @@ def _read_event_shard(file_path: str | Path) -> pl.DataFrame:
     - ``code`` is cast to ``pl.Utf8`` so it compares against the ``query`` column of ``index_df``
       (also ``Utf8``) in ``evaluate_index_df``'s ``join_asof(by=["subject_id","query"])``.  Mixed
       ``Categorical``/``Utf8`` or ``<integer vocab index>``/``Utf8`` joins would either raise or
-      silently produce zero matches.  Some upstream stages (e.g. ``tasks.read_event_shard``) cast
-      to ``Categorical``; post-tokenization stages store codes as integer vocab indices.  This
-      helper shouldn't be coupled to either.
+      silently produce zero matches.  Upstream stages may store codes as categoricals or integer
+      vocab indices; casting to ``Utf8`` here avoids coupling to either representation.
     - ``time`` is cast to ``pl.Datetime("us")`` because ``evaluate_index_df`` implements strict
       ``>`` via a ``+1µs`` shift on the asof key.  At millisecond precision that shift would
       round to zero and silently turn the comparison into ``>=``.
@@ -398,14 +395,13 @@ def _read_query_codes(codes_dir: str | Path) -> list[str]:
     """Read the universe of query codes from ``{codes_dir}/metadata/codes.parquet``.
 
     ``codes_dir`` is the metadata root (``$PROCESSED`` in the standard layout), **not** the event
-    shard root (``$INTERMEDIATE``).  ``tasks.py`` reads event shards from ``$INTERMEDIATE/data/...``
-    and query codes from ``$PROCESSED/metadata/codes.parquet`` — these are typically distinct
+    shard root (``$INTERMEDIATE``).  Event shards live under ``$INTERMEDIATE/data/...`` while query
+    codes live under ``$PROCESSED/metadata/codes.parquet``; these are typically distinct
     subdirectories of ``$DATA_DIR`` (see ``.env.example``) and the sampler should not conflate them.
 
     The ``.unique()`` result is explicitly sorted because polars' default hash-based unique is
-    order-unstable across distinct DataFrame instances — two calls in the same Python session
-    can return the codes in different orders, which would make ``sample_tasks`` non-deterministic
-    with respect to the tasks seed across workers reading the same metadata file.
+    order-unstable across distinct DataFrame instances, which would make ``sample_tasks``
+    non-deterministic with respect to the tasks seed across workers reading the same metadata file.
     """
     codes_fp = Path(codes_dir) / "metadata" / "codes.parquet"
     return pl.read_parquet(codes_fp).select("code").unique().sort("code").to_series().to_list()
@@ -656,9 +652,8 @@ def run_worker(
 def _resolve_path(cfg_value: str | None, env_var: str, name: str) -> Path:
     """Prefer an explicit cfg value; fall back to ``$env_var``; otherwise raise.
 
-    Used by ``main`` to resolve the three path roots (``data_dir``, ``out_dir``, ``codes_dir``)
-    that default to the same env vars ``tasks.py`` reads from ``.env``.  Kept factored out so tests
-    can exercise the fallback matrix without spinning up a full Hydra run.
+    Used by ``main`` to resolve the three path roots (``data_dir``, ``out_dir``, ``codes_dir``).
+    Factored out so tests can exercise the fallback matrix without spinning up a full Hydra run.
     """
     if cfg_value is not None:
         return Path(str(cfg_value))
@@ -675,11 +670,10 @@ def _resolve_path(cfg_value: str | None, env_var: str, name: str) -> Path:
 def main(cfg: DictConfig) -> None:
     """Hydra entry point.
 
-    Loads ``.env`` via python-dotenv before resolving paths, to match the repo convention where
-    ``$INTERMEDIATE`` / ``$PROCESSED`` / ``$TASK_DIR`` live in a checked-in-but-gitignored ``.env``
-    file rather than being exported by the user.  See ``tasks.py`` / ``_env.py`` for the same
-    pattern.  Path fallbacks (``cfg.data_dir`` → ``$INTERMEDIATE``, ``cfg.codes_dir`` → ``$PROCESSED``,
-    ``cfg.out_dir`` → ``$TASK_DIR``) match the established layout in ``.env.example``.
+    Loads ``.env`` via python-dotenv before resolving paths, following the repo convention where
+    ``$INTERMEDIATE`` / ``$PROCESSED`` / ``$TASK_DIR`` live in a gitignored ``.env`` file rather
+    than being exported by the user.  Path fallbacks: ``cfg.data_dir`` falls back to
+    ``$INTERMEDIATE``, ``cfg.codes_dir`` to ``$PROCESSED``, ``cfg.out_dir`` to ``$TASK_DIR``.
 
     See :func:`run_worker` for the per-worker pipeline.
     """
