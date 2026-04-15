@@ -1,5 +1,5 @@
 shard_index: ${oc.env:SLURM_ARRAY_TASK_ID,null}
-durations: null  # explicit list of durations in days, e.g. [30, 90, 180, 365]. If null, samples n_durations.
+durations: null # explicit list of durations in days, e.g. [30, 90, 180, 365]. If null, samples n_durations.
 n_durations: 200
 duration_seed: 140799
 min_context: 50

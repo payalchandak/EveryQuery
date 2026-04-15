@@ -17,7 +17,7 @@ jobs:
       - name: Setup package
         uses: ./.github/actions/setup
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Run pre-commits
         run: uv run pre-commit run --all-files --show-diff-on-failure

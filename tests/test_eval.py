@@ -1,6 +1,7 @@
 """Tests for eval.py: _setup_model, _run_test, _run_predict."""
 
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import polars as pl
@@ -190,7 +191,7 @@ def run_test_deps(tmp_path):
 
 
 class TestRunTestOutputSchema:
-    EXPECTED_COLUMNS = {
+    EXPECTED_COLUMNS: ClassVar[set[str]] = {
         "model",
         "duration_days",
         "code",
@@ -533,7 +534,7 @@ class TestRunPredictRowGeneration:
 class TestMultiCheckpointLoop:
     """Tests for evaluating multiple checkpoints from the same run directory."""
 
-    CKPT_NAMES = ["epoch=0-step=100", "epoch=0-step=200", "epoch=0-step=300"]
+    CKPT_NAMES: ClassVar[list[str]] = ["epoch=0-step=100", "epoch=0-step=200", "epoch=0-step=300"]
 
     def _make_multi_ckpt_run_dir(self, tmp_path):
         ckpt_locations = [f"checkpoints/{name}.ckpt" for name in self.CKPT_NAMES]
@@ -569,11 +570,19 @@ class TestMultiCheckpointLoop:
     def test_ckpt_names_fallback_to_ckpt_path(self):
         # Simulates the resolution logic from main()
         cfg_with_names = OmegaConf.create({"ckpt_names": ["a", "b"], "ckpt_path": "best"})
-        result = list(cfg_with_names.ckpt_names) if cfg_with_names.get("ckpt_names") else [cfg_with_names.get("ckpt_path")]
+        result = (
+            list(cfg_with_names.ckpt_names)
+            if cfg_with_names.get("ckpt_names")
+            else [cfg_with_names.get("ckpt_path")]
+        )
         assert result == ["a", "b"]
 
         cfg_without_names = OmegaConf.create({"ckpt_names": None, "ckpt_path": "best"})
-        result = list(cfg_without_names.ckpt_names) if cfg_without_names.get("ckpt_names") else [cfg_without_names.get("ckpt_path")]
+        result = (
+            list(cfg_without_names.ckpt_names)
+            if cfg_without_names.get("ckpt_names")
+            else [cfg_without_names.get("ckpt_path")]
+        )
         assert result == ["best"]
 
     def test_all_ckpts_results_in_single_dataframe(self, tmp_path):
@@ -598,5 +607,5 @@ class TestMultiCheckpointLoop:
             all_dfs.append(df)
 
         combined = pl.concat(all_dfs, how="vertical")
-        # 3 ckpts × 2 codes × 2 durations = 12 rows
+        # 3 ckpts x 2 codes x 2 durations = 12 rows
         assert len(combined) == 3 * 2 * 2

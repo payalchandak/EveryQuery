@@ -6,7 +6,7 @@ import os
 import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ _RUN_ID = None
 def run_id():
     global _RUN_ID
     if _RUN_ID is None:
-        _RUN_ID = datetime.now(timezone.utc).strftime("%Y-%m-%d/%H-%M-%S")
+        _RUN_ID = datetime.now(UTC).strftime("%Y-%m-%d/%H-%M-%S")
     return _RUN_ID
 
 

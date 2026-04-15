@@ -37,9 +37,7 @@ def _compute_win_rates(df: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
     pivot = pivot.drop_nulls()
     dropped = before - pivot.height
     if dropped:
-        logger.warning(
-            f"Dropped {dropped}/{before} (code, duration) pairs not covered by every model"
-        )
+        logger.warning(f"Dropped {dropped}/{before} (code, duration) pairs not covered by every model")
 
     models = [c for c in pivot.columns if c not in ("code", "duration_days")]
     n_pairs = pivot.height
@@ -48,7 +46,7 @@ def _compute_win_rates(df: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
     if len(models) < 2:
         raise ValueError(f"Need at least 2 models to compare, got {len(models)}")
 
-    fractions: dict[str, dict[str, float]] = {m: {m2: 0.0 for m2 in models} for m in models}
+    fractions: dict[str, dict[str, float]] = {m: dict.fromkeys(models, 0.0) for m in models}
     for a, b in combinations(models, 2):
         col_a = pivot[a]
         col_b = pivot[b]
@@ -57,9 +55,7 @@ def _compute_win_rates(df: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
         fractions[a][b] = frac_a
         fractions[b][a] = 1.0 - frac_a
 
-    win_matrix = pl.DataFrame(
-        {"model": models, **{m: [fractions[row][m] for row in models] for m in models}}
-    )
+    win_matrix = pl.DataFrame({"model": models, **{m: [fractions[row][m] for row in models] for m in models}})
 
     total_wins = [sum(fractions[m].values()) for m in models]
     win_rate_vals = [w / (len(models) - 1) for w in total_wins]
@@ -89,11 +85,7 @@ def main(cfg: DictConfig) -> None:
         print(f"\n=== Overall win rate ranking ({split}, aggregated across durations) ===")
         print(ranking.with_columns(pl.col("win_rate").round(3)))
         print("\nPairwise win matrix (row beats column):")
-        print(
-            win_matrix.with_columns(
-                [pl.col(c).round(3) for c in win_matrix.columns if c != "model"]
-            )
-        )
+        print(win_matrix.with_columns([pl.col(c).round(3) for c in win_matrix.columns if c != "model"]))
 
     best = ranking.row(0, named=True)
     print(f"\n>>> Best model: {best['model']} (win rate: {best['win_rate']:.3f})")

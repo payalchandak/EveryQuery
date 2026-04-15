@@ -12,7 +12,7 @@ authors = [
 ]
 description = "A framework for training and evaluating foundation models, using the MEDS ecosystem for data processing and PyTorch Lightning for training."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License", # Change if not using MIT license
@@ -74,7 +74,7 @@ Homepage = "https://github.com/payalchandak/EveryQuery"
 Issues = "https://github.com/payalchandak/EveryQuery/issues"
 
 [tool.ruff] # Ruff configuration for linting and formatting
-target-version = "py312"
+target-version = "py311"
 line-length = 110
 extend-exclude = ["docs/index.md"]
 

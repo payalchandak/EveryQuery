@@ -1,0 +1,7 @@
+# One run directory per line. Blank lines and '#' comments are ignored.
+# Each path should point at a directory containing best_model.ckpt,
+# config.yaml, and resolved_config.yaml.
+#
+# Example:
+# /path/to/outputs/eq_run_2026_03_15
+# /path/to/outputs/eq_run_2026_03_20

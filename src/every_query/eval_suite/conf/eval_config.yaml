@@ -2,33 +2,33 @@ defaults:
   - _self_
   - eval_codes: 10000_ID__8db2be6fadf8
 
-# Model run directory (or list of directories). 
+# Model run directory (or list of directories).
 # Paths are rooted at $OUTPUT_DIR so they move with .env across machines
 model_run_dirs:
   - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-43-54 # 256, 22
   - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-54-43 # 1028, 22
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-08/16-38-46/                                                                                     
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-03/00-29-53 #2048,6                                                                       
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-56-55 # 1028, 6                                                                     
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-58-42 # 1028, 12                                                                    
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-04/14-08-24 # 1028, 16                                                                    
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-54-43 # 1028, 22                                                                    
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-03/13-28-12 # 256, 6                                                                      
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-03/12-58-10 # 256, 12                                                                     
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-08/16-38-46/
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-03/00-29-53 #2048,6
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-56-55 # 1028, 6
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-58-42 # 1028, 12
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-04/14-08-24 # 1028, 16
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-54-43 # 1028, 22
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-03/13-28-12 # 256, 6
+  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-03/12-58-10 # 256, 12
   # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-43-55 # 256, 16
-  
+
 #
 # Checkpoints to evaluate within each run dir (names without .ckpt extension)
 # Set to null to just use ckpt_path (single checkpoint)
 ckpt_names:
-  # - "best"  
+  # - "best"
   # - "epoch=0-step=1382"
   # - "epoch=0-step=4146"
   # - "epoch=0-step=6911"
   # - "epoch=0-step=11058"
-  
+
 # Durations (in days) to evaluate at; This must be a list!
-durations: [30,90,180,365,731]
+durations: [30, 90, 180, 365, 731]
 
 index_time_hash: 7573f855c4b050a9d79d57fefd8a139c
 split: held_out

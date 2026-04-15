@@ -49,7 +49,9 @@ def _setup_model(model_run_dir: str | Path, ckpt_name: str | None = None):
     )
     ckpt_path = next((p for p in candidates if p.is_file()), None)
     if ckpt_path is None:
-        raise FileNotFoundError(f"No checkpoint found in {model_run_dir} (tried {[str(p) for p in candidates]})")
+        raise FileNotFoundError(
+            f"No checkpoint found in {model_run_dir} (tried {[str(p) for p in candidates]})"
+        )
     if ckpt_path != candidates[0]:
         logger.warning(f"{candidates[0].name} not found, falling back to {ckpt_path}")
 
@@ -256,7 +258,9 @@ def main(cfg: DictConfig) -> None:
                 logger.info(f"Saved predictions to {out_fp}")
                 logger.info(f"Saved embeddings to {embed_fp}")
             else:
-                test_df = _run_test(cfg, train_cfg, M, trainer, task_set_dir, model_name, durations, ckpt_name)
+                test_df = _run_test(
+                    cfg, train_cfg, M, trainer, task_set_dir, model_name, durations, ckpt_name
+                )
                 if test_df.is_empty():
                     logger.warning(f"No test results generated for {model_name}.")
                     continue
