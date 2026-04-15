@@ -90,6 +90,6 @@ repos:
     rev: 1.9.1
     hooks:
       - id: nbqa-ruff
-        args: ["--fix"]
+        args: ["--fix", "--extend-ignore=E402"]
       - id: nbqa-ruff-format
         args: ["--line-length=110"]

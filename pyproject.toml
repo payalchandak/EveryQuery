@@ -97,6 +97,7 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Unused imports in __init__ files
 "test_*" = ["DTZ001"]  # Ignore datetimez in test files
+"*.ipynb" = ["E402"]  # Notebooks have imports spread across cells
 
 [tool.ruff.lint.pep8-naming]
 extend-ignore-names = ["*MEDS*", "*NRT*", "D", "M", "L", "LR*"]
