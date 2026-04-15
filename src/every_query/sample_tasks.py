@@ -133,6 +133,12 @@ def sample_tasks(
         raise ValueError(f"n must be >= 0 (got {n})")
     if not query_codes:
         raise ValueError("query_codes must be non-empty")
+    # Durations are quantized in days; non-integer bounds would silently bias the rounding step.
+    if not isinstance(duration_low, int) or not isinstance(duration_high, int):
+        raise TypeError(
+            f"duration_low and duration_high must be ints (got {type(duration_low).__name__}, "
+            f"{type(duration_high).__name__})"
+        )
     if duration_low < 1:
         raise ValueError(f"duration_low must be >= 1 (got {duration_low}); log-uniform needs positive bounds")
     if duration_high < duration_low:
