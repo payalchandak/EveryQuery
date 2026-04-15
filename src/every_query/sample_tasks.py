@@ -97,9 +97,7 @@ def sample_tasks(
         - ``code``: uniform over ``query_codes``
         - ``duration_days``: ``round(exp(Uniform(log(low), log(high))))``, clipped to ``[low, high]``
 
-    Log-uniform matches the existing ``tasks.sample_durations`` convention so that short durations (30d)
-    and long durations (700d+) are drawn with comparable probability, which in turn keeps label balance
-    similar across duration buckets.
+    Log-uniform preferentially samples shorter durations.
 
     Examples:
         >>> tasks = sample_tasks(
