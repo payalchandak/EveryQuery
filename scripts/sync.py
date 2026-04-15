@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -45,7 +46,10 @@ def resolve_server_root(mapping: dict) -> Path:
 
 
 def gsutil_rsync(src: str, dst: str, *, dry_run: bool, delete: bool = False) -> bool:
-    cmd = ["gsutil", "-m", "rsync", "-r"]
+    cmd = ["gsutil"]
+    if platform.system() == "Darwin":
+        cmd.extend(["-o", "GSUtil:parallel_process_count=1"])
+    cmd.extend(["-m", "rsync", "-r"])
     if delete:
         cmd.append("-d")
     cmd.extend([src, dst])
