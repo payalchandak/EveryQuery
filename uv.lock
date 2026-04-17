@@ -509,7 +509,7 @@ requires-dist = [
     { name = "ipykernel", specifier = ">=7.2.0" },
     { name = "lightning", specifier = "==2.5.5" },
     { name = "meds", specifier = "==0.4.0" },
-    { name = "meds-torch-data", extras = ["lightning"], specifier = "~=0.6.3" },
+    { name = "meds-torch-data", extras = ["lightning"], specifier = "~=0.7.0" },
     { name = "meds-transforms", specifier = "==0.5.3" },
     { name = "numpy", specifier = "==2.3.3" },
     { name = "polars", specifier = "~=1.30.0" },
@@ -1033,7 +1033,7 @@ wheels = [
 
 [[package]]
 name = "meds-torch-data"
-version = "0.6.6"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "hydra-core" },
@@ -1047,9 +1047,9 @@ dependencies = [
     { name = "pytest" },
     { name = "torch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b2/b3/cd0ed3d2f0d203129b1d49691827102b885749f17742735d70af8da872f8/meds_torch_data-0.6.6.tar.gz", hash = "sha256:d46d521ef8a99b314b0c157b12034c6b7f17db5ab4a550e61978c8ba1fe6ec43", size = 236694, upload-time = "2025-11-05T17:09:43.382Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0d/52/83c74bd33fa30e1d825c927443f955d11d1cbe21becd5a3776ef8cc3a2e1/meds_torch_data-0.7.0.tar.gz", hash = "sha256:a69690fe9fe808cdc35fc25535972546cb403bdf9eb12f7e83f71029c9900442", size = 258165, upload-time = "2026-04-16T12:51:42.237Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/42/bd/80f49e9b57f78d76216004f00501143261caa6b4471e5c772e949a438ca6/meds_torch_data-0.6.6-py3-none-any.whl", hash = "sha256:a0b4c539aa02f124165929ddf4ce906800790f1a70a75c4d4817048103209b16", size = 57348, upload-time = "2025-11-05T17:09:41.727Z" },
+    { url = "https://files.pythonhosted.org/packages/63/b3/18e73362053923a587f800edc1bcc9191bd64b25ddba8e9f6bf0a0598962/meds_torch_data-0.7.0-py3-none-any.whl", hash = "sha256:9a0ef17fa7ab66088bdcb136875ee755878c3b96e392b6099923a44a4f82f643", size = 70882, upload-time = "2026-04-16T12:51:40.551Z" },
 ]
 
 [package.optional-dependencies]

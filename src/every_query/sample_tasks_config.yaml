@@ -28,8 +28,7 @@ contexts_per_task: 1
 duration_min: 1
 duration_max: 731
 
-# Minimum prior events a subject must have accumulated before a prediction time is valid
-# (mirrors tasks.compute_base_prediction_times).
+# Minimum prior events a subject must have accumulated before a prediction time is valid.
 min_context_per_subject: 50
 
 overwrite: false

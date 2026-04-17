@@ -62,6 +62,12 @@ repos:
         # latest release at install time and silently produce different formatting
         # than stale local caches.  mdformat-shfmt in particular changes how it
         # indents bash inside fenced code blocks between versions.
+        #
+        # `shfmt-py` bundles the `shfmt` Go binary into the hook's venv bin dir so
+        # mdformat-shfmt finds it via subprocess.run(["shfmt"]).  Without this,
+        # mdformat-shfmt silently no-ops on machines lacking a system shfmt while
+        # CI (Ubuntu runners have shfmt via apt) actively reformats — producing
+        # local-pass / CI-fail drift on any markdown file with bash fenced blocks.
         additional_dependencies:
           - mdformat-ruff==0.1.3
           - mdformat-gfm==1.0.0
@@ -73,6 +79,7 @@ repos:
           - mdformat-shfmt==0.2.0
           - mdformat-mkdocs==5.1.4
           - mdformat-toc==0.5.0
+          - shfmt-py==3.12.0.2
 
   # word spelling linter
   - repo: https://github.com/codespell-project/codespell

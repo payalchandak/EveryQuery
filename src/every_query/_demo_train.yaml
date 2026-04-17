@@ -3,7 +3,7 @@
 # Usage (tests override the ??? paths via Hydra CLI or compose API):
 #   python -m every_query.train --config-name=_demo_train \
 #       output_dir=/tmp/eq_test \
-#       query.task_dir=/tmp/tasks \
+#       datamodule.config.task_labels_dir=/tmp/tasks \
 #       datamodule.config.tensorized_cohort_dir=/tmp/cohort
 
 defaults:
@@ -13,17 +13,11 @@ output_dir: ???
 do_overwrite: true
 do_resume: false
 seed: 1
-only_preprocess: false
-collate_only_held_out: false
 
 query:
-  task_dir: ???
-  sample_times_per_subject: 5
   codes:
     - "HR"
     - "TEMP"
-  duration_min: 30
-  duration_max: 32
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule

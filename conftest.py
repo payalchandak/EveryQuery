@@ -3,15 +3,14 @@
 Fixture dependency graph (all session-scoped)::
 
     demo_model ──────────► demo_lightning_module
+
+    simple_static_MEDS ──► tensorized_cohort_dir
                                     │
                                     ▼
-    simple_static_MEDS ──► tensorized_cohort_dir  trained_model_ckpt (Phase 3)
-            │                       │
-            ▼                       ▼
-    task_parquet_dir        demo_dataset ◄─── (collated task labels)
-                                │
-                                ▼
-                           sample_batch
+                               demo_dataset
+                                    │
+                                    ▼
+                               sample_batch
 """
 
 import subprocess
@@ -124,39 +123,45 @@ def tensorized_cohort_dir(tensorized_MEDS_dataset: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
-def task_parquet_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Pre-collation task parquets in the layout ``collate_tasks`` expects.
+def task_labels_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Sampler-output-shaped task labels for both splits, in long format.
 
-    Layout::
+    Layout matches ``sample_tasks.run_worker`` output::
 
-        {task_dir}/{duration}/{split}/{shard}.parquet
+        {task_labels_dir}/{split}/{shard}.parquet
 
-    Columns: ``subject_id, prediction_time, censored, HR, TEMP``
+    Columns: ``subject_id, prediction_time, boolean_value, occurs, query, duration_days``.
     """
-    task_dir = tmp_path_factory.mktemp("eq_tasks")
+    task_dir = tmp_path_factory.mktemp("eq_task_labels")
 
-    for duration in [30, 31]:
-        for split, subjects in [(train_split, _TRAIN_SUBJECTS), (tuning_split, _TUNING_SUBJECTS)]:
-            split_dir = task_dir / str(duration) / split
-            split_dir.mkdir(parents=True, exist_ok=True)
+    for split, subjects in [(train_split, _TRAIN_SUBJECTS), (tuning_split, _TUNING_SUBJECTS)]:
+        split_dir = task_dir / split
+        split_dir.mkdir(parents=True, exist_ok=True)
 
-            n = len(subjects)
-            df = pl.DataFrame(
+        rows = []
+        for i, (subj, query_code) in enumerate((s, q) for s in subjects for q in _QUERY_CODES):
+            rows.append(
                 {
-                    "subject_id": subjects,
-                    "prediction_time": [_PRED_TIMES[s] for s in subjects],
-                    "censored": [i % 2 == 0 for i in range(n)],
-                    "HR": [i % 2 == 1 for i in range(n)],
-                    "TEMP": [i % 2 == 0 for i in range(n)],
+                    "subject_id": subj,
+                    "prediction_time": _PRED_TIMES[subj],
+                    "boolean_value": i % 2 == 0,
+                    "occurs": i % 3 != 0,
+                    "query": query_code,
+                    "duration_days": 30,
                 }
-            ).cast({"prediction_time": pl.Datetime("us")})
+            )
 
-            df.write_parquet(split_dir / "0.parquet")
-
-    import json
-
-    with open(task_dir / "sampled_durations.json", "w") as f:
-        json.dump([30, 31], f)
+        df = pl.DataFrame(rows).cast(
+            {
+                "prediction_time": pl.Datetime("us"),
+                "subject_id": pl.Int64,
+                "boolean_value": pl.Boolean,
+                "occurs": pl.Boolean,
+                "query": pl.Utf8,
+                "duration_days": pl.Int64,
+            }
+        )
+        df.write_parquet(split_dir / "0.parquet")
 
     return task_dir
 
@@ -166,7 +171,7 @@ def demo_dataset(
     tensorized_cohort_dir: Path,
     tmp_path_factory: pytest.TempPathFactory,
 ) -> EveryQueryPytorchDataset:
-    """``EveryQueryPytorchDataset`` for the *train* split backed by collated task labels."""
+    """``EveryQueryPytorchDataset`` for the *train* split backed by sampler-shaped task labels."""
 
     collated_dir = tmp_path_factory.mktemp("eq_collated")
 

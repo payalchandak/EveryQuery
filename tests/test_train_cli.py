@@ -1,7 +1,7 @@
 """CLI-level integration tests for ``every_query.train``.
 
-Tests exercise ``collate_tasks`` (direct call) and the full ``train.main``
-Hydra entry-point (via subprocess) using the ``_demo_train.yaml`` config.
+Tests exercise the full ``train.main`` Hydra entry-point (via subprocess) using the
+``_demo_train.yaml`` config against sampler-shaped task labels.
 """
 
 import os
@@ -9,34 +9,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-import polars as pl
 import pytest
-from meds import train_split, tuning_split
-from omegaconf import DictConfig, OmegaConf
-
-from every_query.train import collate_tasks
 
 _VENV_BIN = str(Path(sys.executable).parent)
 
 
-def _build_collate_cfg(task_parquet_dir: Path) -> DictConfig:
-    """Minimal DictConfig for ``collate_tasks`` matching the ``task_parquet_dir`` fixture."""
-    return OmegaConf.create(
-        {
-            "query": {
-                "task_dir": str(task_parquet_dir),
-                "codes": ["HR", "TEMP"],
-                "duration_min": 30,
-                "duration_max": 32,
-                "sample_times_per_subject": 5,
-            },
-            "seed": 1,
-        }
-    )
-
-
 def _run_train_subprocess(
-    task_parquet_dir: Path,
+    task_labels_dir: Path,
     tensorized_cohort_dir: Path,
     output_dir: Path,
     *,
@@ -62,7 +41,7 @@ def _run_train_subprocess(
 
     overrides = [
         f"output_dir={output_dir}",
-        f"query.task_dir={task_parquet_dir}",
+        f"datamodule.config.task_labels_dir={task_labels_dir}",
         f"datamodule.config.tensorized_cohort_dir={tensorized_cohort_dir}",
         f"do_resume={str(do_resume).lower()}",
         f"do_overwrite={str(do_overwrite).lower()}",
@@ -82,47 +61,13 @@ def _run_train_subprocess(
     return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=180)
 
 
-# ── test_collate_tasks ──────────────────────────────────────────────────
-
-
-class TestCollateTasks:
-    """``collate_tasks`` reads per-duration task parquets and writes collated shards."""
-
-    @pytest.fixture()
-    def collated_dir(self, task_parquet_dir) -> Path:
-        cfg = _build_collate_cfg(task_parquet_dir)
-        return Path(collate_tasks(cfg))
-
-    def test_creates_collated_directory(self, collated_dir):
-        """Output lives under ``{task_dir}/collated/{hash}/``."""
-        assert collated_dir.is_dir()
-        assert collated_dir.parent.name == "collated"
-
-    def test_train_and_tuning_splits_written(self, collated_dir):
-        """Both train and tuning splits contain at least one parquet shard."""
-        for split in [train_split, tuning_split]:
-            split_dir = collated_dir / split
-            assert split_dir.is_dir(), f"Missing {split} split directory"
-            parquets = list(split_dir.glob("*.parquet"))
-            assert len(parquets) > 0, f"No parquets in {split} split"
-
-    def test_output_parquet_columns(self, collated_dir):
-        """Collated parquets have the expected EveryQuery task schema."""
-        df = pl.read_parquet(collated_dir / train_split / "0.parquet")
-        expected = {"subject_id", "prediction_time", "boolean_value", "occurs", "query", "duration_days"}
-        assert expected == set(df.columns)
-
-
-# ── test_train_cli_runs ─────────────────────────────────────────────────
-
-
 class TestTrainCliRuns:
     """Full training run via subprocess with ``_demo_train.yaml``."""
 
     @pytest.fixture(scope="class")
-    def training_output(self, task_parquet_dir, tensorized_cohort_dir, tmp_path_factory) -> Path:
+    def training_output(self, task_labels_dir, tensorized_cohort_dir, tmp_path_factory) -> Path:
         output_dir = tmp_path_factory.mktemp("cli_train")
-        result = _run_train_subprocess(task_parquet_dir, tensorized_cohort_dir, output_dir)
+        result = _run_train_subprocess(task_labels_dir, tensorized_cohort_dir, output_dir)
         assert result.returncode == 0, (
             f"train.py failed (rc={result.returncode}).\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
@@ -144,23 +89,20 @@ class TestTrainCliRuns:
         assert (training_output / "best_model.ckpt").is_file()
 
 
-# ── test_train_resume ───────────────────────────────────────────────────
-
-
 class TestTrainResume:
     """Resuming from an existing checkpoint completes without error."""
 
     @pytest.fixture(scope="class")
-    def resumed_output(self, task_parquet_dir, tensorized_cohort_dir, tmp_path_factory) -> Path:
+    def resumed_output(self, task_labels_dir, tensorized_cohort_dir, tmp_path_factory) -> Path:
         output_dir = tmp_path_factory.mktemp("cli_resume")
 
-        initial = _run_train_subprocess(task_parquet_dir, tensorized_cohort_dir, output_dir)
+        initial = _run_train_subprocess(task_labels_dir, tensorized_cohort_dir, output_dir)
         assert initial.returncode == 0, (
             f"Initial training failed (rc={initial.returncode}).\nstderr:\n{initial.stderr}"
         )
 
         resumed = _run_train_subprocess(
-            task_parquet_dir,
+            task_labels_dir,
             tensorized_cohort_dir,
             output_dir,
             do_resume=True,

@@ -3,8 +3,8 @@
 Structure:
 
 - ``TestPrimitives`` — unit tests for the pure building blocks.
-- ``TestEvaluateAgainstReference`` — bit-identity cross-check of ``evaluate_index_df`` against the
-  ``tasks_reference`` oracle on a shared synthetic fixture.
+- ``TestEvaluateIndexDfEdgeCases`` — hand-crafted edge cases for ``evaluate_index_df`` (strict-``>``
+  semantics, missing-subject handling).
 - ``TestRunWorkerPipeline`` — artifact-level tests for the three-stage idempotent pipeline:
   stage skip on rerun, overwrite, seed-axis independence, pre-seeded tasks.
 - ``TestEndToEndWithDataset`` — smoke test that builds sampler-shaped labels referencing real
@@ -23,18 +23,17 @@ from meds import train_split
 from meds_torchdata.config import MEDSTorchDataConfig
 
 from every_query import sample_tasks as st
-from every_query import tasks_reference
 from every_query.dataset import EveryQueryPytorchDataset
 from every_query.sample_tasks import (
     TaskSpec,
     build_index_df,
     compute_max_time_per_subject,
-    derive_seed,
     evaluate_index_df,
     run_worker,
     sample_contexts,
     sample_tasks,
 )
+from every_query.utils.seeds import derive_seed
 
 # ---------------------------------------------------------------------------
 # Shared synthetic fixtures
@@ -43,11 +42,7 @@ from every_query.sample_tasks import (
 
 @pytest.fixture
 def synthetic_events() -> pl.DataFrame:
-    """A deterministic events DataFrame: 3 subjects x 30 events x 5 codes, 10d spacing.
-
-    Shape matches the ``test_tasks.py`` fixture so the same data exercises both the old
-    wide-matrix pipeline and the new sampler.
-    """
+    """A deterministic events DataFrame: 3 subjects x 30 events x 5 codes, 10d spacing."""
     codes = ["ICD//A01", "ICD//B02", "ICD//C03", "MED//D04", "MED//E05"]
     base = datetime(2020, 1, 1)
     rows = [
@@ -184,98 +179,12 @@ class TestPrimitives:
 
 
 # ---------------------------------------------------------------------------
-# Cross-check: sampler vs reference oracle
+# evaluate_index_df edge cases
 # ---------------------------------------------------------------------------
 
 
-def _reference_long(
-    events_df: pl.DataFrame,
-    query_codes: list[str],
-    min_context: int,
-    duration_days: int,
-) -> pl.DataFrame:
-    """Run the reference pipeline and unpivot the wide matrix to the sampler's long schema.
-
-    Produces columns ``(subject_id, prediction_time, boolean_value, occurs, query, duration_days)``
-    to match :func:`sample_tasks.evaluate_index_df` exactly.
-    """
-    duration = {"days": duration_days}
-    ref_censor = tasks_reference.compute_censor_dataframe(events_df, min_context, duration)
-    ref_wide = tasks_reference.build_task_label_matrix(events_df, ref_censor, query_codes, duration)
-    # Wide columns: subject_id, prediction_time, censored, <code_1>, ..., <code_N>
-    long = (
-        ref_wide.unpivot(
-            index=["subject_id", "prediction_time", "censored"],
-            variable_name="query",
-            value_name="occurs",
-        )
-        .with_columns(pl.col("occurs").fill_null(False))
-        .with_columns(
-            pl.col("censored").alias("boolean_value"),
-            pl.lit(duration_days, dtype=pl.Int64).alias("duration_days"),
-        )
-        .select("subject_id", "prediction_time", "boolean_value", "occurs", "query", "duration_days")
-    )
-    return long
-
-
-def _sampler_long(
-    events_df: pl.DataFrame,
-    query_codes: list[str],
-    min_context: int,
-    duration_days: int,
-) -> pl.DataFrame:
-    """Run the sampler evaluator over the full (subject x pt x code) cross-product for one duration.
-
-    This bypasses :func:`sample_tasks.sample_tasks` / :func:`sample_tasks.sample_contexts` — we don't
-    want the equivalence test to depend on sampler randomness.  The equivalence claim is that for
-    *any* index_df row, the labels from ``evaluate_index_df`` agree with the reference.
-    """
-    from every_query import tasks as new_tasks
-
-    base_df = new_tasks.compute_base_prediction_times(events_df, min_context).select(
-        "subject_id", "prediction_time"
-    )
-    codes_df = pl.DataFrame({"query": query_codes}, schema={"query": pl.Utf8})
-    index_df = base_df.join(codes_df, how="cross").with_columns(
-        pl.lit(duration_days, dtype=pl.Int64).alias("duration_days")
-    )
-    max_time_df = compute_max_time_per_subject(events_df)
-    return evaluate_index_df(index_df, events_df, max_time_df)
-
-
-def _sort_long(df: pl.DataFrame) -> pl.DataFrame:
-    return df.sort(["subject_id", "prediction_time", "query"]).select(
-        "subject_id", "prediction_time", "boolean_value", "occurs", "query", "duration_days"
-    )
-
-
-class TestEvaluateAgainstReference:
-    """Bit-identity cross-check of ``evaluate_index_df`` against ``tasks_reference``."""
-
-    @pytest.mark.parametrize("duration_days", [30, 90, 180, 365])
-    def test_labels_match_reference(self, synthetic_events, synthetic_query_codes, duration_days):
-        ref = _sort_long(_reference_long(synthetic_events, synthetic_query_codes, 5, duration_days))
-        new = _sort_long(_sampler_long(synthetic_events, synthetic_query_codes, 5, duration_days))
-
-        # `boolean_value` and `occurs` must agree — the rest is schema/metadata.
-        cols = ["subject_id", "prediction_time", "query", "boolean_value", "occurs"]
-        assert ref.select(cols).equals(new.select(cols)), (
-            f"Label mismatch at duration={duration_days}; "
-            f"ref={ref.select(cols).head(5)}, new={new.select(cols).head(5)}"
-        )
-
-    def test_codes_not_in_shard_are_all_false(self, synthetic_events):
-        """A query code with no events anywhere in the shard should produce ``occurs=False`` for every
-        uncensored row (and ``occurs=False`` for censored rows, matching reference)."""
-        query_codes = ["ICD//A01", "FAKE//Z99"]
-        ref = _sort_long(_reference_long(synthetic_events, query_codes, 5, 90))
-        new = _sort_long(_sampler_long(synthetic_events, query_codes, 5, 90))
-
-        new_fake = new.filter(pl.col("query") == "FAKE//Z99")
-        assert not new_fake["occurs"].any()
-        cols = ["subject_id", "prediction_time", "query", "boolean_value", "occurs"]
-        assert ref.select(cols).equals(new.select(cols))
+class TestEvaluateIndexDfEdgeCases:
+    """Hand-crafted edge-case tests for ``evaluate_index_df``."""
 
     def test_event_exactly_at_prediction_time_is_excluded(self):
         """``prediction_time == event_time`` must not count as an occurrence (strict ``>``)."""
@@ -907,7 +816,7 @@ _E2E_QUERIES = ["HR", "TEMP"]
 
 
 class TestEndToEndWithDataset:
-    """Sanity-check that sampler output is a drop-in replacement for ``collate_tasks`` output.
+    """Sanity-check that sampler output is a drop-in replacement for the dataset's task-labels contract.
 
     We don't run ``run_worker`` here because the sampler's shard-reading path expects string-coded
     events from an early preprocessing stage that the test fixture does not expose (the tensorized

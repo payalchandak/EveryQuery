@@ -27,7 +27,6 @@ Design decisions (see issue #33):
   the whole ``index_df`` against the events table, regardless of how many distinct codes are present.
 """
 
-import hashlib
 import json
 import logging
 import os
@@ -41,6 +40,8 @@ import numpy as np
 import polars as pl
 from omegaconf import DictConfig
 
+from every_query.utils.seeds import derive_seed
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,34 +51,6 @@ class TaskSpec:
 
     code: str
     duration_days: int
-
-
-# ---------------------------------------------------------------------------
-# Seed derivation
-# ---------------------------------------------------------------------------
-
-
-def derive_seed(*parts: int | str) -> int:
-    """Stable 31-bit int seed derived from a tuple of ints/strings via blake2b.
-
-    Python's builtin ``hash`` is not stable across processes, so hydra multirun workers would draw
-    inconsistent samples.  Blake2b is cross-process stable and fast enough to be irrelevant at this scale.
-
-    Examples:
-        >>> derive_seed(1, "tasks", 0) == derive_seed(1, "tasks", 0)
-        True
-        >>> derive_seed(1, "tasks", 0) != derive_seed(1, "tasks", 1)
-        True
-        >>> derive_seed(1, "contexts", "shard_a", 0) != derive_seed(1, "contexts", "shard_b", 0)
-        True
-        >>> 0 <= derive_seed(1, "tasks", 0) < 2**31
-        True
-    """
-    h = hashlib.blake2b(digest_size=8)
-    for p in parts:
-        h.update(str(p).encode("utf-8"))
-        h.update(b"\x1f")  # unit separator to avoid prefix collisions
-    return int.from_bytes(h.digest(), "big") & 0x7FFFFFFF
 
 
 # ---------------------------------------------------------------------------

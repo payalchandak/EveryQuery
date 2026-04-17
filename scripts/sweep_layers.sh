@@ -12,8 +12,7 @@ for i in "${!LAYER_SIZES[@]}"; do
     echo "Submitting job with num_hidden_layers=$N_LAYERS"
     sbatch --job-name="eq_layers_${N_LAYERS}" \
         scripts/train_eq.sh \
-        "lightning_module.model.num_hidden_layers=$N_LAYERS" \
-        only_preprocess=false
+        "lightning_module.model.num_hidden_layers=$N_LAYERS"
 
     # If this is NOT the last job, wait 30 seconds.
     if [ $((i + 1)) -lt "$NUM_LAYERS" ]; then
