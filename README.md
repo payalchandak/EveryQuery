@@ -22,13 +22,13 @@ then evaluated against arbitrary (code, duration) combinations.
 git clone git@github.com:payalchandak/EveryQuery.git
 cd EveryQuery
 uv sync --group dev
-cp .env.example .env        # then edit paths for your machine
+cp .env.example .env # then edit paths for your machine
 ```
 
 **As a dependency:**
 
 ```bash
-pip install EveryQuery      # not yet on PyPI — installable from git for now:
+pip install EveryQuery # not yet on PyPI — installable from git for now:
 pip install "git+https://github.com/payalchandak/EveryQuery.git@main"
 ```
 
@@ -89,11 +89,11 @@ Outputs expected downstream:
 
 ```bash
 EQ_generate_tasks \
-    split=train \
-    input_shard=0 \
-    task_shard=0 \
-    n_tasks=1024 \
-    contexts_per_task=1
+	split=train \
+	input_shard=0 \
+	task_shard=0 \
+	n_tasks=1024 \
+	contexts_per_task=1
 ```
 
 Produces labeled task parquets under `$TASK_DIR/{split}/*.parquet`. Sweep with
@@ -104,9 +104,9 @@ to cover the task × patient product.
 
 ```bash
 EQ_train \
-    output_dir="$OUTPUT_DIR/outputs/\${run_id:}" \
-    query.task_dir="$TASK_DIR" \
-    datamodule.config.tensorized_cohort_dir="$FINAL_DATA_DIR"
+	output_dir="$OUTPUT_DIR/outputs/\${run_id:}" \
+	query.task_dir="$TASK_DIR" \
+	datamodule.config.tensorized_cohort_dir="$FINAL_DATA_DIR"
 ```
 
 Run dir ends up at `$OUTPUT_DIR/outputs/YYYY-MM-DD/HH-MM-SS/` with
@@ -115,9 +115,9 @@ Run dir ends up at `$OUTPUT_DIR/outputs/YYYY-MM-DD/HH-MM-SS/` with
 ### 4. Build the evaluation index and slice task matrices
 
 ```bash
-EQ_generate_tasks_exhaustive       # full (code × duration) matrix
-EQ_gen_eval_index                  # sample prediction times
-EQ_gen_eval_tasks                  # slice matrix by (code, duration) using the index
+EQ_generate_tasks_exhaustive # full (code × duration) matrix
+EQ_gen_eval_index            # sample prediction times
+EQ_gen_eval_tasks            # slice matrix by (code, duration) using the index
 ```
 
 ### 5. Evaluate and rank
@@ -175,9 +175,9 @@ of each file.
 
 ```bash
 uv sync --group dev
-uv run pytest                           # full suite (~90 s)
-uv run pytest tests/test_cli_smoke.py   # CLI smoke tests only
-uv run pre-commit run --all-files       # lint, format, codespell
+uv run pytest                         # full suite (~90 s)
+uv run pytest tests/test_cli_smoke.py # CLI smoke tests only
+uv run pre-commit run --all-files     # lint, format, codespell
 ```
 
 CI runs the full `pytest` plus `ruff check` and `ruff format --check` on
