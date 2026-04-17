@@ -18,5 +18,11 @@ the full pipeline):
     duration) pairs. Config:
     [`conf/select_model_config.yaml`](conf/select_model_config.yaml).
 
-Note: step 2 depends on having already run `EQ_generate_tasks_exhaustive` to
-produce the task matrix it slices.
+> [!IMPORTANT]
+> Step 2 (`EQ_gen_eval_tasks`) currently expects a per-duration wide task
+> matrix at `$TASK_DIR/{duration}/{split}/*.parquet`. Its former producer
+> (`EQ_generate_tasks_exhaustive`) was removed in
+> [#76](https://github.com/payalchandak/EveryQuery/pull/76); this whole
+> four-stage pipeline is being collapsed into a single `EQ_predict` +
+> `EQ_evaluate` pair driven by a shared `FlexibleSchema` — see Phase 2 of
+> [#54](https://github.com/payalchandak/EveryQuery/issues/54).

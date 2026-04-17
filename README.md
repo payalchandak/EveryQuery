@@ -32,23 +32,23 @@ pip install EveryQuery # not yet on PyPI — installable from git for now:
 pip install "git+https://github.com/payalchandak/EveryQuery.git@main"
 ```
 
+> [!NOTE]
+> A substantial refactor is in progress — see [#54](https://github.com/payalchandak/EveryQuery/issues/54).
+> Entry-point names and the eval pipeline are likely to change. This README captures the current state on `dev`.
+
 ## Console scripts
 
-`pip install` exposes seven CLIs, all Hydra-configurable. Run any with
+`pip install` exposes the CLIs below, all Hydra-configurable. Run any with
 `--help` or `--cfg job` to inspect the resolved config.
 
-| Script                         | Stage               | Purpose                                                                     |
-| ------------------------------ | ------------------- | --------------------------------------------------------------------------- |
-| `EQ_generate_tasks`            | pre-training labels | Sample `N` tasks × `M` contexts and label them (sampling-first, fast)       |
-| `EQ_generate_tasks_exhaustive` | eval labels         | Enumerate `(subject, time) × code × duration` for a full eval matrix        |
-| `EQ_train`                     | training            | Train the ModernBERT encoder on labeled tasks                               |
-| `EQ_gen_eval_index`            | eval setup          | Sample held-out prediction times into a deterministic index                 |
-| `EQ_gen_eval_tasks`            | eval setup          | Slice the exhaustive task matrix by (code, duration) using the index        |
-| `EQ_evaluate`                  | eval                | Run a trained checkpoint against the sliced eval tasks, write per-code AUCs |
-| `EQ_select_model`              | analysis            | Rank models by pairwise win rate over (code, duration) pairs                |
-
-See [#65](https://github.com/payalchandak/EveryQuery/issues/65) for a pending
-rename discussion on `EQ_generate_tasks` vs `EQ_generate_tasks_exhaustive`.
+| Script              | Stage               | Purpose                                                                     |
+| ------------------- | ------------------- | --------------------------------------------------------------------------- |
+| `EQ_generate_tasks` | pre-training labels | Sample `N` tasks × `M` contexts and label them (sampling-first, fast)       |
+| `EQ_train`          | training            | Train the ModernBERT encoder on labeled tasks                               |
+| `EQ_gen_eval_index` | eval setup          | Sample held-out prediction times into a deterministic index                 |
+| `EQ_gen_eval_tasks` | eval setup          | Slice per-duration task matrices by (code, duration) using the index        |
+| `EQ_evaluate`       | eval                | Run a trained checkpoint against the sliced eval tasks, write per-code AUCs |
+| `EQ_select_model`   | analysis            | Rank models by pairwise win rate over (code, duration) pairs                |
 
 ## Pipeline
 
@@ -61,14 +61,20 @@ pre-training:                                                  EQ_generate_tasks
                                                                      ▼
                                                                 EQ_train  ──►  best_model.ckpt
                                                                                        │
-evaluation:  EQ_generate_tasks_exhaustive  ──►  EQ_gen_eval_index  ──►  EQ_gen_eval_tasks
-                                                                                       │
-                                                                                       ▼
-                                                                                  EQ_evaluate
+evaluation:                      EQ_gen_eval_index  ──►  EQ_gen_eval_tasks              │
+                                                                │                       │
+                                                                ▼                       ▼
+                                                                             EQ_evaluate
                                                                                        │ per-code AUCs
                                                                                        ▼
                                                                                  EQ_select_model
 ```
+
+> The eval pipeline is being consolidated — `EQ_gen_eval_tasks` currently
+> expects a per-duration wide task matrix whose dedicated producer was
+> removed in [#76](https://github.com/payalchandak/EveryQuery/pull/76).
+> Phase 2 of the [#54](https://github.com/payalchandak/EveryQuery/issues/54)
+> refactor collapses these four eval CLIs into two.
 
 ### 1. Preprocess to tensorized MEDS
 
@@ -105,9 +111,13 @@ to cover the task × patient product.
 ```bash
 EQ_train \
 	output_dir="$OUTPUT_DIR/outputs/\${run_id:}" \
-	query.task_dir="$TASK_DIR" \
+	datamodule.config.task_labels_dir="$TASK_DIR" \
 	datamodule.config.tensorized_cohort_dir="$FINAL_DATA_DIR"
 ```
+
+`EQ_train` reads the long-format labels written by `EQ_generate_tasks`
+directly — the inline collation step that lived in `train.py` was removed
+in [#76](https://github.com/payalchandak/EveryQuery/pull/76).
 
 Run dir ends up at `$OUTPUT_DIR/outputs/YYYY-MM-DD/HH-MM-SS/` with
 `best_model.ckpt`, `config.yaml`, `resolved_config.yaml`, and `checkpoints/`.
@@ -115,10 +125,17 @@ Run dir ends up at `$OUTPUT_DIR/outputs/YYYY-MM-DD/HH-MM-SS/` with
 ### 4. Build the evaluation index and slice task matrices
 
 ```bash
-EQ_generate_tasks_exhaustive # full (code × duration) matrix
-EQ_gen_eval_index            # sample prediction times
-EQ_gen_eval_tasks            # slice matrix by (code, duration) using the index
+EQ_gen_eval_index # sample prediction times into a deterministic index
+EQ_gen_eval_tasks # slice per-duration task matrices by (code, duration)
 ```
+
+`EQ_gen_eval_tasks` expects per-duration wide task parquets at
+`$TASK_DIR/{duration}/{split}/*.parquet`. Their former dedicated
+producer (`EQ_generate_tasks_exhaustive`) was removed in
+[#76](https://github.com/payalchandak/EveryQuery/pull/76); the Phase 2
+refactor in [#54](https://github.com/payalchandak/EveryQuery/issues/54)
+replaces this whole pipeline with a `FlexibleSchema`-driven `EQ_predict`
+that takes a single task-specifying parquet.
 
 ### 5. Evaluate and rank
 
@@ -132,7 +149,7 @@ EQ_select_model model_run_dirs='["..."]' split=tuning
 ### Environment variables
 
 `ensure_env()` (in `src/every_query/_env.py`) requires these be set before
-`EQ_train` / `EQ_generate_tasks_exhaustive`:
+`EQ_train` and the eval CLIs:
 
 | Var              | Purpose                                                       |
 | ---------------- | ------------------------------------------------------------- |
@@ -185,15 +202,18 @@ every PR; coverage is uploaded to Codecov.
 
 ### Roadmap / open issues
 
-- [#55](https://github.com/payalchandak/EveryQuery/issues/55) — `EQ_process_data` preprocessing endpoint
-- [#59](https://github.com/payalchandak/EveryQuery/issues/59) — doc overhaul (this file is the start)
-- [#62](https://github.com/payalchandak/EveryQuery/issues/62) — drop orphaned `aces_to_eq` / `process_composite` modules
-- [#63](https://github.com/payalchandak/EveryQuery/issues/63) — move `tasks_reference.py` to `tests/`
-- [#64](https://github.com/payalchandak/EveryQuery/issues/64) — ship sample `{train,eval}_codes` YAMLs
-- [#65](https://github.com/payalchandak/EveryQuery/issues/65) — clarify `EQ_generate_tasks` vs `…_exhaustive`
+Overall refactor umbrella: [#54](https://github.com/payalchandak/EveryQuery/issues/54) — the target architecture rewrites this whole pipeline as `EQ_process_data → EQ_prepare_tasks → EQ_pretrain → EQ_predict → EQ_evaluate`, with a shared `FlexibleSchema` as the cross-stage contract.
+
+Live child issues:
+
+- [#55](https://github.com/payalchandak/EveryQuery/issues/55) — `EQ_process_data` preprocessing endpoint (PR [#74](https://github.com/payalchandak/EveryQuery/pull/74) open)
+- [#59](https://github.com/payalchandak/EveryQuery/issues/59) — doc overhaul (this PR is the interim snapshot; final rewrite after the refactor lands)
+- [#62](https://github.com/payalchandak/EveryQuery/issues/62) — promote `aces_to_eq` / `process_composite` to entry points
+- [#64](https://github.com/payalchandak/EveryQuery/issues/64) — drop gitignored `{train,eval}_codes` defaults
 - [#66](https://github.com/payalchandak/EveryQuery/issues/66) — unbreak `eval_config.yaml`'s hardcoded run dirs
-- [#67](https://github.com/payalchandak/EveryQuery/issues/67) — decide fate of `upload_models.py`
 - [#68](https://github.com/payalchandak/EveryQuery/issues/68) — wheel-install CI + staged CLI functional tests
+- [#31](https://github.com/payalchandak/EveryQuery/issues/31) — `train.py` `do_overwrite=True` wipes config before re-saving
+- [#32](https://github.com/payalchandak/EveryQuery/issues/32) — `eval.py` `ood_codes is None` TypeError
 
 ## Acknowledgements
 
