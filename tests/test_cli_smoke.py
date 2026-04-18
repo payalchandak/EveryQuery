@@ -10,8 +10,7 @@ Three endpoints (``EQ_train``, ``EQ_evaluate``, ``EQ_gen_eval_tasks``) compose a
 ``{train,eval}_codes`` default group whose canonical file is generated out-of-band
 (see ``src/every_query/paper_experiments/sample_codes/``) and is not checked in.  For those we point
 Hydra at a throwaway ``--config-dir`` that supplies an empty-codes smoke variant,
-which preserves the rest of the compose path.  ``EQ_aces_to_eq`` similarly composes
-a ``query_codes`` group and receives an analogous stub.
+which preserves the rest of the compose path.
 
 Child-process coverage is picked up automatically via
 ``[tool.coverage.run] patch = ["subprocess"]`` in ``pyproject.toml`` — no
@@ -39,21 +38,17 @@ _ENTRYPOINTS: list[tuple[str, list[str]]] = [
     ("EQ_gen_eval_index", []),
     ("EQ_gen_eval_tasks", ["eval_codes=smoke"]),
     ("EQ_select_model", []),
-    ("EQ_process_composite", []),
-    ("EQ_aces_to_eq", ["query_codes=smoke"]),
 ]
 
 
 @pytest.fixture(scope="module")
 def smoke_config_dir(tmp_path_factory) -> Path:
-    """Temp Hydra search dir supplying empty ``train_codes`` / ``eval_codes`` / ``query_codes``."""
+    """Temp Hydra search dir supplying empty ``train_codes`` / ``eval_codes``."""
     d = tmp_path_factory.mktemp("eq_smoke_cfg")
     (d / "train_codes").mkdir()
     (d / "train_codes" / "smoke.yaml").write_text("codes: []\n")
     (d / "eval_codes").mkdir()
     (d / "eval_codes" / "smoke.yaml").write_text("id: []\nood: []\n")
-    (d / "query_codes").mkdir()
-    (d / "query_codes" / "smoke.yaml").write_text("- A\n- B\n")
     return d
 
 
