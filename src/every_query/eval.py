@@ -71,7 +71,56 @@ def _model_name(model_run_dir: str) -> str:
 
 
 def _collect_codes(cfg: DictConfig) -> tuple[list[str], dict[str, str]]:
-    """Combine id/ood/manual codes into a flat list plus a code→bucket map."""
+    """Combine id/ood/manual codes into a flat list plus a code→bucket map.
+
+    Any of ``id_codes``, ``ood_codes``, ``manual_codes`` may be ``None`` — ``None`` is treated as
+    an empty list (regression guard for #32, where ``code in cfg.ood_codes`` crashed with
+    ``TypeError: argument of type 'NoneType' is not iterable`` for eval configs that legitimately
+    had no OOD bucket).
+
+    Note: a key that is entirely *missing* from the ``DictConfig`` (as opposed to present with
+    value ``None``) raises ``ConfigAttributeError`` at the ``cfg.<key>`` access.  Hydra callers
+    typically end up with ``None`` rather than a missing key because the shipped config files
+    declare all three fields, so in practice the ``or []`` guard is sufficient.
+
+    Examples:
+        >>> from omegaconf import OmegaConf
+        >>> codes, bucket = _collect_codes(OmegaConf.create(
+        ...     {"id_codes": ["A", "B"], "ood_codes": ["X"], "manual_codes": ["M"]}
+        ... ))
+        >>> codes
+        ['A', 'B', 'X', 'M']
+        >>> bucket == {"A": "id", "B": "id", "X": "ood", "M": "manual"}
+        True
+
+        Each of the three buckets is independently guarded against ``None``:
+
+        >>> codes, bucket = _collect_codes(OmegaConf.create(
+        ...     {"id_codes": ["A"], "ood_codes": None, "manual_codes": None}
+        ... ))
+        >>> codes
+        ['A']
+        >>> bucket
+        {'A': 'id'}
+
+        >>> codes, bucket = _collect_codes(OmegaConf.create(
+        ...     {"id_codes": None, "ood_codes": ["X"], "manual_codes": None}
+        ... ))
+        >>> codes
+        ['X']
+        >>> bucket
+        {'X': 'ood'}
+
+        Duplicates across buckets keep the first-seen bucket label:
+
+        >>> codes, bucket = _collect_codes(OmegaConf.create(
+        ...     {"id_codes": ["A"], "ood_codes": ["A", "B"], "manual_codes": None}
+        ... ))
+        >>> codes
+        ['A', 'B']
+        >>> bucket == {"A": "id", "B": "ood"}
+        True
+    """
     codes: list[str] = []
     bucket: dict[str, str] = {}
     for c in cfg.id_codes or []:
