@@ -1,6 +1,9 @@
 defaults:
   - _self_
-  - eval_codes: 10000_ID__8db2be6fadf8
+
+# ``eval_codes`` is a required compose group.  Users must pass
+# ``+eval_codes=<my_codes_name>`` on the CLI with ``--config-dir`` pointing at a directory
+# containing ``eval_codes/<my_codes_name>.yaml``.  See #64.
 
 #This defines the index times to create task dfs from
 index_hash: 7573f855c4b050a9d79d57fefd8a139c

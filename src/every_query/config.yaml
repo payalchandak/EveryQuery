@@ -1,7 +1,10 @@
 defaults:
   - _self_
-  - train_codes: 10000_ID__8db2be6fadf8
 
+# ``train_codes`` is a required compose group.  Users must pass
+# ``+train_codes=<my_codes_name>`` on the CLI with ``--config-dir`` pointing at a directory
+# containing ``train_codes/<my_codes_name>.yaml`` — or inline ``query.codes=[...]`` and skip the
+# compose group entirely.  See #64.
 output_dir: ${oc.env:OUTPUT_DIR}/${run_id:}/
 do_overwrite: true
 do_resume: false
