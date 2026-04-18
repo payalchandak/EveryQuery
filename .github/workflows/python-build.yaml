@@ -78,24 +78,26 @@ jobs:
           WANDB_ENTITY: test
         run: |
           set -euo pipefail
-          # Compose-group stubs for CLIs whose shipped configs default on gitignored YAMLs.
+          # Compose-group stubs for CLIs whose shipped configs default on gitignored YAMLs
+          # (see tests/test_cli_smoke.py for the source-of-truth pattern).
           SMOKE=/tmp/eq-smoke-cfg
-          mkdir -p "$SMOKE/train_codes" "$SMOKE/eval_codes" "$SMOKE/query_codes"
+          mkdir -p "$SMOKE/train_codes" "$SMOKE/eval_codes"
           printf 'codes: []\n' > "$SMOKE/train_codes/smoke.yaml"
           printf 'id: []\nood: []\n' > "$SMOKE/eval_codes/smoke.yaml"
-          printf -- '- A\n- B\n' > "$SMOKE/query_codes/smoke.yaml"
 
           BIN=/tmp/wheel-venv/bin
+
           # CLIs that don't need a compose stub.
-          for cli in EQ_process_data EQ_generate_tasks EQ_gen_eval_index EQ_select_model EQ_process_composite; do
+          for cli in EQ_process_data EQ_generate_tasks EQ_gen_eval_index EQ_select_model; do
             echo "=== $cli --help ==="
             "$BIN/$cli" --help > /dev/null
           done
+
           # CLIs that need a compose stub injected via --config-dir.
-          "$BIN/EQ_train"         --config-dir="$SMOKE" train_codes=smoke --help > /dev/null
-          "$BIN/EQ_evaluate"      --config-dir="$SMOKE" eval_codes=smoke --help > /dev/null
+          "$BIN/EQ_train" --config-dir="$SMOKE" train_codes=smoke --help > /dev/null
+          "$BIN/EQ_evaluate" --config-dir="$SMOKE" eval_codes=smoke --help > /dev/null
           "$BIN/EQ_gen_eval_tasks" --config-dir="$SMOKE" eval_codes=smoke --help > /dev/null
-          "$BIN/EQ_aces_to_eq"    --config-dir="$SMOKE" query_codes=smoke --help > /dev/null
+
           echo "All entry points resolve from the wheel install."
 
   publish-to-pypi:
