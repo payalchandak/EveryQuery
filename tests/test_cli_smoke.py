@@ -6,11 +6,11 @@ proves the ``[project.scripts]`` entry resolved, the package config
 directory resolved via ``importlib.resources.files()``, and module-level
 imports don't blow up in a fresh interpreter.
 
-Three endpoints (``EQ_train``, ``EQ_evaluate``, ``EQ_gen_eval_tasks``) compose a
-``{train,eval}_codes`` default group whose canonical file is generated out-of-band
-(see ``src/every_query/sample_codes/``) and is not checked in.  For those we point
-Hydra at a throwaway ``--config-dir`` that supplies an empty-codes smoke variant,
-which preserves the rest of the compose path.
+``EQ_train`` declares ``query.codes: ???`` (mandatory) in its shipped config so users
+are forced to supply codes explicitly.  The smoke tests override the marker with an
+empty list via ``query.codes=[]``.  The two eval endpoints still compose an
+``eval_codes`` group (will be restructured as part of Phase 2 of #54); for those we
+point Hydra at a throwaway ``--config-dir`` supplying an empty-codes smoke variant.
 
 Child-process coverage is picked up automatically via
 ``[tool.coverage.run] patch = ["subprocess"]`` in ``pyproject.toml`` — no
@@ -31,7 +31,7 @@ _VENV_BIN = str(Path(sys.executable).parent)
 # (console_script, extra_args) — extras inject a smoke code-group for configs
 # whose defaults pull an out-of-tree YAML.
 _ENTRYPOINTS: list[tuple[str, list[str]]] = [
-    ("EQ_train", ["train_codes=smoke"]),
+    ("EQ_train", ["query.codes=[]"]),
     ("EQ_evaluate", ["eval_codes=smoke"]),
     ("EQ_generate_tasks", []),
     ("EQ_gen_eval_index", []),
@@ -42,10 +42,8 @@ _ENTRYPOINTS: list[tuple[str, list[str]]] = [
 
 @pytest.fixture(scope="module")
 def smoke_config_dir(tmp_path_factory) -> Path:
-    """Temp Hydra search dir supplying empty ``train_codes`` / ``eval_codes``."""
+    """Temp Hydra search dir supplying an empty ``eval_codes`` compose group."""
     d = tmp_path_factory.mktemp("eq_smoke_cfg")
-    (d / "train_codes").mkdir()
-    (d / "train_codes" / "smoke.yaml").write_text("codes: []\n")
     (d / "eval_codes").mkdir()
     (d / "eval_codes" / "smoke.yaml").write_text("id: []\nood: []\n")
     return d

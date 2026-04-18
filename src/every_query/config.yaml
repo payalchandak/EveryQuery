@@ -1,6 +1,5 @@
 defaults:
   - _self_
-  - train_codes: 10000_ID__8db2be6fadf8
 
 output_dir: ${oc.env:OUTPUT_DIR}/${run_id:}/
 do_overwrite: true
@@ -8,7 +7,11 @@ do_resume: false
 seed: 140799
 
 query:
-  codes: ${train_codes.codes}
+  # Required: the list of query codes to train on.  Pass either
+  #   - inline on the CLI: EQ_train query.codes=[A,B,C]
+  #   - via a user config: EQ_train --config-dir=$MY_CFG --config-name=my_train_config
+  # (where my_train_config.yaml sets query.codes).  See #64.
+  codes: ???
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
@@ -63,8 +66,8 @@ trainer:
     prefix: "" # a string to put at the beginning of metric keys
     entity: ${oc.env:WANDB_ENTITY}
     config:
-      query_codes: ${train_codes.codes}
-      num_query_codes: ${list_len:${train_codes.codes}}
+      query_codes: ${query.codes}
+      num_query_codes: ${list_len:${query.codes}}
   callbacks:
     _target_: __main__.values_as_list
     learning_rate_monitor:
