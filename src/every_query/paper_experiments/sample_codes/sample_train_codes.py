@@ -1,81 +1,63 @@
-import hashlib
-import os
+"""Sample training-code YAML files for the EveryQuery paper's PT runs.
+
+For each of ``--n-repeats`` repeats, draw ``--n-samples`` codes without replacement from a
+MEDS cohort's code universe (after optional TIME-token filtering) and write them to a
+content-hashed YAML file suitable for Hydra's ``train_codes`` compose group.
+
+This is paper-experiments code: in normal EQ usage you train on a code list of your choosing
+rather than sampling one.
+"""
+
+import argparse
 import random
+from pathlib import Path
 
-import polars as pl
-
-# -------------------
-# Config
-# -------------------
-PARQUET_PATH = "/users/gbk2114/data/MIMIC_MEDS/MEDS_cohort/processed/metadata/codes.parquet"
-N_SAMPLES = 10000
-N_REPEATS = 5
-OUT_DIR = "../train_codes"
-SEED = 42
-
-random.seed(SEED)
+from every_query.paper_experiments.sample_codes._common import load_filtered_codes, stable_hash_list
 
 
-def stable_hash_list(items: list[str]) -> str:
-    """Order-sensitive, deterministic hash for a list of strings."""
-    h = hashlib.sha256()
-    for x in items:
-        h.update(x.encode("utf-8"))
-        h.update(b"\n")
-    return h.hexdigest()[:12]
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--metadata-dir",
+        type=Path,
+        required=True,
+        help="Path to a MEDS metadata directory containing codes.parquet.",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        required=True,
+        help="Directory to write the sampled YAML files into (created if it doesn't exist).",
+    )
+    parser.add_argument("--n-samples", type=int, default=10000, help="Codes per repeat.")
+    parser.add_argument("--n-repeats", type=int, default=5, help="How many YAML files to write.")
+    parser.add_argument("--seed", type=int, default=42, help="RNG seed — governs all repeats.")
+    parser.add_argument(
+        "--exclude-pattern",
+        default="TIME",
+        help="Drop codes containing this substring.  Pass empty string to disable.",
+    )
+    args = parser.parse_args()
 
+    random.seed(args.seed)
+    exclude = args.exclude_pattern or None
+    codes = load_filtered_codes(args.metadata_dir, exclude_pattern=exclude)
+    print(f"loaded {len(codes)} codes from {args.metadata_dir}/codes.parquet (exclude={exclude!r})")
 
-if __name__ == "__main__":
-    # -------------------
-    # Load + filter codes
-    # -------------------
-    df = pl.read_parquet(PARQUET_PATH)
-    codes = df["code"].unique().sort().to_list()
-    print(f"num all codes {len(codes)}")
+    args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    time_codes = [code for code in codes if "TIME" in code]
-    print(f"{len(time_codes)} TIME Codes removed:")
-    print(time_codes)
-
-    filtered_codes = [code for code in codes if "TIME" not in code]
-    print(f"num codes after filtering: {len(filtered_codes)}")
-
-    os.makedirs(OUT_DIR, exist_ok=True)
-
-    # -------------------
-    # Sample ID + OOD sets
-    # -------------------
-    for _ in range(N_REPEATS):
-        # ID = sampled codes
-        id_codes = random.sample(filtered_codes, N_SAMPLES)
-
-        # OOD = everything NOT in ID
-        id_set = set(id_codes)
-        ood_codes = [c for c in filtered_codes if c not in id_set]
-
-        # Hashes define identity of the code universes
+    for _ in range(args.n_repeats):
+        id_codes = random.sample(codes, args.n_samples)
         id_hash = stable_hash_list(id_codes)
-        ood_hash = stable_hash_list(ood_codes)
-
-        # ---- write ID file ----
-        id_path = f"{OUT_DIR}/{N_SAMPLES}_ID__{id_hash}.yaml"
-        with open(id_path, "x") as f:
+        out_fp = args.out_dir / f"{args.n_samples}_ID__{id_hash}.yaml"
+        with open(out_fp, "x") as f:
             f.write("codes:\n")
             for code in id_codes:
                 f.write(f'  - "{code}"\n')
+        print(f"wrote {out_fp}")
 
-        # # ---- write OOD file ----
-        # ood_path = f"{OUT_DIR}/{N_SAMPLES}_OOD__{ood_hash}.yaml"
-        # with open(ood_path, "x") as f:
-        #     f.write("codes:\n")
-        #     for code in ood_codes:
-        #         f.write(f'  - "{code}"\n')
-        #
-        # # Optional manifest line (highly recommended)
-        # with open(f"{OUT_DIR}/MANIFEST.txt", "a") as f:
-        #     f.write(
-        #         f"ID {id_hash}  -> {os.path.basename(id_path)}\n"
-        #         f"OOD {ood_hash} -> {os.path.basename(ood_path)}\n"
-        #     )
+    print(f"done — {args.n_repeats} x {args.n_samples}-code YAMLs in {args.out_dir}")
 
-    print(f"Done sampling {N_SAMPLES} ID sets and OOD complements for {N_REPEATS} repeats.")
+
+if __name__ == "__main__":
+    main()

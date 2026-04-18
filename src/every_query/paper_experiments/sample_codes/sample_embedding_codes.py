@@ -1,56 +1,56 @@
-import hashlib
-import os
+"""Sample query codes for post-hoc embedding visualization.
+
+Given a MEDS cohort + an exclusion pattern, draw ``--n-samples`` codes without replacement
+from the filtered universe and write a content-hashed YAML list.  These get fed to the
+embedding-plot scripts in paper_experiments to produce UMAP-style figures over query
+vocabulary.
+"""
+
+import argparse
 import random
+from pathlib import Path
 
-import polars as pl
-
-# -------------------
-# Config
-# -------------------
-PARQUET_PATH = "/users/gbk2114/data/MIMIC_MEDS/MEDS_cohort/processed/metadata/codes.parquet"
-N_SAMPLES = 200
-N_REPEATS = 1
-OUT_DIR = "../eval_suite/conf/eval_codes"
-SEED = 42
-
-random.seed(SEED)
+from every_query.paper_experiments.sample_codes._common import load_filtered_codes, stable_hash_list
 
 
-def stable_hash_list(items: list[str]) -> str:
-    """Order-sensitive, deterministic hash for a list of strings."""
-    h = hashlib.sha256()
-    for x in items:
-        h.update(x.encode("utf-8"))
-        h.update(b"\n")
-    return h.hexdigest()[:12]
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--metadata-dir",
+        type=Path,
+        required=True,
+        help="Path to a MEDS metadata directory containing codes.parquet.",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        required=True,
+        help="Directory to write the sampled YAML into (created if it doesn't exist).",
+    )
+    parser.add_argument("--n-samples", type=int, default=200)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--exclude-pattern",
+        default="TIME",
+        help="Drop codes containing this substring.  Pass empty string to disable.",
+    )
+    args = parser.parse_args()
+
+    random.seed(args.seed)
+    exclude = args.exclude_pattern or None
+    codes = load_filtered_codes(args.metadata_dir, exclude_pattern=exclude)
+    print(f"loaded {len(codes)} codes (exclude={exclude!r})")
+
+    sampled = random.sample(codes, args.n_samples)
+    hash_str = stable_hash_list(sampled)
+
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    out_fp = args.out_dir / f"embed_{args.n_samples}_{hash_str}.yaml"
+    with open(out_fp, "x") as f:
+        for code in sampled:
+            f.write(f'- "{code}"\n')
+    print(f"wrote {out_fp}")
 
 
 if __name__ == "__main__":
-    # -------------------
-    # Load + filter codes
-    # -------------------
-    df = pl.read_parquet(PARQUET_PATH)
-    codes = df["code"].unique().sort().to_list()
-    print(f"num all codes {len(codes)}")
-
-    time_codes = [code for code in codes if "TIME" in code]
-    print(f"{len(time_codes)} TIME Codes removed:")
-    print(time_codes)
-
-    # Filter out time codes
-    filtered_codes = [code for code in codes if "TIME" not in code]
-    print(f"num codes after filtering: {len(filtered_codes)}")
-
-    os.makedirs(OUT_DIR, exist_ok=True)
-
-    sampled_embed_queries = random.sample(filtered_codes, N_SAMPLES)
-    hash = stable_hash_list(sampled_embed_queries)
-
-    # ---- write file ----
-    out_path = f"{OUT_DIR}/embed_{N_SAMPLES}_{hash}.yaml"
-    with open(out_path, "x") as f:
-        for code in sampled_embed_queries:
-            f.write(f'- "{code}"\n')
-
-    print(f"Done sampling {N_SAMPLES} queries for embedding plots")
-    print(f"Saved @ {out_path}")
+    main()

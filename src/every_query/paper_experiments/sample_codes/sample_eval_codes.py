@@ -1,44 +1,73 @@
-import os
-import random
+"""Sample paired ID/OOD eval-code YAMLs from a MEDS cohort + an existing train-codes YAML.
 
-import polars as pl
+Given a previously-generated train-codes YAML (produced by ``sample_train_codes.py``),
+partition the cohort's code universe into ID (codes used during training) and OOD (codes
+held out).  Then draw ``--num-id-codes`` / ``--num-ood-codes`` without replacement from each
+and write the pair into a single YAML in the shape the eval configs expect
+(``{id: [...], ood: [...]}``).
+
+Paper-experiments only — ID/OOD held-out splits are a generalization-research construct, not
+a deployment pattern.
+"""
+
+import argparse
+import random
+from pathlib import Path
+
 import yaml
 
-# goal is to sample 20 random codes from each ID and OOD pair to get a
-# total of 40 codes to calculate auroc for
-PARQUET_PATH = "/users/gbk2114/data/MIMIC_MEDS/MEDS_cohort/processed/metadata/codes.parquet"
-SEED = 42
-NUM_CODES = 5000
+from every_query.paper_experiments.sample_codes._common import load_filtered_codes
 
-random.seed(SEED)
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--metadata-dir",
+        type=Path,
+        required=True,
+        help="Path to a MEDS metadata directory containing codes.parquet.",
+    )
+    parser.add_argument(
+        "--train-codes-yaml",
+        type=Path,
+        required=True,
+        help="Path to a previously-sampled train-codes YAML (``{codes: [...]}``).",
+    )
+    parser.add_argument(
+        "--out-fp",
+        type=Path,
+        required=True,
+        help="Output YAML path (parent dir created if needed).",
+    )
+    parser.add_argument("--num-id-codes", type=int, default=5000)
+    parser.add_argument("--num-ood-codes", type=int, default=500)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--exclude-pattern",
+        default="TIME",
+        help="Drop codes containing this substring before partitioning.  Pass empty string to disable.",
+    )
+    args = parser.parse_args()
+
+    random.seed(args.seed)
+    exclude = args.exclude_pattern or None
+    all_codes = set(load_filtered_codes(args.metadata_dir, exclude_pattern=exclude))
+
+    with open(args.train_codes_yaml) as f:
+        id_universe = set(yaml.safe_load(f)["codes"])
+    ood_universe = all_codes - id_universe
+    id_universe = sorted(id_universe)
+    ood_universe = sorted(ood_universe)
+
+    id_sampled = random.sample(id_universe, args.num_id_codes)
+    ood_sampled = random.sample(ood_universe, args.num_ood_codes)
+
+    args.out_fp.parent.mkdir(parents=True, exist_ok=True)
+    with open(args.out_fp, "w") as f:
+        yaml.safe_dump({"id": id_sampled, "ood": ood_sampled}, f)
+
+    print(f"wrote {args.out_fp} ({len(id_sampled)} ID + {len(ood_sampled)} OOD)")
+
 
 if __name__ == "__main__":
-    # -------------------
-    # Load + filter codes
-    # -------------------
-    df = pl.read_parquet(PARQUET_PATH)
-    all_codes = set(df["code"].unique().to_list())
-
-    training_sets = ["10000_ID__8db2be6fadf8"]
-
-    for training_set in training_sets:
-        with open(f"../train_codes/{training_set}.yaml") as f:
-            id_codes = set(yaml.safe_load(f)["codes"])
-
-        ood_codes = all_codes - id_codes
-
-        id_codes = sorted(id_codes)
-        ood_codes = sorted(ood_codes)
-
-        id_sampled = random.sample(id_codes, NUM_CODES)
-        ood_sampled = random.sample(ood_codes, 500)
-
-        out_codes = {"id": id_sampled, "ood": ood_sampled}
-        os.makedirs("../eval_suite/conf/eval_codes", exist_ok=True)
-
-        out_fp = f"../eval_suite/conf/eval_codes/{training_set}_{NUM_CODES}.yaml"
-
-        with open(out_fp, "w") as f:
-            yaml.safe_dump(out_codes, f)
-
-        print(f"Written to {out_fp}")
+    main()
