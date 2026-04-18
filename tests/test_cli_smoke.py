@@ -38,6 +38,8 @@ _ENTRYPOINTS: list[tuple[str, list[str]]] = [
     ("EQ_gen_eval_index", []),
     ("EQ_gen_eval_tasks", ["eval_codes=smoke"]),
     ("EQ_select_model", []),
+    ("EQ_aces_to_eq", ["query_codes=smoke"]),
+    ("EQ_process_composite", []),
 ]
 
 
@@ -49,6 +51,8 @@ def smoke_config_dir(tmp_path_factory) -> Path:
     (d / "train_codes" / "smoke.yaml").write_text("codes: []\n")
     (d / "eval_codes").mkdir()
     (d / "eval_codes" / "smoke.yaml").write_text("id: []\nood: []\n")
+    (d / "query_codes").mkdir()
+    (d / "query_codes" / "smoke.yaml").write_text("- A\n- B\n")
     return d
 
 
