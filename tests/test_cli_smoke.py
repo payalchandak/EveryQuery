@@ -45,7 +45,7 @@ _ENTRYPOINTS: list[tuple[str, list[str]]] = [
 
 @pytest.fixture(scope="module")
 def smoke_config_dir(tmp_path_factory) -> Path:
-    """Temp Hydra search dir supplying empty ``train_codes`` / ``eval_codes``."""
+    """Temp Hydra search dir supplying stub ``train_codes``, ``eval_codes``, and ``query_codes`` groups."""
     d = tmp_path_factory.mktemp("eq_smoke_cfg")
     (d / "train_codes").mkdir()
     (d / "train_codes" / "smoke.yaml").write_text("codes: []\n")
