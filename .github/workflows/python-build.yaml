@@ -42,8 +42,6 @@ jobs:
       - build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -74,7 +72,6 @@ jobs:
           PROCESSED: /tmp
           INTERMEDIATE: /tmp
           FINAL_DATA_DIR: /tmp
-          ACES_SHARDS_DIR: /tmp
           WANDB_ENTITY: test
         run: |
           set -euo pipefail
@@ -94,8 +91,11 @@ jobs:
           done
 
           # CLIs that need a compose stub injected via --config-dir.
+          echo "=== EQ_train --help ==="
           "$BIN/EQ_train" --config-dir="$SMOKE" train_codes=smoke --help > /dev/null
+          echo "=== EQ_evaluate --help ==="
           "$BIN/EQ_evaluate" --config-dir="$SMOKE" eval_codes=smoke --help > /dev/null
+          echo "=== EQ_gen_eval_tasks --help ==="
           "$BIN/EQ_gen_eval_tasks" --config-dir="$SMOKE" eval_codes=smoke --help > /dev/null
 
           echo "All entry points resolve from the wheel install."
