@@ -33,6 +33,71 @@ jobs:
           name: python-package-distributions
           path: dist/
 
+  wheel-install-smoke:
+    # Validate that the built wheel actually works when pip-installed in a fresh venv —
+    # catches packaging regressions (missing package-data YAMLs, malformed [project.scripts],
+    # missing transitive runtime deps) that the editable-install dev setup hides.  See #68.
+    name: Wheel-install smoke
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Download built dists
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Install wheel into a fresh venv
+        run: |
+          uv venv /tmp/wheel-venv
+          VIRTUAL_ENV=/tmp/wheel-venv uv pip install dist/*.whl
+
+      - name: Run --help on every registered EQ_* entry point
+        env:
+          # Dummy env-var stubs so ensure_env() passes for CLIs that need them.
+          PROJECT_DIR: /tmp
+          OUTPUT_DIR: /tmp
+          TASK_DIR: /tmp
+          PROCESSED: /tmp
+          INTERMEDIATE: /tmp
+          FINAL_DATA_DIR: /tmp
+          ACES_SHARDS_DIR: /tmp
+          WANDB_ENTITY: test
+        run: |
+          set -euo pipefail
+          # Compose-group stubs for CLIs whose shipped configs default on gitignored YAMLs.
+          SMOKE=/tmp/eq-smoke-cfg
+          mkdir -p "$SMOKE/train_codes" "$SMOKE/eval_codes" "$SMOKE/query_codes"
+          printf 'codes: []\n' > "$SMOKE/train_codes/smoke.yaml"
+          printf 'id: []\nood: []\n' > "$SMOKE/eval_codes/smoke.yaml"
+          printf -- '- A\n- B\n' > "$SMOKE/query_codes/smoke.yaml"
+
+          BIN=/tmp/wheel-venv/bin
+          # CLIs that don't need a compose stub.
+          for cli in EQ_process_data EQ_generate_tasks EQ_gen_eval_index EQ_select_model EQ_process_composite; do
+            echo "=== $cli --help ==="
+            "$BIN/$cli" --help > /dev/null
+          done
+          # CLIs that need a compose stub injected via --config-dir.
+          "$BIN/EQ_train"         --config-dir="$SMOKE" train_codes=smoke --help > /dev/null
+          "$BIN/EQ_evaluate"      --config-dir="$SMOKE" eval_codes=smoke --help > /dev/null
+          "$BIN/EQ_gen_eval_tasks" --config-dir="$SMOKE" eval_codes=smoke --help > /dev/null
+          "$BIN/EQ_aces_to_eq"    --config-dir="$SMOKE" query_codes=smoke --help > /dev/null
+          echo "All entry points resolve from the wheel install."
+
   publish-to-pypi:
     name: Publish Python 🐍 distribution 📦 to PyPI
     if: startsWith(github.ref, 'refs/tags/') # only publish to PyPI on tag pushes
