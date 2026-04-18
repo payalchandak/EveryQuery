@@ -55,6 +55,10 @@ def main() -> None:
 
     with open(args.train_codes_yaml) as f:
         id_universe = set(yaml.safe_load(f)["codes"])
+    # Tighten the ID universe to codes present in the current cohort — the train YAML may
+    # have been generated against a different dataset version or `--exclude-pattern`, which
+    # would otherwise leak phantom codes into `id_sampled`.
+    id_universe &= all_codes
     ood_universe = all_codes - id_universe
     id_universe = sorted(id_universe)
     ood_universe = sorted(ood_universe)
