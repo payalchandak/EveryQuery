@@ -185,7 +185,7 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
 
 def _init_env() -> None:
     """Validate required env vars and configure thread counts for polars/OMP."""
-    from every_query._env import ensure_env
+    from every_query.utils._env import ensure_env
 
     ensure_env()
     num_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))

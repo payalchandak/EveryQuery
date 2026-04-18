@@ -31,6 +31,7 @@ _VENV_BIN = str(Path(sys.executable).parent)
 # (console_script, extra_args) — extras inject a smoke code-group for configs
 # whose defaults pull an out-of-tree YAML.
 _ENTRYPOINTS: list[tuple[str, list[str]]] = [
+    ("EQ_process_data", []),
     ("EQ_train", ["train_codes=smoke"]),
     ("EQ_evaluate", ["eval_codes=smoke"]),
     ("EQ_generate_tasks", []),

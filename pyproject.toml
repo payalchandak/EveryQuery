@@ -56,6 +56,7 @@ every_query = ["**/*.yaml"]
 [project.optional-dependencies] # Add any optional dependencies here, installable via `pip install .[extra]`
 
 [project.scripts]
+EQ_process_data = "every_query.preprocessing.__main__:main"
 EQ_train = "every_query.train:main"
 EQ_evaluate = "every_query.eval:main"
 EQ_generate_tasks = "every_query.sample_tasks:main"
