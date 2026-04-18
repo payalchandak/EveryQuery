@@ -59,6 +59,17 @@ def main() -> None:
     id_universe = sorted(id_universe)
     ood_universe = sorted(ood_universe)
 
+    if len(id_universe) < args.num_id_codes:
+        parser.error(
+            f"Requested --num-id-codes={args.num_id_codes} but only {len(id_universe)} codes "
+            f"are in the ID universe (the train_codes YAML)."
+        )
+    if len(ood_universe) < args.num_ood_codes:
+        parser.error(
+            f"Requested --num-ood-codes={args.num_ood_codes} but only {len(ood_universe)} codes "
+            f"are in the OOD universe (metadata minus the train_codes YAML)."
+        )
+
     id_sampled = random.sample(id_universe, args.num_id_codes)
     ood_sampled = random.sample(ood_universe, args.num_ood_codes)
 

@@ -44,6 +44,12 @@ def main() -> None:
     codes = load_filtered_codes(args.metadata_dir, exclude_pattern=exclude)
     print(f"loaded {len(codes)} codes from {args.metadata_dir}/codes.parquet (exclude={exclude!r})")
 
+    if len(codes) < args.n_samples:
+        parser.error(
+            f"Requested --n-samples={args.n_samples} but only {len(codes)} codes are available "
+            f"after filtering (exclude_pattern={exclude!r})."
+        )
+
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     for _ in range(args.n_repeats):

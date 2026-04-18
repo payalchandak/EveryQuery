@@ -41,6 +41,12 @@ def main() -> None:
     codes = load_filtered_codes(args.metadata_dir, exclude_pattern=exclude)
     print(f"loaded {len(codes)} codes (exclude={exclude!r})")
 
+    if len(codes) < args.n_samples:
+        parser.error(
+            f"Requested --n-samples={args.n_samples} but only {len(codes)} codes are available "
+            f"after filtering (exclude_pattern={exclude!r})."
+        )
+
     sampled = random.sample(codes, args.n_samples)
     hash_str = stable_hash_list(sampled)
 
