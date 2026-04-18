@@ -26,6 +26,7 @@ from every_query.data.dataset import EveryQueryPytorchDataset
 from every_query.generate_tasks import sample_tasks as st
 from every_query.generate_tasks.sample_tasks import (
     TaskSpec,
+    _cache_dir,
     build_index_df,
     compute_max_time_per_subject,
     evaluate_index_df,
@@ -433,8 +434,11 @@ class TestRunWorkerPipeline:
         )
         assert labels_fp is not None
         assert labels_fp.exists()
-        assert (out_dir.parent / f"{out_dir.name}.cache" / "tasks" / "train" / "0__0000.json").exists()
-        assert (out_dir.parent / f"{out_dir.name}.cache" / "index" / "train" / "0__0000.parquet").exists()
+        cache_dir = _cache_dir(out_dir)
+        assert (cache_dir / "tasks" / "train" / "0__0000.json").exists()
+        assert (cache_dir / "index" / "train" / "0__0000.parquet").exists()
+        # Invariant: out_dir must contain *only* label parquets — no caching artifacts.
+        assert sorted(out_dir.rglob("*.parquet")) == [labels_fp]
 
         labels = pl.read_parquet(labels_fp)
         assert labels.height == 32
@@ -498,7 +502,7 @@ class TestRunWorkerPipeline:
         first = run_worker(seed=1, **kwargs)
         assert first is not None
 
-        tasks_path = out_dir.parent / f"{out_dir.name}.cache" / "tasks" / "train" / "0__0000.json"
+        tasks_path = _cache_dir(out_dir) / "tasks" / "train" / "0__0000.json"
         first_label_bytes = first.read_bytes()
         first_task_bytes = tasks_path.read_bytes()
 
@@ -539,8 +543,8 @@ class TestRunWorkerPipeline:
         run_worker(task_shard=0, **kwargs)
         run_worker(task_shard=1, **kwargs)
 
-        tasks_a = (out_dir.parent / f"{out_dir.name}.cache" / "tasks" / "train" / "0__0000.json").read_text()
-        tasks_b = (out_dir.parent / f"{out_dir.name}.cache" / "tasks" / "train" / "0__0001.json").read_text()
+        tasks_a = (_cache_dir(out_dir) / "tasks" / "train" / "0__0000.json").read_text()
+        tasks_b = (_cache_dir(out_dir) / "tasks" / "train" / "0__0001.json").read_text()
         assert tasks_a != tasks_b
 
     def test_input_shard_axis_preserves_tasks(self, tmp_path, synthetic_events, synthetic_query_codes):
@@ -579,19 +583,16 @@ class TestRunWorkerPipeline:
         run_worker(input_shard="1", **kwargs)
 
         # Same tasks across input shards.
-        tasks_0 = (out_dir.parent / f"{out_dir.name}.cache" / "tasks" / "train" / "0__0000.json").read_text()
-        tasks_1 = (out_dir.parent / f"{out_dir.name}.cache" / "tasks" / "train" / "1__0000.json").read_text()
+        cache_dir = _cache_dir(out_dir)
+        tasks_0 = (cache_dir / "tasks" / "train" / "0__0000.json").read_text()
+        tasks_1 = (cache_dir / "tasks" / "train" / "1__0000.json").read_text()
         assert tasks_0 == tasks_1, "tasks should be identical across input_shards at fixed task_shard"
 
         # ... but the sampled context *pairs* must differ, since the context seed depends on
         # input_shard.  Compare the (subject_id, prediction_time) multiset rather than the raw
         # parquet bytes to avoid flakiness from parquet metadata / row-order.
-        index_0 = pl.read_parquet(
-            out_dir.parent / f"{out_dir.name}.cache" / "index" / "train" / "0__0000.parquet"
-        )
-        index_1 = pl.read_parquet(
-            out_dir.parent / f"{out_dir.name}.cache" / "index" / "train" / "1__0000.parquet"
-        )
+        index_0 = pl.read_parquet(cache_dir / "index" / "train" / "0__0000.parquet")
+        index_1 = pl.read_parquet(cache_dir / "index" / "train" / "1__0000.parquet")
         pairs_0 = set(index_0.select("subject_id", "prediction_time").iter_rows())
         pairs_1 = set(index_1.select("subject_id", "prediction_time").iter_rows())
         assert pairs_0 != pairs_1, (
@@ -684,7 +685,7 @@ class TestRunWorkerPipeline:
         assert first is not None
 
         # Delete the meta sidecar to simulate a legacy / pre-meta artifact.
-        run_meta_fp = out_dir.parent / f"{out_dir.name}.cache" / "runs" / "train" / "0__0000.json"
+        run_meta_fp = _cache_dir(out_dir) / "runs" / "train" / "0__0000.json"
         assert run_meta_fp.exists()
         run_meta_fp.unlink()
 
@@ -736,7 +737,7 @@ class TestRunWorkerPipeline:
         out_dir = tmp_path / "out"
 
         preset = [TaskSpec("ICD//A01", 30), TaskSpec("MED//D04", 60)]
-        tasks_fp = out_dir.parent / f"{out_dir.name}.cache" / "tasks" / "train" / "0__0000.json"
+        tasks_fp = _cache_dir(out_dir) / "tasks" / "train" / "0__0000.json"
         st.save_tasks(preset, tasks_fp)
 
         labels_fp = run_worker(

@@ -449,6 +449,16 @@ def load_tasks(fp: Path) -> list[TaskSpec]:
 # ---------------------------------------------------------------------------
 
 
+def _cache_dir(out_dir: Path) -> Path:
+    """Return the sibling cache directory for *out_dir*.
+
+    Caching artifacts (sampled tasks JSON, unlabeled-index parquet, run-meta JSON) are written
+    here rather than under ``out_dir`` so that MTD's ``rglob("*.parquet")`` over ``out_dir``
+    only picks up real label parquets.
+    """
+    return out_dir.parent / f"{out_dir.name}.cache"
+
+
 def _artifact_paths(
     out_dir: Path,
     split: str,
@@ -479,7 +489,7 @@ def _artifact_paths(
         PosixPath('/tmp/task_labels.cache/runs/train/0__0000.json')
     """
     worker_id = f"{input_shard}__{task_shard:04d}"
-    cache_dir = out_dir.parent / f"{out_dir.name}.cache"
+    cache_dir = _cache_dir(out_dir)
     tasks_fp = cache_dir / "tasks" / split / f"{worker_id}.json"
     index_fp = cache_dir / "index" / split / f"{worker_id}.parquet"
     labels_fp = out_dir / split / f"{worker_id}.parquet"
@@ -511,7 +521,7 @@ def _build_run_meta(
     }
 
 
-def _validate_run_meta(run_meta_fp: Path, current: dict[str, int]) -> None:
+def _validate_run_meta(run_meta_fp: Path, cache_dir: Path, current: dict[str, int]) -> None:
     """Raise ``ValueError`` if an on-disk worker meta file exists and disagrees with ``current``.
 
     Absent meta is tolerated: legacy artifacts from before the meta sidecar, or hand-pre-seeded
@@ -536,7 +546,7 @@ def _validate_run_meta(run_meta_fp: Path, current: dict[str, int]) -> None:
         f"{run_meta_fp} differs from the requested config:\n"
         + "\n".join(diff_lines)
         + "\nPass overwrite=true to regenerate this worker's artifacts, or delete "
-        f"{run_meta_fp.parent.parent.parent!s} (the sampler cache dir) for a clean run."
+        f"{cache_dir!s} (the sampler cache dir) for a clean run."
     )
 
 
@@ -576,6 +586,7 @@ def run_worker(
             disagrees with the requested config and ``overwrite`` is False.
     """
     tasks_fp, index_fp, labels_fp, run_meta_fp = _artifact_paths(out_dir, split, input_shard, task_shard)
+    cache_dir = _cache_dir(out_dir)
     current_meta = _build_run_meta(
         seed=seed,
         n_tasks=n_tasks,
@@ -587,7 +598,7 @@ def run_worker(
 
     if not overwrite:
         # Reject cached artifacts if their on-disk config disagrees with what we were asked for.
-        _validate_run_meta(run_meta_fp, current_meta)
+        _validate_run_meta(run_meta_fp, cache_dir, current_meta)
 
     if labels_fp.exists() and not overwrite:
         logger.info("Labels already exist at %s, skipping.", labels_fp)
