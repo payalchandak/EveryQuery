@@ -8,9 +8,12 @@ so stage submodules do not need to know the internal file layout::
 """
 
 from every_query.data.dataset import EveryQueryBatch, EveryQueryPytorchDataset, QueryData
+from every_query.data.schema import TaskQuerySchema, empty_task_query_df
 
 __all__ = [
     "EveryQueryBatch",
     "EveryQueryPytorchDataset",
     "QueryData",
+    "TaskQuerySchema",
+    "empty_task_query_df",
 ]

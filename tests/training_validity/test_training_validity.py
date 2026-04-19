@@ -169,13 +169,16 @@ def _compute_labels(events: pl.DataFrame, subject_ids: list[int]) -> pl.DataFram
                 & (pl.col("time") > window_start)
                 & (pl.col("time") < window_end)
             ).is_empty()
-            occurs = (not censored) and event_fires
+            # Collapsed nullable boolean_value per TaskQuerySchema:
+            #   null  → censored
+            #   True  → event occurred in window
+            #   False → no event, not censored
+            boolean_value = None if censored else event_fires
             rows.append(
                 {
                     "subject_id": subj,
                     "prediction_time": window_start,
-                    "boolean_value": censored,
-                    "occurs": occurs,
+                    "boolean_value": boolean_value,
                     "query": _TARGET_CODE,
                     "duration_days": duration_days,
                 }
@@ -187,7 +190,6 @@ def _compute_labels(events: pl.DataFrame, subject_ids: list[int]) -> pl.DataFram
             "subject_id": pl.Int64,
             "prediction_time": pl.Datetime("us", "UTC"),
             "boolean_value": pl.Boolean,
-            "occurs": pl.Boolean,
             "query": pl.Utf8,
             "duration_days": pl.Int64,
         },

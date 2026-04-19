@@ -25,6 +25,7 @@ from meds import train_split
 from meds_torchdata.config import MEDSTorchDataConfig
 
 from every_query.data.dataset import EveryQueryPytorchDataset
+from every_query.data.schema import TaskQuerySchema
 from every_query.generate_tasks import sample_tasks as st
 from every_query.generate_tasks.sample_tasks import (
     TaskSpec,
@@ -189,7 +190,11 @@ class TestEvaluateIndexDfEdgeCases:
     """Hand-crafted edge-case tests for ``evaluate_index_df``."""
 
     def test_event_exactly_at_prediction_time_is_excluded(self):
-        """``prediction_time == event_time`` must not count as an occurrence (strict ``>``)."""
+        """``prediction_time == event_time`` must not count as an occurrence (strict ``>``).
+
+        Under the collapsed ``TaskQuerySchema`` label: non-censored row with an event in
+        the window → ``boolean_value = True``; non-censored row without → ``False``.
+        """
         events = pl.DataFrame(
             {
                 "subject_id": [1, 1, 1, 1, 1],
@@ -205,7 +210,7 @@ class TestEvaluateIndexDfEdgeCases:
         ).sort(["subject_id", "time"])
 
         # Construct one index row at prediction_time = 2020-01-03. The event at 2020-01-03
-        # should NOT count. The next event is 2020-01-04, which is within 10d → occurs=True.
+        # should NOT count. The next event is 2020-01-04, which is within 10d → True.
         index_df = pl.DataFrame(
             {
                 "subject_id": [1],
@@ -216,23 +221,17 @@ class TestEvaluateIndexDfEdgeCases:
         ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
         max_time_df = compute_max_time_per_subject(events)
         result = evaluate_index_df(index_df, events, max_time_df)
-        assert result["boolean_value"].to_list() == [False]
-        assert result["occurs"].to_list() == [True]
+        assert result["boolean_value"].to_list() == [True]
 
-        # Now with duration=0: no window → occurs=False (and not censored because 2020-01-03
+        # Now with duration=0: no window → False (and not censored because 2020-01-03
         # + 0 days = 2020-01-03 which is <= 2021-01-01).
         index_df_zero = index_df.with_columns(pl.lit(0, dtype=pl.Int64).alias("duration_days"))
         result_zero = evaluate_index_df(index_df_zero, events, max_time_df)
-        assert result_zero["occurs"].to_list() == [False]
+        assert result_zero["boolean_value"].to_list() == [False]
 
     def test_unknown_subject_is_treated_as_censored(self, caplog):
-        """An index_df row referencing a subject absent from events_df must not produce null booleans — the
-        torch collate can't consume nulls.
-
-        Policy: treat missing-subject rows as
-        censored (boolean_value=True, occurs=False) and emit a warning so the condition is
-        visible to the user.
-        """
+        """An index_df row referencing a subject absent from events_df resolves to censored (``boolean_value =
+        null``) under the collapsed schema, and emits a warning."""
         events = pl.DataFrame(
             {
                 "subject_id": [1],
@@ -255,14 +254,9 @@ class TestEvaluateIndexDfEdgeCases:
         with caplog.at_level("WARNING", logger="every_query.generate_tasks.sample_tasks"):
             result = evaluate_index_df(index_df, events, max_time_df)
 
-        # Neither row produces a null label.
-        assert result["boolean_value"].null_count() == 0
-        assert result["occurs"].null_count() == 0
-
-        # Subject 2 (unknown) → censored, not occurred.
+        # Subject 2 (unknown) → censored → null boolean_value.
         unknown = result.filter(pl.col("subject_id") == 2)
-        assert unknown["boolean_value"].to_list() == [True]
-        assert unknown["occurs"].to_list() == [False]
+        assert unknown["boolean_value"].to_list() == [None]
 
         # Warning was emitted with a count.
         assert any("not present in events_df" in record.message for record in caplog.records), (
@@ -335,9 +329,8 @@ class TestReadEventShardDtypeNormalization:
 
         result = evaluate_index_df(index_df, events, compute_max_time_per_subject(events))
         # Uncensored (max_time = 2021-01-01 is way past prediction + 10d) and the next "A"
-        # event is 2020-01-02, which is strictly within the window → occurs=True.
-        assert result["boolean_value"].to_list() == [False]
-        assert result["occurs"].to_list() == [True]
+        # event is 2020-01-02, which is strictly within the window → boolean_value=True.
+        assert result["boolean_value"].to_list() == [True]
 
 
 class TestAtomicWriteConcurrency:
@@ -440,14 +433,9 @@ class TestRunWorkerPipeline:
 
         labels = pl.read_parquet(labels_fp)
         assert labels.height == 32
-        assert set(labels.columns) == {
-            "subject_id",
-            "prediction_time",
-            "boolean_value",
-            "occurs",
-            "query",
-            "duration_days",
-        }
+        # Schema conformance is the invariant — validate directly against TaskQuerySchema
+        # rather than hand-rolling the column set (which would drift if the schema grows).
+        TaskQuerySchema.validate(labels.to_arrow())
 
     def test_rerun_is_idempotent_noop(self, tmp_path, synthetic_events, synthetic_query_codes):
         """Second invocation with identical args returns ``None`` and leaves outputs untouched."""
@@ -793,24 +781,17 @@ class TestEndToEndWithDataset:
                 "subject_id": pl.Int64,
                 "prediction_time": pl.Datetime("us"),
                 "query": pl.Utf8,
-                "duration_days": pl.Int64,
+                # Float32 to match TaskQuerySchema.duration_days.
+                "duration_days": pl.Float32,
             }
         )
 
         max_time_df = compute_max_time_per_subject(events_df)
         labeled = evaluate_index_df(index_df, events_df, max_time_df)
 
-        # Sanity: schema matches EveryQueryPytorchDataset's expectations exactly.
-        assert set(labeled.columns) == {
-            "subject_id",
-            "prediction_time",
-            "boolean_value",
-            "occurs",
-            "query",
-            "duration_days",
-        }
-        assert labeled.schema["boolean_value"] == pl.Boolean
-        assert labeled.schema["occurs"] == pl.Boolean
+        # Sanity: labeled output conforms to TaskQuerySchema — same check the write path
+        # in ``run_worker`` does, exercised here at the per-function boundary.
+        TaskQuerySchema.validate(labeled.to_arrow())
 
         labels_fp = Path(labels_dir) / "0.parquet"
         labeled.write_parquet(labels_fp)

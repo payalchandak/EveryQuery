@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 from omegaconf import ListConfig, OmegaConf
 
+from every_query.data.schema import TaskQuerySchema
 from every_query.evaluate.eval import _model_name
 from every_query.evaluate.gen_task import _resolve_codes, process_eval_tasks
 from every_query.utils.codes import code_slug
@@ -129,21 +130,18 @@ class TestResolveCodes:
 
 
 class TestGenTaskOutputSchema:
-    def test_columns(self, tmp_path):
+    def test_conforms_to_task_query_schema(self, tmp_path):
+        """Output conforms to ``TaskQuerySchema`` — validated directly via the schema's ``validate()`` method
+        rather than a hand-rolled column-set check.
+
+        Fails with a field-level diff if the producer drifts (extra columns, missing required columns, wrong
+        dtypes).
+        """
         index_dir, task_dir_base, out_root = _build_fixtures(tmp_path)
         process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS, "held_out")
 
         df = _read_all_outputs(out_root, INDEX_HASH)
-        expected = {"subject_id", "prediction_time", "boolean_value", "query", "occurs", "duration_days"}
-        assert set(df.columns) == expected
-
-    def test_no_null_occurs(self, tmp_path):
-        """Rows with null occurs should be filtered out."""
-        index_dir, task_dir_base, out_root = _build_fixtures(tmp_path)
-        process_eval_tasks(index_dir, task_dir_base, out_root, INDEX_HASH, CODES, DURATIONS, "held_out")
-
-        df = _read_all_outputs(out_root, INDEX_HASH)
-        assert df["occurs"].null_count() == 0
+        TaskQuerySchema.validate(df.to_arrow())
 
 
 # ---------------------------------------------------------------------------
@@ -297,10 +295,16 @@ class TestGenTaskDirectoryStructure:
 
 class TestGenTaskCensorSource:
     def test_boolean_value_from_task_file_not_index(self, tmp_path):
-        """boolean_value should reflect the duration-specific censored column, not index times."""
+        """``boolean_value`` should reflect the duration-specific ``censored`` column, not the index times.
+
+        Under the collapsed ``TaskQuerySchema`` label:
+        null  → censored
+        True  → event occurred (per-code value = True, not censored)
+        False → no event, not censored (per-code value = False, not censored)
+        """
         base = datetime(2020, 1, 1)
 
-        # Index times (no censored column needed anymore — we only use subject_id, prediction_time)
+        # Index times (no censored column needed — we only use subject_id, prediction_time)
         index_df = pl.DataFrame(
             {
                 "subject_id": [1, 2],
@@ -343,13 +347,13 @@ class TestGenTaskCensorSource:
 
         all_df = _read_all_outputs(out_root, INDEX_HASH)
 
-        # At duration=30, subject 1 should be censored (True)
+        # At duration=30, subject 1 is censored → boolean_value is null.
         row_30_s1 = all_df.filter((pl.col("duration_days") == 30) & (pl.col("subject_id") == 1))
-        assert row_30_s1["boolean_value"][0] is True
+        assert row_30_s1["boolean_value"][0] is None
 
-        # At duration=90, subject 1 should NOT be censored (False)
+        # At duration=90, subject 1 is NOT censored and per-code value was True → True.
         row_90_s1 = all_df.filter((pl.col("duration_days") == 90) & (pl.col("subject_id") == 1))
-        assert row_90_s1["boolean_value"][0] is False
+        assert row_90_s1["boolean_value"][0] is True
 
 
 # ---------------------------------------------------------------------------

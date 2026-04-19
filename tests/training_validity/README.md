@@ -172,41 +172,45 @@ shape: (10, 4)
 
 ```
 
-The head of the labels DataFrame shows how the marker pair maps onto
-(censored, occurs) across the three durations — three rows per subject, one per
-queried duration:
+The head of the labels DataFrame shows how the marker pair maps onto the
+collapsed nullable `boolean_value` (per `TaskQuerySchema`: `null` =
+censored, `true` = event occurred in window, `false` = no event and not
+censored) across the three durations — three rows per subject, one per queried
+duration:
 
 ```python
 >>> labels.head(9)
-shape: (9, 6)
-┌────────────┬─────────────────────┬───────────────┬────────┬────────┬───────────────┐
-│ subject_id ┆ prediction_time     ┆ boolean_value ┆ occurs ┆ query  ┆ duration_days │
-│ ---        ┆ ---                 ┆ ---           ┆ ---    ┆ ---    ┆ ---           │
-│ i64        ┆ datetime[μs]        ┆ bool          ┆ bool   ┆ str    ┆ i64           │
-╞════════════╪═════════════════════╪═══════════════╪════════╪════════╪═══════════════╡
-│ 1000       ┆ 2020-01-11 00:00:00 ┆ false         ┆ false  ┆ TARGET ┆ 1             │
-│ 1000       ┆ 2020-01-11 00:00:00 ┆ false         ┆ false  ┆ TARGET ┆ 7             │
-│ 1000       ┆ 2020-01-11 00:00:00 ┆ false         ┆ true   ┆ TARGET ┆ 30            │
-│ 1001       ┆ 2020-01-11 00:00:00 ┆ false         ┆ false  ┆ TARGET ┆ 1             │
-│ 1001       ┆ 2020-01-11 00:00:00 ┆ false         ┆ false  ┆ TARGET ┆ 7             │
-│ 1001       ┆ 2020-01-11 00:00:00 ┆ false         ┆ true   ┆ TARGET ┆ 30            │
-│ 1002       ┆ 2020-01-11 00:00:00 ┆ false         ┆ false  ┆ TARGET ┆ 1             │
-│ 1002       ┆ 2020-01-11 00:00:00 ┆ false         ┆ false  ┆ TARGET ┆ 7             │
-│ 1002       ┆ 2020-01-11 00:00:00 ┆ true          ┆ false  ┆ TARGET ┆ 30            │
-└────────────┴─────────────────────┴───────────────┴────────┴────────┴───────────────┘
+shape: (9, 5)
+┌────────────┬─────────────────────┬───────────────┬────────┬───────────────┐
+│ subject_id ┆ prediction_time     ┆ boolean_value ┆ query  ┆ duration_days │
+│ ---        ┆ ---                 ┆ ---           ┆ ---    ┆ ---           │
+│ i64        ┆ datetime[μs]        ┆ bool          ┆ str    ┆ i64           │
+╞════════════╪═════════════════════╪═══════════════╪════════╪═══════════════╡
+│ 1000       ┆ 2020-01-11 00:00:00 ┆ false         ┆ TARGET ┆ 1             │
+│ 1000       ┆ 2020-01-11 00:00:00 ┆ false         ┆ TARGET ┆ 7             │
+│ 1000       ┆ 2020-01-11 00:00:00 ┆ true          ┆ TARGET ┆ 30            │
+│ 1001       ┆ 2020-01-11 00:00:00 ┆ false         ┆ TARGET ┆ 1             │
+│ 1001       ┆ 2020-01-11 00:00:00 ┆ false         ┆ TARGET ┆ 7             │
+│ 1001       ┆ 2020-01-11 00:00:00 ┆ true          ┆ TARGET ┆ 30            │
+│ 1002       ┆ 2020-01-11 00:00:00 ┆ false         ┆ TARGET ┆ 1             │
+│ 1002       ┆ 2020-01-11 00:00:00 ┆ false         ┆ TARGET ┆ 7             │
+│ 1002       ┆ 2020-01-11 00:00:00 ┆ null          ┆ TARGET ┆ 30            │
+└────────────┴─────────────────────┴───────────────┴────────┴───────────────┘
 
 ```
 
 Aggregate positive / censored rates across the full 100-subject training split —
-17/33/26 `occurs=True` at d=1/7/30 (monotone, as the duration-monotonicity check
-requires) and 52/100 censored at d=30 (driven by the `P_END_D20` end marker, which
-ends observation at day 20 — inside the 30-day query window):
+17/33/26 `boolean_value=True` (event occurred) at d=1/7/30 (monotone, as the
+duration-monotonicity check requires), and 52/100 censored at d=30 (driven by
+the `P_END_D20` end marker, which ends observation at day 20 — inside the
+30-day query window). Counts are derived directly from the nullable
+`boolean_value`: `n_censored` = null count, `n_occurs` = True count:
 
 ```python
 >>> labels.group_by("duration_days").agg(
 ...     pl.len().alias("n"),
-...     pl.col("boolean_value").sum().alias("n_censored"),
-...     pl.col("occurs").sum().alias("n_occurs"),
+...     pl.col("boolean_value").is_null().sum().alias("n_censored"),
+...     pl.col("boolean_value").sum().alias("n_occurs"),
 ... ).sort("duration_days")
 shape: (3, 4)
 ┌───────────────┬─────┬────────────┬──────────┐
@@ -242,36 +246,36 @@ shape: (3, 4)
 │ 1000       ┆ 2020-01-01 00:00:00 UTC ┆ P_FIRE_D15 ┆ null          │
 │ 1000       ┆ 2020-01-26 00:00:00 UTC ┆ TARGET     ┆ null          │
 └────────────┴─────────────────────────┴────────────┴───────────────┘
->>> labels.filter(pl.col("subject_id") == 1000).select("duration_days", "boolean_value", "occurs")
-shape: (3, 3)
-┌───────────────┬───────────────┬────────┐
-│ duration_days ┆ boolean_value ┆ occurs │
-│ ---           ┆ ---           ┆ ---    │
-│ i64           ┆ bool          ┆ bool   │
-╞═══════════════╪═══════════════╪════════╡
-│ 1             ┆ false         ┆ false  │
-│ 7             ┆ false         ┆ false  │
-│ 30            ┆ false         ┆ true   │
-└───────────────┴───────────────┴────────┘
+>>> labels.filter(pl.col("subject_id") == 1000).select("duration_days", "boolean_value")
+shape: (3, 2)
+┌───────────────┬───────────────┐
+│ duration_days ┆ boolean_value │
+│ ---           ┆ ---           │
+│ i64           ┆ bool          │
+╞═══════════════╪═══════════════╡
+│ 1             ┆ false         │
+│ 7             ┆ false         │
+│ 30            ┆ true          │
+└───────────────┴───────────────┘
 
 ```
 
 Contrast: `subject_id=1003` drew `P_FIRE_D05 + P_END_D20` — `TARGET` fires on day
 10.5 (inside every duration window) but observation ends at day 20, censoring the
-d=30 window:
+d=30 window (`boolean_value = null`):
 
 ```python
->>> labels.filter(pl.col("subject_id") == 1003).select("duration_days", "boolean_value", "occurs")
-shape: (3, 3)
-┌───────────────┬───────────────┬────────┐
-│ duration_days ┆ boolean_value ┆ occurs │
-│ ---           ┆ ---           ┆ ---    │
-│ i64           ┆ bool          ┆ bool   │
-╞═══════════════╪═══════════════╪════════╡
-│ 1             ┆ false         ┆ true   │
-│ 7             ┆ false         ┆ true   │
-│ 30            ┆ true          ┆ false  │
-└───────────────┴───────────────┴────────┘
+>>> labels.filter(pl.col("subject_id") == 1003).select("duration_days", "boolean_value")
+shape: (3, 2)
+┌───────────────┬───────────────┐
+│ duration_days ┆ boolean_value │
+│ ---           ┆ ---           │
+│ i64           ┆ bool          │
+╞═══════════════╪═══════════════╡
+│ 1             ┆ true          │
+│ 7             ┆ true          │
+│ 30            ┆ null          │
+└───────────────┴───────────────┘
 
 ```
 
@@ -331,13 +335,17 @@ was dropped back to 2000.
 Three label-semantics and dataset-construction details worth calling out; all are
 documented inline in the test module too.
 
-1. **`boolean_value` = *censored*, not *occurs***. The EQ sampler overloads MEDS's
-    `boolean_value` label column to mean "censored" (observation ended before we could
-    observe the outcome), and uses a separate `occurs` column for the real positive-class
-    label. The dataset derives `batch.censor = boolean_value` and the model's
-    occurs-loss is masked to `~batch.censor`. Swapping the two labels silently inverts
-    training. (See also [#122][issue-122] for the ongoing discussion of collapsing these
-    into one nullable column.)
+1. **`boolean_value` is a single nullable column**. Per `TaskQuerySchema` in
+    `every_query.data.schema`, the on-disk label collapses censor + occurs into one
+    three-valued column:
+    - `null` → censored (observation ended before we could see)
+    - `True` → event occurred in the duration window
+    - `False` → no event in the window, and not censored
+        At read time, `EveryQueryPytorchDataset.__init__` splits it back into
+        `batch.censor = boolean_value.is_null()` and
+        `batch.occurs = boolean_value.fill_null(False)` so the model's loss wiring
+        (`occurs_loss(mask=~batch.censor)`) doesn't need to change. The test uses the
+        split tensors directly, same as the model. Closes #122.
 2. **`MEDSDataset.write` treats `data_shards` keys as path stems**, so the key
     `"train/0"` produces `data/train/0.parquet` but `"train"` produces
     `data/train.parquet`. MEDS-transforms expects the sharded layout; flat layout
@@ -354,6 +362,5 @@ documented inline in the test module too.
 
 [d1a]: https://github.com/payalchandak/EveryQuery/tree/test/e2e-training-validity-d1a
 [issue-104]: https://github.com/payalchandak/EveryQuery/issues/104
-[issue-122]: https://github.com/payalchandak/EveryQuery/issues/122
 [issue-123]: https://github.com/payalchandak/EveryQuery/issues/123
 [meicar-gen]: https://github.com/mmcdermott/MEDS_EIC_AR/blob/main/tests/test_pattern_generation.py

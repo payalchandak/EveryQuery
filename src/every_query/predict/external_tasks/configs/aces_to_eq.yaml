@@ -6,6 +6,12 @@ target_rows_per_shard: 400
 task_name: readmiss_30d/
 queries: ${query_codes}
 
+# Horizon in days to stamp onto the output ``duration_days`` column of every row.
+# ACES-style tasks carry their window in the task config rather than per-row, so this
+# is a single constant per conversion run.  Override per invocation to match whichever
+# ACES task you're converting (``readmiss_30d`` → 30, ``mortality_1y`` → 365, etc.).
+duration_days: 30.0
+
 eq_tasks_all_dir: ${oc.env:TASK_DIR}/all/held_out
 # ACES_SHARDS_DIR lives outside TASK_DIR/OUTPUT_DIR — set it in .env if you use this pipeline.
 aces_shards_dir: ${oc.env:ACES_SHARDS_DIR}/${task_name}/held_out

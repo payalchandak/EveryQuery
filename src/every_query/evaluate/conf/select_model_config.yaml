@@ -1,8 +1,8 @@
-# Model run directories to compare. Each contributes one model (best ckpt) to the ranking.
-# Paths are rooted at $OUTPUT_DIR so they move with .env; override from the CLI for ad-hoc comparisons.
-model_run_dirs:
-  - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-54-43/
-  - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-43-54/
+# Model run directories to compare.  Each contributes one model (best ckpt) to the
+# ranking.  Required override — supply from the CLI, e.g.
+#   EQ_select_model model_run_dirs=[${oc.env:OUTPUT_DIR}/outputs/.../run1, ...]
+# Paths are typically rooted at $OUTPUT_DIR so they move with .env across machines.
+model_run_dirs: ???
 
 # Eval split to select on. Must match what was passed to eval.py.
 split: tuning

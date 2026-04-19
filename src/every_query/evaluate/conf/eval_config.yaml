@@ -2,20 +2,10 @@ defaults:
   - _self_
   - eval_codes: 10000_ID__8db2be6fadf8
 
-# Model run directory (or list of directories).
-# Paths are rooted at $OUTPUT_DIR so they move with .env across machines
-model_run_dirs:
-  - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-43-54 # 256, 22
-  - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-54-43 # 1028, 22
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-08/16-38-46/
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-03/00-29-53 #2048,6
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-56-55 # 1028, 6
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-58-42 # 1028, 12
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-04/14-08-24 # 1028, 16
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-54-43 # 1028, 22
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-03/13-28-12 # 256, 6
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-03/12-58-10 # 256, 12
-  # - ${oc.env:OUTPUT_DIR}/outputs/2026-04-02/23-43-55 # 256, 16
+# List of training run directories.  Required override — supply from the CLI, e.g.
+#   EQ_evaluate model_run_dirs=[${oc.env:OUTPUT_DIR}/outputs/YYYY-MM-DD/HH-MM-SS/]
+# Paths are typically rooted at $OUTPUT_DIR so they move with .env across machines.
+model_run_dirs: ???
 
 #
 # Checkpoints to evaluate within each run dir (names without .ckpt extension)

@@ -8,6 +8,7 @@ import polars as pl
 from omegaconf import DictConfig
 from tqdm import tqdm
 
+from every_query.data.schema import TaskQuerySchema
 from every_query.utils.codes import code_slug
 
 logger = logging.getLogger(__name__)
@@ -19,8 +20,21 @@ def shard_id(p: Path) -> int:
 
 
 def create_eq_task_df(
-    eq_shard_fp: str, aces_shard_fp: str, codes: list[str], output_root: str, target_rows: int
+    eq_shard_fp: str,
+    aces_shard_fp: str,
+    codes: list[str],
+    output_root: str,
+    target_rows: int,
+    duration_days: float,
 ) -> int:
+    """Convert an ACES task shard + matching EQ all-tasks shard into per-code ``TaskQuerySchema``-conformant
+    parquets, one per code.
+
+    Args:
+        duration_days: Horizon in days to write into the ``duration_days`` column of the
+            output.  Constant across every row emitted by a single ACES conversion —
+            ACES-style tasks carry their window in the task config rather than per-row.
+    """
     # boolean value in aces_shard_df is the real label for the task that will be used for eval
     # Note: every query expected this to eventually be called the "occurs" column as boolean_value
     # is for censoring
@@ -37,21 +51,46 @@ def create_eq_task_df(
 
     base_cols = ["subject_id", "prediction_time", "task_label", "censored"]
 
+    # Output columns conform to TaskQuerySchema + one extra ``task_label`` column the
+    # external-tasks pipeline carries for its own bookkeeping.  TaskQuerySchema allows
+    # extra columns by default (``allow_extra_columns`` inherited from the Schema
+    # base), so the extra passes validation.
     for code in codes:
         slug = code_slug(code)
         output_dir = Path(output_root) / slug
         os.makedirs(output_dir, exist_ok=True)
 
-        # per-code EQ df (no unpivot; one file per input shard)
+        # per-code EQ df conforming to TaskQuerySchema's nullable boolean_value:
+        #   null  → censored (input `censored=True`)
+        #   True  → event occurred (input `<code>=True`)
+        #   False → no event, not censored
+        boolean_value = (
+            pl.when(pl.col("censored")).then(pl.lit(None, dtype=pl.Boolean)).otherwise(pl.col(code))
+        )
         eq_df = (
-            joined_df.select([*base_cols + code])
-            .rename({code: "occurs", "censored": "boolean_value"})
-            .with_columns(pl.lit(code).alias("query"))
-            .select(["subject_id", "prediction_time", "query", "boolean_value", "occurs", "task_label"])
+            joined_df.select([*base_cols, code])
+            .with_columns(
+                boolean_value.alias(TaskQuerySchema.boolean_value_name),
+                pl.lit(code).alias(TaskQuerySchema.query_name),
+                pl.lit(duration_days).cast(pl.Float32).alias(TaskQuerySchema.duration_days_name),
+            )
+            .select(
+                [
+                    TaskQuerySchema.subject_id_name,
+                    TaskQuerySchema.prediction_time_name,
+                    TaskQuerySchema.query_name,
+                    TaskQuerySchema.duration_days_name,
+                    TaskQuerySchema.boolean_value_name,
+                    "task_label",
+                ]
+            )
         )
 
+        # Align to TaskQuerySchema at the write boundary — same check the sampler does.
+        aligned = TaskQuerySchema.align(eq_df.to_arrow())
+
         out_fp = output_dir / shard_name  # same shard id as original
-        eq_df.write_parquet(out_fp)
+        pl.from_arrow(aligned).write_parquet(out_fp)
 
         logger.info(f"Wrote to {out_fp}")
 
@@ -80,6 +119,7 @@ def main(cfg: DictConfig) -> None:
             codes=cfg.queries,
             output_root=cfg.output_dir,
             target_rows=cfg.target_rows_per_shard,
+            duration_days=float(cfg.duration_days),
         )
 
 

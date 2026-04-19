@@ -39,8 +39,10 @@ from pathlib import Path
 import hydra
 import numpy as np
 import polars as pl
+from meds import DataSchema
 from omegaconf import DictConfig
 
+from every_query.data.schema import TaskQuerySchema, empty_task_query_df
 from every_query.utils.seeds import derive_seed
 
 logger = logging.getLogger(__name__)
@@ -195,19 +197,33 @@ def build_index_df(
     """
     n_tasks = len(tasks)
 
+    # ``task_id`` is intermediate-only (ignored by ``evaluate_index_df``) so it's not on
+    # TaskQuerySchema; everything else comes from the schema's exported ``_name`` attrs.
+    task_id_col = "task_id"
+    index_cols = [
+        task_id_col,
+        TaskQuerySchema.subject_id_name,
+        TaskQuerySchema.prediction_time_name,
+        TaskQuerySchema.query_name,
+        TaskQuerySchema.duration_days_name,
+    ]
+
     def _empty(pt_dtype: pl.DataType, sid_dtype: pl.DataType) -> pl.DataFrame:
         return pl.DataFrame(
             schema={
-                "task_id": pl.Int64,
-                "subject_id": sid_dtype,
-                "prediction_time": pt_dtype,
-                "query": pl.Utf8,
-                "duration_days": pl.Int64,
+                task_id_col: pl.Int64,
+                TaskQuerySchema.subject_id_name: sid_dtype,
+                TaskQuerySchema.prediction_time_name: pt_dtype,
+                TaskQuerySchema.query_name: pl.Utf8,
+                # ``Float32`` matches ``TaskQuerySchema.duration_days`` (``pa.float32``);
+                # emitting Float32 directly means downstream ``TaskQuerySchema.align()``
+                # calls don't need to coerce types at the write boundary.
+                TaskQuerySchema.duration_days_name: pl.Float32,
             }
         )
 
-    pt_dtype = contexts.schema.get("prediction_time", pl.Datetime("us"))
-    sid_dtype = contexts.schema.get("subject_id", pl.Int64)
+    pt_dtype = contexts.schema.get(TaskQuerySchema.prediction_time_name, pl.Datetime("us"))
+    sid_dtype = contexts.schema.get(TaskQuerySchema.subject_id_name, pl.Int64)
 
     if n_tasks == 0 or contexts.height == 0:
         return _empty(pt_dtype, sid_dtype)
@@ -217,23 +233,23 @@ def build_index_df(
     contexts_per_task = contexts.height // n_tasks
 
     task_ids = pl.Series(
-        "task_id",
+        task_id_col,
         np.repeat(np.arange(n_tasks, dtype=np.int64), contexts_per_task),
     )
     query_col = pl.Series(
-        "query",
+        TaskQuerySchema.query_name,
         np.repeat([t.code for t in tasks], contexts_per_task),
         dtype=pl.Utf8,
     )
+    # Float32 matches TaskQuerySchema's duration_days type so the final labeled output
+    # aligns to the schema without a type-coercion step at the write boundary.
     duration_col = pl.Series(
-        "duration_days",
-        np.repeat([t.duration_days for t in tasks], contexts_per_task).astype(np.int64),
-        dtype=pl.Int64,
+        TaskQuerySchema.duration_days_name,
+        np.repeat([t.duration_days for t in tasks], contexts_per_task).astype(np.float32),
+        dtype=pl.Float32,
     )
 
-    return contexts.with_columns(task_ids, query_col, duration_col).select(
-        "task_id", "subject_id", "prediction_time", "query", "duration_days"
-    )
+    return contexts.with_columns(task_ids, query_col, duration_col).select(index_cols)
 
 
 def compute_max_time_per_subject(events_df: pl.DataFrame) -> pl.DataFrame:
@@ -242,7 +258,9 @@ def compute_max_time_per_subject(events_df: pl.DataFrame) -> pl.DataFrame:
     Used once per shard to turn the per-row censoring check into an O(1) lookup inside
     ``evaluate_index_df``.
     """
-    return events_df.group_by("subject_id").agg(pl.col("time").max().alias("max_time"))
+    return events_df.group_by(DataSchema.subject_id_name).agg(
+        pl.col(DataSchema.time_name).max().alias("max_time")
+    )
 
 
 def evaluate_index_df(
@@ -250,13 +268,17 @@ def evaluate_index_df(
     events_df: pl.DataFrame,
     max_time_per_subject: pl.DataFrame,
 ) -> pl.DataFrame:
-    """Label an index DataFrame with ``(boolean_value, occurs)`` via a single ``join_asof``.
+    """Label an index DataFrame with the single nullable ``boolean_value`` column via a single ``join_asof``.
 
-    Semantics:
-        - ``censored = (prediction_time + duration_days) > max_time[subject_id]``
-        - ``occurs = (not censored) AND (next event with matching code falls strictly within
-          (prediction_time, prediction_time + duration_days))``
-        - ``boolean_value = censored``
+    Three-valued semantics (matches ``TaskQuerySchema`` + ``LabelSchema``'s nullable
+    ``boolean_value``):
+
+        - ``boolean_value = null``: censored — ``(prediction_time + duration_days) >
+          max_time[subject_id]``; observation ended before we could see whether the event
+          fired.
+        - ``boolean_value = True``: not censored and an event with matching ``query`` code
+          fell strictly within ``(prediction_time, prediction_time + duration_days)``.
+        - ``boolean_value = False``: not censored and no such event fell within the window.
 
     The ``>`` on event time is enforced by shifting the asof key by ``+1µs`` since datetimes are
     stored at microsecond precision, which turns ``strategy="forward"``'s ``>=`` into a strict ``>``.
@@ -269,69 +291,74 @@ def evaluate_index_df(
         max_time_per_subject: Output of ``compute_max_time_per_subject``.
 
     Returns:
-        DataFrame with columns ``(subject_id, prediction_time, boolean_value, occurs, query,
-        duration_days)``.
+        DataFrame with columns ``(subject_id, prediction_time, boolean_value, query,
+        duration_days)``.  ``boolean_value`` is nullable (``null`` = censored).
     """
-    out_schema = {
-        "subject_id": index_df.schema.get("subject_id", pl.Int64),
-        "prediction_time": index_df.schema.get("prediction_time", pl.Datetime("us")),
-        "boolean_value": pl.Boolean,
-        "occurs": pl.Boolean,
-        "query": pl.Utf8,
-        "duration_days": pl.Int64,
-    }
+    # Output column set lives on ``TaskQuerySchema`` — the 4 required columns plus the
+    # inherited (optional) ``boolean_value`` for the collapsed label.  Defining it once
+    # here avoids drift between the empty-path shape, the non-empty-path projection, and
+    # the ``run_worker`` write-boundary validation.
+    out_cols = [
+        TaskQuerySchema.subject_id_name,
+        TaskQuerySchema.prediction_time_name,
+        TaskQuerySchema.boolean_value_name,
+        TaskQuerySchema.query_name,
+        TaskQuerySchema.duration_days_name,
+    ]
+
+    # Empty-input fast-path: use the schema-driven empty builder in ``every_query.data``
+    # rather than hand-rolling a matching polars schema dict — same column set, same
+    # dtypes, guaranteed to pass ``TaskQuerySchema.align()`` downstream.
     if index_df.height == 0:
-        return pl.DataFrame(schema=out_schema)
+        return empty_task_query_df().select(out_cols)
 
     # Left side: index rows with a +1µs-shifted prediction_time for the strict-> asof key.
     left = index_df.with_columns(
-        (pl.col("prediction_time") + pl.duration(microseconds=1)).alias("_pt_shifted")
-    ).sort(["subject_id", "query", "_pt_shifted"])
+        (pl.col(TaskQuerySchema.prediction_time_name) + pl.duration(microseconds=1)).alias("_pt_shifted")
+    ).sort([TaskQuerySchema.subject_id_name, TaskQuerySchema.query_name, "_pt_shifted"])
 
-    # Right side: events renamed so the join-by column name matches the left.
+    # Right side: events renamed so the join-by column name matches the left.  The events
+    # frame uses ``DataSchema.code_name`` for the code column; we rename it to the
+    # TaskQuerySchema ``query`` column so the asof ``by=`` key aligns on both sides.
     right = (
-        events_df.rename({"code": "query"})
-        .select(["subject_id", "query", "time"])
-        .sort(["subject_id", "query", "time"])
+        events_df.rename({DataSchema.code_name: TaskQuerySchema.query_name})
+        .select([TaskQuerySchema.subject_id_name, TaskQuerySchema.query_name, DataSchema.time_name])
+        .sort([TaskQuerySchema.subject_id_name, TaskQuerySchema.query_name, DataSchema.time_name])
     )
 
     joined = left.join_asof(
         right,
-        by=["subject_id", "query"],
+        by=[TaskQuerySchema.subject_id_name, TaskQuerySchema.query_name],
         left_on="_pt_shifted",
-        right_on="time",
+        right_on=DataSchema.time_name,
         strategy="forward",
     )
-    joined = joined.join(max_time_per_subject, on="subject_id", how="left")
+    joined = joined.join(max_time_per_subject, on=TaskQuerySchema.subject_id_name, how="left")
 
     # Rows whose subject is not present in max_time_per_subject (typically a pre-seeded or
     # hand-edited index_df referencing subjects outside this shard) come out of the left join
-    # with max_time=null.  A naïve comparison would produce null booleans, which would break
-    # downstream torch conversion.  Policy: treat unknown-subject rows as fully censored
-    # (boolean_value=True, occurs=False) — the same outcome a real "no future data observed"
-    # row would produce.  We log a warning so the condition is visible.
+    # with max_time=null.  A naïve comparison would produce null booleans, which is the
+    # correct "censored" signal under the collapsed label semantics — so we just log a
+    # warning for visibility and let the `(window_end > max_time).fill_null(True)` below
+    # resolve the missing-subject case to censored.
     n_unknown = joined.filter(pl.col("max_time").is_null()).height
     if n_unknown > 0:
         logger.warning(
             "%d index_df row(s) reference subjects not present in events_df; "
-            "they will be labeled as censored (boolean_value=True, occurs=False).",
+            "they will be labeled as censored (boolean_value=null).",
             n_unknown,
         )
 
-    duration_expr = pl.duration(days=pl.col("duration_days"))
-    window_end = pl.col("prediction_time") + duration_expr
+    duration_expr = pl.duration(days=pl.col(TaskQuerySchema.duration_days_name))
+    window_end = pl.col(TaskQuerySchema.prediction_time_name) + duration_expr
     # `(window_end > max_time).fill_null(True)` resolves the missing-subject case to censored.
     censored = (window_end > pl.col("max_time")).fill_null(True)
-    event_in_window = pl.col("time").is_not_null() & (pl.col("time") < window_end)
+    event_in_window = pl.col(DataSchema.time_name).is_not_null() & (pl.col(DataSchema.time_name) < window_end)
 
-    return (
-        joined.with_columns(censored.alias("_censored"))
-        .with_columns(
-            pl.col("_censored").alias("boolean_value"),
-            (pl.col("_censored").not_() & event_in_window).alias("occurs"),
-        )
-        .select("subject_id", "prediction_time", "boolean_value", "occurs", "query", "duration_days")
-    )
+    # Collapsed nullable label: null when censored, else True/False from event_in_window.
+    boolean_value = pl.when(censored).then(pl.lit(None, dtype=pl.Boolean)).otherwise(event_in_window)
+
+    return joined.with_columns(boolean_value.alias(TaskQuerySchema.boolean_value_name)).select(out_cols)
 
 
 # ---------------------------------------------------------------------------
@@ -482,7 +509,15 @@ def run_worker(
     labeled = evaluate_index_df(index_df, events_df, max_time_df)
     # Downstream MEDS dataloader does not use task_id; it is intentionally absent from the
     # published schema.
-    _atomic_write_parquet(labeled, labels_fp)
+    #
+    # Align the output against TaskQuerySchema at the write boundary.  ``align`` is
+    # preferred over ``validate`` here because it (a) reorders columns into the schema's
+    # canonical order and (b) casts mistyped columns to the declared dtypes — so even if
+    # an upstream edit silently changes one type (e.g., reverting ``build_index_df`` to
+    # emit ``Int64`` durations), the on-disk parquet still conforms.  Missing or extra
+    # columns remain hard errors (``align`` re-raises on those).
+    aligned = TaskQuerySchema.align(labeled.to_arrow())
+    _atomic_write_parquet(pl.from_arrow(aligned), labels_fp)
     logger.info("Wrote %d labeled rows to %s", labeled.height, labels_fp)
     return labels_fp
 
