@@ -332,10 +332,49 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
                 .alias(LabelSchema.prediction_time_name)
             )
 
+        # Derive the ``(censor, occurs)`` pair the model's loss code consumes, from
+        # whichever on-disk label shape the parquet has.  Two shapes are supported:
+        #
+        # 1. **Collapsed (new, ``TaskQuerySchema``-shaped)** — the parquet has a single
+        #    nullable ``boolean_value`` column:
+        #        null  → censored (observation ended before we could see the outcome)
+        #        True  → event occurred in the duration window
+        #        False → no event in the window, and not censored
+        #    We split it into ``boolean_value = is_null()`` (censor indicator) and
+        #    ``occurs = fill_null(False)``.
+        #
+        # 2. **Legacy two-column** — the parquet has both ``boolean_value`` (meaning
+        #    "censored") AND an explicit ``occurs`` column.  We leave both alone;
+        #    super's ``self.labels`` cache is already the censor indicator.
+        #
+        # Detection: presence of an explicit ``occurs`` column marks the legacy shape
+        # — the collapsed shape never emits it (see ``evaluate_index_df``).  This
+        # preserves backward compat with any label parquets produced by pre-#96
+        # pipelines still on disk.
+        #
+        # Done after super().__init__() has read the label parquet into self.schema_df
+        # so the downstream getitem / collate path sees non-null tensors (torch's
+        # bool→tensor conversion doesn't tolerate nulls).
+        schema_cols = self.schema_df.collect_schema().names()
+        is_legacy_two_col = "occurs" in schema_cols
+        if "boolean_value" in schema_cols and not is_legacy_two_col:
+            raw = pl.col("boolean_value")
+            self.schema_df = self.schema_df.with_columns(
+                raw.is_null().alias("boolean_value"),
+                raw.fill_null(False).alias("occurs"),
+            )
+            schema_cols = self.schema_df.collect_schema().names()
+            # Super cached the pre-collapse ``boolean_value`` Series into ``self.labels``
+            # at its ``__init__`` time; re-point it at the post-processed (non-null,
+            # censor-indicator) column so ``_seeded_getitem`` and ``collate`` see the
+            # correct values.
+            if getattr(self, "has_task_labels", False):
+                self.labels = self.schema_df["boolean_value"]
+
         # Extra task annotations
-        self.has_occurs: bool = "occurs" in self.schema_df.collect_schema().names()
-        self.has_query: bool = "query" in self.schema_df.collect_schema().names()
-        self.has_duration_days: bool = "duration_days" in self.schema_df.collect_schema().names()
+        self.has_occurs: bool = "occurs" in schema_cols
+        self.has_query: bool = "query" in schema_cols
+        self.has_duration_days: bool = "duration_days" in schema_cols
         self.occurs = self.schema_df["occurs"] if self.has_occurs else None
         self.query = self.schema_df["query"] if self.has_query else None
         self.duration_days = self.schema_df["duration_days"] if self.has_duration_days else None
@@ -364,6 +403,10 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         def read_df(fp: Path) -> pl.DataFrame:
             schema = pq.read_schema(fp)
             extras = []
+            # "occurs" is not an on-disk column after the nullable-label collapse; it's
+            # derived in __init__ from boolean_value.is_null().  Keep it in the list for
+            # backward compatibility with any legacy label parquets that still carry it
+            # explicitly — harmless if absent.
             for extra_col in [self.LABEL_COL, "occurs", "query", "duration_days"]:
                 if extra_col in schema.names:
                     extras.append(extra_col)

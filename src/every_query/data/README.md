@@ -10,6 +10,11 @@ from the model architecture.
     `Dataset` implementation that maps tensorized MEDS shards + a task-labels parquet into the
     query-aware batches the model consumes. Shared between the `train/` stage (training loop)
     and the future `predict/` stage (inference).
+- **`schema.py`** — `TaskQuerySchema`. Cross-stage contract for the `(subject_id, prediction_time, query, duration_days)` rows produced by `generate_tasks/` and consumed
+    by `predict/` + `evaluate/`. Extends MEDS `LabelSchema` so inference and evaluation share
+    the same row shape — labels live on the inherited `boolean_value` column when present.
+    Initial scope (#80) is narrow: flat single query code + continuous duration. Extensions
+    come later as the pipeline matures.
 
 Call through the package so stage submodules don't need to know the file layout:
 
@@ -22,10 +27,8 @@ Hydra `_target_` strings in configs use the fully-qualified path
 
 ## Why `data/` is separate from `model/`
 
-The data layer evolves on a different schedule than the model architecture.
-Issue [#80](https://github.com/payalchandak/EveryQuery/issues/80) will reshape what
-`EveryQueryBatch` carries — likely toward a MEDS `LabelSchema`-derived shape — with no touch
-to the `nn.Module`. Keeping them in distinct submodules means a schema PR diffs only `data/`
+The data layer evolves on a different schedule than the model architecture. The task-query
+schema (#80) lives here, separate from the `nn.Module`, so schema changes diff only `data/`
 and its two call-site edges (`generate_tasks/` output wiring + `train/` dataloader wiring).
 
 ## Pipeline position

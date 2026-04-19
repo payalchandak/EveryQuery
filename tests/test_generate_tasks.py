@@ -120,13 +120,16 @@ def test_labels_match_ground_truth(
         # Walk every emitted row.  Simple Python — slow for millions of rows but fine for the
         # ~20-row fixture output, and the cost is bounded by CPU + parquet I/O, not test
         # complexity.  Favours readability + ground-truth correctness over vectorisation.
+        #
+        # Collapsed nullable boolean_value per TaskQuerySchema:
+        #   null  → censored (window_end > max_time OR subject absent from events_df)
+        #   True  → event occurred in (prediction_time, window_end)
+        #   False → no event in window and not censored
         for row in labels.iter_rows(named=True):
             subj = row["subject_id"]
             window_end = row["prediction_time"] + timedelta(days=row["duration_days"])
 
             max_time = max_time_per_subject.get(subj)
-            # Sampler policy (per evaluate_index_df docstring): unknown-subject rows resolve to
-            # censored=True.  None case handled via default.
             expected_censored = max_time is None or window_end > max_time
 
             # Ground-truth event_fires: any event of the matching code in
@@ -138,19 +141,18 @@ def test_labels_match_ground_truth(
                 & (pl.col("time") > row["prediction_time"])
                 & (pl.col("time") < window_end)
             ).is_empty()
-            expected_occurs = (not expected_censored) and event_fires
+
+            expected_boolean = None if expected_censored else event_fires
 
             ctx = (
                 f"split={split}, subject_id={subj}, query={row['query']!r}, "
                 f"prediction_time={row['prediction_time']}, duration_days={row['duration_days']}, "
                 f"max_time={max_time}"
             )
-            assert row["boolean_value"] == expected_censored, (
-                f"boolean_value (censored) mismatch: sampler={row['boolean_value']}, "
-                f"expected={expected_censored}.  {ctx}"
-            )
-            assert row["occurs"] == expected_occurs, (
-                f"occurs mismatch: sampler={row['occurs']}, expected={expected_occurs}.  {ctx}"
+            assert row["boolean_value"] == expected_boolean, (
+                f"boolean_value mismatch: sampler={row['boolean_value']!r}, "
+                f"expected={expected_boolean!r} (censored={expected_censored}, "
+                f"event_fires={event_fires}).  {ctx}"
             )
 
 

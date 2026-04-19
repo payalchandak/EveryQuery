@@ -284,7 +284,13 @@ def main(cfg: DictConfig) -> float | None:
 
     best_score = trainer.checkpoint_callback.best_model_score
 
-    logger.info(f"Best checkpoint (with score {best_score:.2f}) copied to {output_fp!s}.")
+    # ``best_model_score`` is scoped to the current ``fit`` call's validation events: on a
+    # no-op resume (``max_steps`` already reached) no validation runs, so it stays None
+    # even though ``best_model_path`` still points at a real checkpoint inherited from the
+    # prior run.  Guarding the format here keeps that path from crashing on
+    # ``NoneType.__format__``.
+    score_str = f" (with score {best_score:.2f})" if best_score is not None else ""
+    logger.info(f"Best checkpoint{score_str} copied to {output_fp!s}.")
 
 
 if __name__ == "__main__":

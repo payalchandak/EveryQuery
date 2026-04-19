@@ -289,7 +289,9 @@ def task_labels_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
         {task_labels_dir}/{split}/{shard}.parquet
 
-    Columns: ``subject_id, prediction_time, boolean_value, occurs, query, duration_days``.
+    Columns: ``subject_id, prediction_time, boolean_value, query, duration_days``.
+    Conforms to ``TaskQuerySchema`` — ``boolean_value`` is nullable (null=censored,
+    True=event occurred, False=no event and not censored).
     """
     task_dir = tmp_path_factory.mktemp("eq_task_labels")
 
@@ -299,14 +301,24 @@ def task_labels_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
         rows = []
         for i, (subj, query_code) in enumerate((s, q) for s in subjects for q in _QUERY_CODES):
+            # Alternate the three-valued state so downstream tests see each:
+            #   i % 3 == 0 → censored  (null)
+            #   i % 3 == 1 → occurred  (True)
+            #   i % 3 == 2 → no event  (False)
+            if i % 3 == 0:
+                bv = None
+            elif i % 3 == 1:
+                bv = True
+            else:
+                bv = False
             rows.append(
                 {
                     "subject_id": subj,
                     "prediction_time": _PRED_TIMES[subj],
-                    "boolean_value": i % 2 == 0,
-                    "occurs": i % 3 != 0,
+                    "boolean_value": bv,
                     "query": query_code,
-                    "duration_days": 30,
+                    # Float to match ``TaskQuerySchema.duration_days`` (``pa.float32``).
+                    "duration_days": 30.0,
                 }
             )
 
@@ -315,9 +327,8 @@ def task_labels_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
                 "prediction_time": pl.Datetime("us"),
                 "subject_id": pl.Int64,
                 "boolean_value": pl.Boolean,
-                "occurs": pl.Boolean,
                 "query": pl.Utf8,
-                "duration_days": pl.Int64,
+                "duration_days": pl.Float32,
             }
         )
         df.write_parquet(split_dir / "0.parquet")
@@ -336,12 +347,18 @@ def demo_dataset(
 
     rows = []
     for i, (subj, query_code) in enumerate((s, q) for s in _TRAIN_SUBJECTS for q in _QUERY_CODES):
+        # Three-valued nullable boolean_value per TaskQuerySchema.
+        if i % 3 == 0:
+            bv = None
+        elif i % 3 == 1:
+            bv = True
+        else:
+            bv = False
         rows.append(
             {
                 "subject_id": subj,
                 "prediction_time": _PRED_TIMES[subj],
-                "boolean_value": i % 2 == 0,
-                "occurs": i % 3 != 0,
+                "boolean_value": bv,
                 "query": query_code,
                 "duration_days": 30.0,
             }
@@ -352,9 +369,8 @@ def demo_dataset(
             "prediction_time": pl.Datetime("us"),
             "subject_id": pl.Int64,
             "boolean_value": pl.Boolean,
-            "occurs": pl.Boolean,
             "query": pl.Utf8,
-            "duration_days": pl.Float64,
+            "duration_days": pl.Float32,  # matches TaskQuerySchema
         }
     )
     df.write_parquet(collated_dir / "0.parquet")
