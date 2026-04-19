@@ -13,11 +13,15 @@ REQUIRED_ENV_VARS = (
     "PROJECT_DIR",
     "OUTPUT_DIR",
     "TASK_DIR",
-    "PROCESSED",
-    "INTERMEDIATE",
     "FINAL_DATA_DIR",
     "WANDB_ENTITY",
 )
+# `PROCESSED` and `INTERMEDIATE` used to live here too but no Hydra config
+# interpolates `${oc.env:PROCESSED}` or `${oc.env:INTERMEDIATE}`.  Their only use is a
+# dotenv fallback inside `sample_tasks.py::_resolve_path`, which already tolerates
+# missing env vars when config values are supplied (the normal CLI path).  Keeping
+# them in the gate was pure friction: demo fixtures / `--help` invocations had to
+# set throwaway placeholder values for no actual resolution.  See #117.
 
 
 def ensure_env() -> None:

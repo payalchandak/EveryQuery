@@ -172,8 +172,6 @@ ENSURE_ENV_PLACEHOLDERS: dict[str, str] = {
     "PROJECT_DIR": "/tmp",
     "OUTPUT_DIR": "/tmp",
     "TASK_DIR": "/tmp",
-    "PROCESSED": "/tmp",
-    "INTERMEDIATE": "/tmp",
     "FINAL_DATA_DIR": "/tmp",
     "WANDB_ENTITY": "test",
 }

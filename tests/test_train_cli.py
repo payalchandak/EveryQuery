@@ -28,14 +28,7 @@ def _run_train_subprocess(
     env["PATH"] = _VENV_BIN + os.pathsep + env.get("PATH", "")
     # Provide dummy env vars so ensure_env() passes in the subprocess.
     # Hydra CLI overrides control the actual paths used by the test.
-    for var in (
-        "PROJECT_DIR",
-        "OUTPUT_DIR",
-        "TASK_DIR",
-        "PROCESSED",
-        "INTERMEDIATE",
-        "FINAL_DATA_DIR",
-    ):
+    for var in ("PROJECT_DIR", "OUTPUT_DIR", "TASK_DIR", "FINAL_DATA_DIR"):
         env.setdefault(var, str(output_dir))
     env.setdefault("WANDB_ENTITY", "test")
 
