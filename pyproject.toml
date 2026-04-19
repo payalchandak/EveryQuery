@@ -79,8 +79,12 @@ addopts = [
   "--ignore=AGENTS.md",
   "--ignore=CONTRIBUTORS.md",
   "--doctest-glob=*.md",
+  "-m",
+  "not slow", # Skip slow integration tests by default; opt-in via `-m slow` or `-m "slow or not slow"`.
 ]
-markers = [] # Add any custom pytest markers here
+markers = [
+  "slow: heavy integration tests that train a real model (~5 min CI, ~5-7 min laptop). Skipped by default; run with `pytest -m slow` or `pytest -m 'slow or not slow'` to include.",
+]
 doctest_optionflags = ["NORMALIZE_WHITESPACE", "ELLIPSIS"]
 
 [project.urls]
