@@ -88,7 +88,8 @@ def demo_model_config() -> ModernBertConfig:
 
 @pytest.fixture(scope="session")
 def demo_model() -> EveryQueryModel:
-    """Randomly-initialised EveryQueryModel with tiny dimensions."""
+    """Seeded, tiny EveryQueryModel for CPU-only testing."""
+    torch.manual_seed(0)
     model = EveryQueryModel(
         config_overrides=DEMO_CONFIG_OVERRIDES,
         do_demo=True,
