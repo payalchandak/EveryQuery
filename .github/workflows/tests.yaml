@@ -14,7 +14,11 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
 
-    timeout-minutes: 30
+    # Job budget = the training-validity subprocess ceiling (1800s / 30min) + setup +
+    # the rest of the suite.  Observed slow-test wall time on ubuntu-latest is ~5min, so
+    # 45min leaves huge slack — we keep it wide rather than tight because the subprocess
+    # ceiling itself is 30min and we want room above that for unusually-slow runners.
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -25,8 +29,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Run tests
+        # `-m "slow or not slow"` opts in to the slow-marked integration tests (e.g. the
+        # training-validity test in tests/training_validity/) which pyproject.toml's default
+        # addopts `-m "not slow"` skips for local development.  CI runs the full set.
         run: >
           uv run pytest -v
+          -m "slow or not slow"
           --ignore=docs
           --cov=src
           --cov-report=xml:coverage.xml

@@ -245,13 +245,23 @@ def main(cfg: DictConfig) -> float | None:
     logger.info("Setting torch float32 matmul precision to 'medium'.")
     torch.set_float32_matmul_precision("medium")
 
+    # Seed *before* any `instantiate(...)` call so that model weight init, DataLoader
+    # generator construction, and any other RNG-consuming work happen under the seeded
+    # RNG state.  Previously this block ran after `instantiate(cfg.lightning_module)`,
+    # which meant the starting weights were sampled from whatever torch's RNG happened
+    # to be at process startup — a state that varies across Python versions and
+    # platforms (PYTHONHASHSEED, module import order, etc.), so two runners with the
+    # same `cfg.seed` still produced different initial weights and different training
+    # trajectories.  Reading `do_demo` off the config (rather than the instantiated
+    # `M.model.do_demo`) lets us keep the gate without needing `M` yet.
+    do_demo = cfg.lightning_module.model.get("do_demo", False)
+    if do_demo or cfg.get("seed", None):
+        seed_everything(cfg.get("seed", 1), workers=True)
+
     D = instantiate(cfg.datamodule)
     logger.info(f"Train dataset contains {len(D.train_dataloader().dataset)} datapoints")
 
     M = hydra.utils.instantiate(cfg.lightning_module)
-
-    if M.model.do_demo or cfg.get("seed", None):
-        seed_everything(cfg.get("seed", 1), workers=True)
 
     trainer = instantiate(cfg.trainer)
 
