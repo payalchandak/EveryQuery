@@ -8,7 +8,9 @@
 # (see `.env.example`, `tasks.py`, and `_env.py`).  Fallbacks:
 #   data_dir  -> $INTERMEDIATE   (event shards live under `{data_dir}/data/{split}/*.parquet`)
 #   codes_dir -> $PROCESSED      (query universe lives under `{codes_dir}/metadata/codes.parquet`)
-#   out_dir   -> $TASK_DIR       (labeled shards and _artifacts/ land here)
+#   out_dir   -> $TASK_DIR       (labeled shards land here as {split}/*.parquet;
+#                                 no sidecars, no cache — this dir is consumable as
+#                                 MTD's task_labels_dir directly)
 # Tests can inject values directly with `data_dir=/path out_dir=/path codes_dir=/path`.
 
 data_dir: null
