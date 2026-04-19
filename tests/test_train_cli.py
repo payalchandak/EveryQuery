@@ -201,3 +201,38 @@ class TestTrainOverwriteAndResumeBothTrue:
 
     def test_resolved_config_yaml_present_after_both_flags(self, both_flags_output):
         assert (both_flags_output / "resolved_config.yaml").is_file()
+
+
+class TestTrainResumeRejectsStructuralDrift:
+    """``do_resume=True`` must refuse to proceed when the new invocation disagrees with the resumed-from
+    config on a structural key (anything not in ``ALLOWED_DIFFERENCE_KEYS``).
+
+    Regression guard for #91.  Note ``TestTrainResume`` above covers the complementary case —
+    resume with a bumped ``trainer.max_steps`` (an ALLOWED_DIFFERENCE key) succeeds.
+    """
+
+    def test_max_seq_len_drift_is_rejected(
+        self, task_labels_dir, tensorized_cohort_dir, tmp_path_factory
+    ) -> None:
+        output_dir = tmp_path_factory.mktemp("cli_resume_drift")
+
+        first = _run_train_subprocess(task_labels_dir, tensorized_cohort_dir, output_dir)
+        assert first.returncode == 0, (
+            f"Initial training failed (rc={first.returncode}).\nstderr:\n{first.stderr}"
+        )
+
+        drifted = _run_train_subprocess(
+            task_labels_dir,
+            tensorized_cohort_dir,
+            output_dir,
+            do_resume=True,
+            do_overwrite=False,
+            extra_overrides=["datamodule.config.max_seq_len=32"],
+        )
+        assert drifted.returncode != 0, (
+            f"Expected resume with drifted max_seq_len to fail, but it succeeded.\n"
+            f"stdout:\n{drifted.stdout}\nstderr:\n{drifted.stderr}"
+        )
+        assert "max_seq_len" in drifted.stderr, (
+            f"Expected error to name 'max_seq_len', got:\n{drifted.stderr}"
+        )

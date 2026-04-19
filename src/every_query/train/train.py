@@ -14,6 +14,8 @@ from lightning.pytorch import seed_everything
 from MEDS_transforms.configs.utils import OmegaConfResolver
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+from every_query.train.resume_check import validate_resume_directory
+
 logger = logging.getLogger(__name__)
 
 _RUN_ID = None
@@ -222,6 +224,7 @@ def main(cfg: DictConfig) -> float | None:
             shutil.rmtree(output_dir, ignore_errors=True)
         elif cfg.do_resume:
             logger.info(f"Resuming training in existing output directory {output_dir}.")
+            validate_resume_directory(output_dir, cfg)
             ckpt_path = find_checkpoint_path(output_dir)
         else:
             raise FileExistsError(
