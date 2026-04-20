@@ -1,0 +1,40 @@
+# EQ_predict — inference-only entry point.
+#
+# Reads all TaskQuerySchema-conformant parquets under tasks_dir, runs the trained
+# model's predict_step per row, writes a PredictionSchema-conformant parquet.  See
+# src/every_query/predict/predict.py and the design-doc comment on #81 for the full
+# contract.
+
+defaults:
+  - _self_
+
+# Required: path to a training run directory containing best_model.ckpt +
+# resolved_config.yaml (the pattern EveryQuery's train.py writes).
+model_run_dir: ???
+
+# Required: path to a directory of TaskQuerySchema-conformant parquet files
+# (subject_id, prediction_time, query, duration_days; inherited label columns
+# optional).  Every file under this directory is passed to the dataset — callers
+# should provide a clean directory containing only task parquets.  Ideally a
+# single parquet file sits in the dir.
+tasks_dir: ???
+
+# Required: path to write the output parquet.  Conforms to
+# every_query.predict.schema.PredictionSchema (TaskQuerySchema + censor_prob + occurs_prob;
+# see #129 for the post-refactor occurs_prob → label_prob generalization discussion).
+output_parquet: ???
+
+# Optional: pick a specific checkpoint name under model_run_dir/checkpoints/.
+# If null, falls back to best_model.ckpt then checkpoints/last.ckpt.
+ckpt_name: null
+
+# Optional: which tensorized-cohort split to predict on.  Must be "held_out" (typical
+# inference — unseen data) or "tuning" (intermediate validation during model
+# development — the training-validity E2E uses this).  "train" is disallowed: MTD's
+# train_dataloader shuffles, which would break the order-preserving hstack.
+split: held_out
+
+hydra:
+  output_subdir: null
+  job:
+    chdir: false

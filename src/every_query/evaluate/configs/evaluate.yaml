@@ -1,0 +1,20 @@
+# EQ_evaluate (consolidated) — computes per-(query, duration_days) metrics from an
+# EQ_predict-written PredictionSchema parquet.  See src/every_query/evaluate/evaluate.py
+# and the #82 inventory + #83 consolidation design for context.
+
+defaults:
+  - _self_
+
+# Required: PredictionSchema-conformant parquet written by EQ_predict.  Columns:
+# subject_id, prediction_time, query, duration_days, boolean_value, censor_prob,
+# occurs_prob (plus any inherited LabelSchema label columns).
+predictions_parquet: ???
+
+# Required: output metrics parquet path.  One row per (query, duration_days) group
+# with columns: n_rows, n_occurs_labeled, n_positive, occurs_auroc, censor_auroc.
+metrics_parquet: ???
+
+hydra:
+  output_subdir: null
+  job:
+    chdir: false

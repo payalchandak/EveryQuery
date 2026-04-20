@@ -13,16 +13,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import polars as pl
+import pyarrow.parquet as pq
 import pytest
-import torch
 from meds import DatasetMetadataSchema, train_split, tuning_split
 from meds_testing_helpers.dataset import MEDSDataset
-from meds_torchdata.config import MEDSTorchDataConfig
 from sklearn.metrics import roc_auc_score
 
 from conftest import ENSURE_ENV_PLACEHOLDERS, run_and_check
-from every_query.data.dataset import EveryQueryPytorchDataset
-from every_query.model.lightning_module import EveryQueryLightningModule
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -259,25 +256,6 @@ def oracle_trained_model_dir(
     return output_dir
 
 
-def _load_lightning_module(trained_model_dir: Path) -> EveryQueryLightningModule:
-    """Load the monitor-best checkpoint that ``train.py`` copies to ``best_model.ckpt``.
-
-    ``train.py`` selects the best checkpoint by ``tuning/loss`` (``ModelCheckpoint(monitor=...,
-    save_top_k=1)``) and copies it to ``output_dir/best_model.ckpt``; loading that file
-    directly matches the training contract and avoids the ``last.ckpt`` vs.
-    ``epoch=N-step=M.ckpt`` ambiguity.
-    """
-    best_path = trained_model_dir / "best_model.ckpt"
-    assert best_path.exists(), (
-        f"best_model.ckpt missing under {trained_model_dir} — EQ_train's post-training copy "
-        f"(train.py ~line 272) didn't happen; training likely crashed before the best-ckpt "
-        f"save.  Check the subprocess stderr in the run_and_check log."
-    )
-    module = EveryQueryLightningModule.load_from_checkpoint(str(best_path))
-    module.eval()
-    return module
-
-
 # Unified passing criteria (applied across every design in #123).
 _CENSOR_AUROC_THRESHOLD = 0.9
 _PER_CELL_OCCURS_AUROC_THRESHOLD = 0.8
@@ -288,6 +266,7 @@ def test_trained_model_learns_occurs_and_censor(
     oracle_preprocessed: Path,
     oracle_dataset: dict,
     oracle_trained_model_dir: Path,
+    tmp_path: Path,
 ) -> None:
     """Unified criteria: censor AUROC >= 0.9, per-(code, duration) occurs AUROC >= 0.8 on every
     non-degenerate cell, and per-code mean predictions strictly increase with duration.
@@ -299,40 +278,36 @@ def test_trained_model_learns_occurs_and_censor(
     ``pytest -m slow`` (run only this) or ``pytest -m 'slow or not slow'`` (run everything).
     CI's `tests.yaml` uses the latter.
 
-    NOTE: inference runs in-process rather than via a ``EQ_predict`` CLI subprocess because the
-    inference CLI (``feat/eq-predict``, PR #99) is still a draft pending design-doc sign-off
-    on #81.  Once #99 merges, migrate this to a subprocess ``EQ_predict`` call + a
-    ``PredictionSchema`` parquet read, matching the pattern of the other E2E tests.
+    Inference runs through ``EQ_predict`` as a subprocess — same path a caller would use
+    in production — so the unified criteria land on the actual CLI output rather than
+    an in-process model forward.  Predictions go against the tuning split (that's where
+    this test's synthetic validation data lives).
     """
-    module = _load_lightning_module(oracle_trained_model_dir)
-
-    cfg = MEDSTorchDataConfig(
-        tensorized_cohort_dir=str(oracle_preprocessed),
-        task_labels_dir=str(oracle_dataset["task_labels_dir"]),
-        max_seq_len=128,
-        seq_sampling_strategy="to_end",
-        static_inclusion_mode="omit",
-        batch_mode="SM",
+    predictions_parquet = tmp_path / "predictions.parquet"
+    tuning_tasks_dir = oracle_dataset["task_labels_dir"] / tuning_split
+    run_and_check(
+        [
+            "EQ_predict",
+            f"model_run_dir={oracle_trained_model_dir!s}",
+            f"tasks_dir={tuning_tasks_dir!s}",
+            f"output_parquet={predictions_parquet!s}",
+            f"split={tuning_split}",
+        ],
+        env=ENSURE_ENV_PLACEHOLDERS,
+        timeout=600.0,
     )
-    dataset = EveryQueryPytorchDataset(cfg, split=tuning_split)
 
-    rows = []
-    for i in range(len(dataset)):
-        item = dataset[i]
-        batch = dataset.collate([item])
-        with torch.no_grad():
-            _, outputs = module.model(batch)
-        rows.append(
-            {
-                "query": dataset.query[i],
-                "duration_days": int(dataset.duration_days[i]),
-                "occurs_true": int(item["occurs"]),
-                "censor_true": int(item["boolean_value"]),
-                "occurs_pred": float(outputs.occurs_probs.squeeze().item()),
-                "censor_pred": float(outputs.censor_probs.squeeze().item()),
-            }
-        )
-    df = pl.DataFrame(rows)
+    # PredictionSchema output: subject_id, prediction_time, query, duration_days,
+    # boolean_value (null=censored), censor_prob, occurs_prob.  Convert to the
+    # (occurs_true, censor_true, occurs_pred, censor_pred) shape the criteria check.
+    predictions = pl.from_arrow(pq.read_table(predictions_parquet))
+    df = predictions.with_columns(
+        pl.col("boolean_value").is_null().cast(pl.Int64).alias("censor_true"),
+        pl.col("boolean_value").fill_null(False).cast(pl.Int64).alias("occurs_true"),
+        pl.col("duration_days").cast(pl.Int64).alias("duration_days"),
+        pl.col("censor_prob").cast(pl.Float64).alias("censor_pred"),
+        pl.col("occurs_prob").cast(pl.Float64).alias("occurs_pred"),
+    ).select("query", "duration_days", "occurs_true", "censor_true", "occurs_pred", "censor_pred")
 
     # Diagnostics — always print, regardless of pass/fail.
     print("\n[Design 2] per-cell label + prediction distribution (tuning):")

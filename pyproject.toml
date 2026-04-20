@@ -65,6 +65,7 @@ EQ_gen_eval_tasks = "every_query.evaluate.gen_task:main"
 EQ_select_model = "every_query.evaluate.select_model:main"
 EQ_aces_to_eq = "every_query.predict.external_tasks.aces_to_eq:main"
 EQ_process_composite = "every_query.predict.external_tasks.process_composite:main"
+EQ_predict = "every_query.predict.predict:main"
 
 [tool.coverage.run]
 # Measure coverage for EQ_* CLIs launched via subprocess in tests/test_cli_smoke.py.

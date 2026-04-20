@@ -10,59 +10,16 @@ import polars as pl
 import torch
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
-from lightning.pytorch import seed_everything
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
-from every_query.model.lightning_module import EveryQueryLightningModule
 from every_query.utils.codes import (  # noqa: F401 (values_as_list used by config.yaml)
     code_slug,
     values_as_list,
 )
+from every_query.utils.model_loader import setup_model as _setup_model
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-
-
-def _setup_model(model_run_dir: str | Path, ckpt_name: str | None = None):
-    model_run_dir = Path(model_run_dir)
-    if not model_run_dir.is_dir():
-        raise NotADirectoryError(f"{model_run_dir} is not a directory")
-
-    train_cfg = OmegaConf.load(model_run_dir / "resolved_config.yaml")
-    train_cfg.trainer.logger = ""
-
-    seed = train_cfg.get("seed", 42)
-    if seed is not None:
-        logger.info(f"Seeding with seed={seed}")
-        seed_everything(seed, workers=True)
-
-    logger.info("Setting torch float32 matmul precision to 'medium'.")
-    torch.set_float32_matmul_precision("medium")
-
-    # Resolve checkpoint: explicit name → best_model.ckpt → last.ckpt
-    candidates = (
-        [model_run_dir / "checkpoints" / f"{ckpt_name}.ckpt"]
-        if ckpt_name is not None and ckpt_name != "best"
-        else [
-            model_run_dir / "best_model.ckpt",
-            model_run_dir / "checkpoints" / "last.ckpt",
-        ]
-    )
-    ckpt_path = next((p for p in candidates if p.is_file()), None)
-    if ckpt_path is None:
-        raise FileNotFoundError(
-            f"No checkpoint found in {model_run_dir} (tried {[str(p) for p in candidates]})"
-        )
-    if ckpt_path != candidates[0]:
-        logger.warning(f"{candidates[0].name} not found, falling back to {ckpt_path}")
-
-    logger.info(f"Loading lightning module from checkpoint: {ckpt_path}")
-    M = EveryQueryLightningModule.load_from_checkpoint(str(ckpt_path))
-
-    logger.info("Instantiating trainer...")
-    trainer = instantiate(train_cfg.trainer)
-
-    return train_cfg, M, trainer
 
 
 def _model_name(model_run_dir: str) -> str:
