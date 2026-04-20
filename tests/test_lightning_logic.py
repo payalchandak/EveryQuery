@@ -5,7 +5,6 @@ specifically optimizer parameter-group construction via ``configure_optimizers``
 and the relationship between raw logits and predicted probabilities.
 """
 
-import copy
 from functools import partial
 
 import torch
@@ -99,18 +98,10 @@ class TestPredictProbsEqualSigmoidOfLogits:
     This test verifies the full chain is consistent.
     """
 
-    @staticmethod
-    def _predict_batch(sample_batch):
-        """Clone ``sample_batch`` with the metadata fields ``predict_step`` requires."""
-        batch = copy.copy(sample_batch)
-        batch.subject_id = torch.arange(sample_batch.batch_size)
-        batch.prediction_time = torch.arange(sample_batch.batch_size)
-        return batch
-
     @torch.no_grad()
     def test_occurs_probs_match_sigmoid_of_logits(self, demo_model, demo_lightning_module, sample_batch):
         _, outputs = demo_model._forward(sample_batch)
-        preds = demo_lightning_module.predict_step(self._predict_batch(sample_batch))
+        preds = demo_lightning_module.predict_step(sample_batch)
 
         expected = torch.sigmoid(outputs.occurs_logits).squeeze().cpu()
         assert torch.allclose(preds["occurs_probs"], expected), (
@@ -120,7 +111,7 @@ class TestPredictProbsEqualSigmoidOfLogits:
     @torch.no_grad()
     def test_censor_probs_match_sigmoid_of_logits(self, demo_model, demo_lightning_module, sample_batch):
         _, outputs = demo_model._forward(sample_batch)
-        preds = demo_lightning_module.predict_step(self._predict_batch(sample_batch))
+        preds = demo_lightning_module.predict_step(sample_batch)
 
         expected = torch.sigmoid(outputs.censor_logits).squeeze().cpu()
         assert torch.allclose(preds["censor_probs"], expected), (

@@ -38,6 +38,7 @@ _ENTRYPOINTS: list[tuple[str, list[str]]] = [
     ("EQ_gen_eval_index", []),
     ("EQ_gen_eval_tasks", ["eval_codes=smoke"]),
     ("EQ_select_model", []),
+    ("EQ_predict", []),
 ]
 
 

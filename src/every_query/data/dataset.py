@@ -7,7 +7,7 @@ import numpy as np
 import polars as pl
 import pyarrow.parquet as pq
 import torch
-from meds import DataSchema, LabelSchema, held_out_split
+from meds import DataSchema, LabelSchema
 from meds_torchdata import MEDSPytorchDataset
 from meds_torchdata.config import MEDSTorchDataConfig
 from meds_torchdata.types import BatchMode, MEDSTorchBatch
@@ -29,8 +29,6 @@ class EveryQueryBatch(MEDSTorchBatch):
     """
 
     # Extra task annotations (subject-level)
-    subject_id: torch.LongTensor | None = None
-    prediction_time: torch.LongTensor | None = None
     censor: torch.BoolTensor | None = None
     occurs: torch.LongTensor | None = None
     query: torch.LongTensor | None = None
@@ -324,14 +322,6 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
     def __init__(self, cfg: MEDSTorchDataConfig, split: str):
         super().__init__(cfg, split)
 
-        # convert prediction_time_name to int's instead of datetime objs
-        if self.split == held_out_split:
-            self.schema_df = self.schema_df.with_columns(
-                pl.col(LabelSchema.prediction_time_name)
-                .dt.timestamp("us")
-                .alias(LabelSchema.prediction_time_name)
-            )
-
         # Derive the ``(censor, occurs)`` pair the model's loss code consumes, from
         # whichever on-disk label shape the parquet has.  Two shapes are supported:
         #
@@ -426,10 +416,6 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
     def _seeded_getitem(self, idx: int, seed: int | None = None) -> dict[str, torch.Tensor]:
         out = super()._seeded_getitem(idx, seed)
 
-        if self.split == held_out_split:
-            out["subject_id"] = self.schema_df[DataSchema.subject_id_name][idx]
-            out["prediction_time"] = self.schema_df[LabelSchema.prediction_time_name][idx]
-
         dynamic_data = out["dynamic"]
         schema = dynamic_data.schema
         schema["code"] = np.int16
@@ -448,10 +434,6 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
 
     def collate(self, batch: list[dict]) -> EveryQueryBatch:
         out = dict(super().collate(batch).items())
-
-        if self.split == held_out_split:
-            out["subject_id"] = torch.as_tensor([item["subject_id"] for item in batch]).long()
-            out["prediction_time"] = torch.as_tensor([item["prediction_time"] for item in batch]).long()
 
         if self.has_task_labels:
             out["censor"] = out[self.LABEL_COL]
