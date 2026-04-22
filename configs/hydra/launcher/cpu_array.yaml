@@ -1,0 +1,25 @@
+# Shared submitit launcher for CPU-only array sweeps:
+# EQ_generate_training_tasks, EQ_generate_evaluation_tasks, EQ_evaluate,
+# EQ_process_data (bump mem_gb for heavier preprocess runs).
+#
+# Usage (from login node):
+#   EQ_generate_training_tasks -m \
+#     --config-dir=configs \
+#     hydra/launcher=cpu_array \
+#     split=train input_shard=0,1,2,3,4,5,6,7 task_shard='range(0,16)'
+
+defaults:
+  - override /hydra/launcher: submitit_slurm
+
+hydra:
+  launcher:
+    partition: cpu
+    timeout_min: 120
+    cpus_per_task: 4
+    mem_gb: 16
+    tasks_per_node: 1
+    nodes: 1
+    array_parallelism: 32
+    additional_parameters:
+      mail-user: gbk2114@cumc.columbia.edu
+      mail-type: END,FAIL

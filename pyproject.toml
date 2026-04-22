@@ -36,12 +36,19 @@ dependencies = [
   "wandb>=0.22.3",
   "ipykernel>=7.2.0",
   "scikit-learn>=1.6.0",
+  "matplotlib>=3.10.8",
 ] # Add your runtime dependencies here
 
 [dependency-groups]
 dev = [
-  "pre-commit<4", "ruff", "pytest", "pytest-cov", "pretty-print-directory", "meds_testing_helpers~=0.3.0",
-  "yaml_to_disk"
+  "pre-commit<4",
+  "ruff",
+  "pytest",
+  "pytest-cov",
+  "pretty-print-directory",
+  "meds_testing_helpers~=0.3.0",
+  "yaml_to_disk",
+  "hydra-submitit-launcher>=1.2.0",
 ] # Add your development (lint, test) dependencies here
 docs = [] # Add your documentation dependencies here (I recommend mkdocs-material)
 
