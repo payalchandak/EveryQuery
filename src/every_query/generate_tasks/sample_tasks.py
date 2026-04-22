@@ -463,6 +463,20 @@ def _labels_fp(out_dir: Path, split: str, input_shard: str, task_shard: int) -> 
     return out_dir / split / f"{worker_id}.parquet"
 
 
+def subsample_query_codes(query_codes: list[str], frac: float, seed: int) -> list[str]:
+    """Deterministically restrict ``query_codes`` to a ``frac`` fraction of its entries.
+
+    Sampling is without replacement and the result is sorted for stability across callers.
+    Raises ``ValueError`` if ``frac`` is outside ``(0, 1]``.
+    """
+    if not (0.0 < frac <= 1.0):
+        raise ValueError(f"code_sample_frac must be in (0, 1], got {frac}")
+    k = max(1, round(len(query_codes) * frac))
+    rng = np.random.default_rng(seed)
+    chosen = rng.choice(np.asarray(query_codes), size=k, replace=False)
+    return sorted(chosen.tolist())
+
+
 def run_worker(
     data_dir: Path,
     out_dir: Path,
@@ -477,6 +491,7 @@ def run_worker(
     duration_max: int,
     min_context_per_subject: int,
     overwrite: bool = False,
+    code_sample_frac: float | None = None,
 ) -> Path | None:
     """Run the three-stage sampling pipeline for one worker in-memory.
 
@@ -496,6 +511,21 @@ def run_worker(
         return None
 
     query_codes = read_query_codes(codes_dir)
+    if code_sample_frac is not None:
+        vocab_seed = derive_seed(seed, "code_vocab")
+        full_vocab_size = len(query_codes)
+        query_codes = subsample_query_codes(query_codes, code_sample_frac, vocab_seed)
+        logger.info(
+            "Restricted query-code vocab from %d to %d codes (frac=%s, vocab_seed=%d).",
+            full_vocab_size,
+            len(query_codes),
+            code_sample_frac,
+            vocab_seed,
+        )
+        sampled_codes_fp = out_dir / "sampled_codes.parquet"
+        if not sampled_codes_fp.exists() or overwrite:
+            _atomic_write_parquet(pl.DataFrame({"code": query_codes}), sampled_codes_fp)
+            logger.info("Wrote sampled vocab (%d codes) to %s", len(query_codes), sampled_codes_fp)
     tasks_seed = derive_seed(seed, "tasks", task_shard)
     tasks = sample_tasks(
         n=n_tasks,
@@ -590,6 +620,7 @@ def main(cfg: DictConfig) -> None:
         duration_max=int(cfg.duration_max),
         min_context_per_subject=int(cfg.min_context_per_subject),
         overwrite=bool(cfg.get("overwrite", False)),
+        code_sample_frac=(float(cfg.code_sample_frac) if cfg.get("code_sample_frac") is not None else None),
     )
 
 

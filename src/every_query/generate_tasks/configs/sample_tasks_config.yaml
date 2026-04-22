@@ -33,6 +33,13 @@ duration_max: 731
 # Minimum prior events a subject must have accumulated before a prediction time is valid.
 min_context_per_subject: 50
 
+# Optional fraction of the full query-code vocabulary to sample from.
+# `null` uses the full vocab (default behavior). When set to a float in (0, 1], every
+# worker in the sweep restricts its code pool to the same deterministic subsample
+# (seeded from `seed`, independent of input_shard/task_shard) and the chosen subset
+# is persisted once to `{out_dir}/sampled_codes.parquet` for audit.
+code_sample_frac: null
+
 overwrite: false
 
 hydra:
