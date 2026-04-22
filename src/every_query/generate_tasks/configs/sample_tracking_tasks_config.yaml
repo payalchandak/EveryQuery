@@ -1,0 +1,49 @@
+# Hydra config for the in-training tracking-task label generator.
+#
+# Generates a fixed, sampled set of (code, duration_days) tuples and labels them
+# across the entire target split (typically `tuning`).  Output directory feeds
+# `PerTaskAurocCallback` during training.
+#
+# Single-invocation CLI: iterates every shard of `split` in series.  Run once
+# per (dataset, seed) pair — the output is reusable across training runs on the
+# same dataset.
+#
+# Path fallback (resolved in `main()` via `load_dotenv()` + env-var fallback):
+#   data_dir  -> $INTERMEDIATE   (event shards live under `{data_dir}/data/{split}/*.parquet`)
+#   codes_dir -> $PROCESSED      (query universe under `{codes_dir}/metadata/codes.parquet`);
+#                                 ignored when `codes:` is passed explicitly
+#   out_dir   -> $TRACKING_DIR   (label parquets land at `{out_dir}/labels/<shard>.parquet`;
+#                                 manifest at `{out_dir}/tracking_tasks.parquet`)
+
+data_dir: null
+codes_dir: null
+out_dir: null
+
+split: tuning
+seed: 0
+
+# Number of (code, duration_days) tuples to sample.  ~50 is a reasonable default
+# for in-training monitoring — enough to cover a range of codes/horizons, small
+# enough that per-task scalars don't overwhelm WandB.
+n_tasks: 50
+
+# Task-distribution bounds for `sample_tasks` (matches `sample_tasks_config.yaml`).
+duration_min: 1
+duration_max: 731
+
+# Prediction-time sampling — same semantics as `sample_evaluation_tasks_config.yaml`.
+prediction_times_per_subject: 5
+min_context_per_subject: 50
+
+# Codes to sample from.  Either an explicit list (e.g. `codes: ${train_codes.codes}`)
+# or null to load the full vocab from `{codes_dir}/metadata/codes.parquet`.  For
+# tracking the model's own predictions, prefer passing the training vocab so every
+# sampled code is one the model can actually predict.
+codes: null
+
+overwrite: false
+
+hydra:
+  output_subdir: null
+  job:
+    chdir: false

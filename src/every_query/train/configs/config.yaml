@@ -91,6 +91,15 @@ trainer:
       stopping_threshold: null # stop training immediately once the monitored quantity reaches this
       divergence_threshold: null # stop training as soon as the monitored quantity becomes worse than this
       check_on_train_epoch_end: false # set to false so that early stopping is checked after each validation loop
+    per_task_auroc:
+      # Optional. Logs per-(query, duration_days) AUROC every `every_n_steps`
+      # against a pre-built labeled task set. Disabled when `tracking_dir` is null
+      # or its `labels/` subdir is missing — set $EQ_TRACKING_DIR (or override on
+      # the CLI) to enable. See `EQ_generate_tracking_tasks` for label generation.
+      _target_: every_query.train.callbacks.per_task_auroc.PerTaskAurocCallback
+      tracking_dir: ${oc.env:EQ_TRACKING_DIR,null}
+      every_n_steps: 2000
+      prefix: "tuning/per_task"
   default_root_dir: ${output_dir}
   min_epochs: 0 # prevents early stopping
   max_epochs: null # We don't control the max epochs, we control the max steps.
