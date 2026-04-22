@@ -7,10 +7,10 @@ import polars as pl
 # -------------------
 # Config
 # -------------------
-PARQUET_PATH = "/users/gbk2114/data/MIMIC_MEDS/MEDS_cohort/processed/metadata/codes.parquet"
-N_SAMPLES = 10000
+PARQUET_PATH = f"{os.environ['PROCESSED']}/metadata/codes.parquet"
+N_SAMPLES = 18000
 N_REPEATS = 5
-OUT_DIR = "../train_codes"
+OUT_DIR = f"{os.environ["PROJECT_DIR"]}/src/every_query/train/configs"
 SEED = 42
 
 random.seed(SEED)
