@@ -3,6 +3,11 @@ import os
 import random
 
 import polars as pl
+from dotenv import load_dotenv
+
+load_dotenv()
+assert "PROCESSED" in os.environ, "set PROCESSED in .env"
+assert "PROJECT_DIR" in os.environ, "set PROJECT_DIR in .env"
 
 # -------------------
 # Config
@@ -10,7 +15,7 @@ import polars as pl
 PARQUET_PATH = f"{os.environ['PROCESSED']}/metadata/codes.parquet"
 N_SAMPLES = 18000
 N_REPEATS = 5
-OUT_DIR = f"{os.environ["PROJECT_DIR"]}/src/every_query/train/configs"
+OUT_DIR = f"{os.environ['PROJECT_DIR']}/src/every_query/train/configs/train_codes"
 SEED = 42
 
 random.seed(SEED)
