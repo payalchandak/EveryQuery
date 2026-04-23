@@ -14,11 +14,6 @@ do_overwrite: true
 do_resume: false
 seed: 1
 
-query:
-  codes:
-    - "HR"
-    - "TEMP"
-
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
   data_class: every_query.data.dataset.EveryQueryPytorchDataset

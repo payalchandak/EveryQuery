@@ -211,21 +211,6 @@ env vars when CLI config values are supplied).
 gated vars to `${oc.env:VAR,???}` / `${oc.env:VAR,default}` form (Hydra-native required
 or optional-with-fallback) and eventually retire `ensure_env()` entirely.
 
-### Known gotcha: code-group YAMLs
-
-`train/configs/config.yaml`, `evaluate/conf/eval_config.yaml`, and
-`evaluate/conf/gen_tasks_config.yaml` all pull a default `{train,eval}_codes/<hash>.yaml`
-that is (a) generated out-of-band and (b) explicitly `.gitignore`d — so a fresh clone
-can't compose them. Workaround until [#64](https://github.com/payalchandak/EveryQuery/issues/64)
-lands:
-
-- Pass `--config-dir=/path/to/your/codes_dir code_group_name=...`, or
-- Generate them locally via
-    `python -m every_query.paper_experiments.sample_codes.sample_train_codes` (note: currently
-    has a hardcoded MIMIC path — #85 will parameterize it).
-
-The smoke-test fixture in `tests/test_cli_smoke.py` shows the minimal shape of each file.
-
 ## Development
 
 ```bash
