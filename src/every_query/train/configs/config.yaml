@@ -1,14 +1,10 @@
 defaults:
   - _self_
-  - train_codes: 10000_ID__8db2be6fadf8
 
 output_dir: ${oc.env:OUTPUT_DIR}/${run_id:}/
 do_overwrite: true
 do_resume: false
 seed: 140799
-
-query:
-  codes: ${train_codes.codes}
 
 datamodule:
   _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
@@ -53,7 +49,7 @@ trainer:
   _target_: lightning.pytorch.trainer.Trainer
   logger:
     _target_: pytorch_lightning.loggers.wandb.WandbLogger
-    name: "queries=${list_len:${query.codes}}_${run_id:}"
+    name: "${run_id:}"
     save_dir: "${trainer.default_root_dir}/loggers"
     offline: False
     id: null # pass correct id to resume experiment!
@@ -62,9 +58,6 @@ trainer:
     log_model: False # upload lightning ckpts
     prefix: "" # a string to put at the beginning of metric keys
     entity: ${oc.env:WANDB_ENTITY}
-    config:
-      query_codes: ${train_codes.codes}
-      num_query_codes: ${list_len:${train_codes.codes}}
   callbacks:
     _target_: __main__.values_as_list
     learning_rate_monitor:

@@ -36,6 +36,14 @@ ALLOWED_DIFFERENCE_KEYS = {
     "trainer.callbacks.early_stopping.patience",
 }
 
+LEGACY_REMOVED_KEYS = {
+    # Top-level keys that once lived in the training config but have since been removed.
+    # Stripped from a resumed run's saved config before diffing so older run dirs
+    # stay resumable after the key is gone.  "query" was a code-list knob
+    # removed in #64; see plan for context.
+    "query",
+}
+
 STR_ENUM_PARAMS = {
     "seq_sampling_strategy": SubsequenceSamplingStrategy,
     "padding_side": PaddingSide,
@@ -159,8 +167,9 @@ def validate_resume_directory(output_dir: Path, cfg: DictConfig) -> None:
     "Matters" = any key not listed in ``ALLOWED_DIFFERENCE_KEYS``.  The allow-list covers lifecycle
     flags (``do_resume``, ``do_overwrite``), path fields that legitimately differ between runs, local
     performance knobs, and training-schedule overrides that are reasonable to bump on resume.  Any
-    structural drift (model hyperparameters, dataset shape, seed, query codes) raises ``ValueError``
-    with a per-key message.
+    structural drift (model hyperparameters, dataset shape, seed) raises ``ValueError``
+    with a per-key message.  Top-level keys in ``LEGACY_REMOVED_KEYS`` are stripped from the
+    saved config before diffing so runs started before the key was removed remain resumable.
 
     Args:
         output_dir: The run directory being resumed from.
@@ -177,6 +186,10 @@ def validate_resume_directory(output_dir: Path, cfg: DictConfig) -> None:
     old_cfg = OmegaConf.load(old_cfg_fp)
     old_cfg = OmegaConf.to_container(old_cfg, resolve=True)
     new_cfg = OmegaConf.to_container(cfg, resolve=True)
+
+    for legacy_key in LEGACY_REMOVED_KEYS:
+        old_cfg.pop(legacy_key, None)
+        new_cfg.pop(legacy_key, None)
 
     differences = diff_configs(new_cfg, old_cfg)
 

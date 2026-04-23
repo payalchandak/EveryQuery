@@ -12,7 +12,7 @@ import torch
 from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
 from MEDS_transforms.configs.utils import OmegaConfResolver
-from omegaconf import DictConfig, ListConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 from every_query.train.resume_check import validate_resume_directory
 
@@ -202,9 +202,6 @@ CONFIGS = str(files("every_query") / "train" / "configs")
 @hydra.main(version_base="1.3", config_path=CONFIGS, config_name="config.yaml")
 def main(cfg: DictConfig) -> float | None:
     _init_env()
-
-    if not isinstance(cfg.query.codes, ListConfig):
-        raise ValueError("query.codes must be a list")
 
     if cfg.do_overwrite and cfg.do_resume:
         logger.warning(

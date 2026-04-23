@@ -229,7 +229,6 @@ def oracle_trained_model_dir(
             f"output_dir={output_dir!s}",
             f"datamodule.config.tensorized_cohort_dir={oracle_preprocessed!s}",
             f"datamodule.config.task_labels_dir={oracle_dataset['task_labels_dir']!s}",
-            f"query.codes=[{_TARGET_CODE}]",
             "datamodule.batch_size=16",
             "datamodule.config.max_seq_len=128",
             "lightning_module.model.config_overrides.hidden_size=128",

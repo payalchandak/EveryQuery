@@ -9,9 +9,10 @@ Training stage of the EveryQuery pipeline. Home of the `EQ_train` console script
     `python -m every_query.train.train`. Hydra-based: all knobs overridable on the CLI.
 - **`configs/`** — shipped Hydra configs for the training stage.
     - `config.yaml` — default production config (ModernBERT encoder, AdamW, wandb
-        logger, early-stopping on tuning/loss). `query.codes` is sourced from a
-        `train_codes` compose-group default (see #64 and #92 for the planned move
-        to `query.codes: ???` once the eval-side configs can be reworked together).
+        logger, early-stopping on tuning/loss). Training has no query-codes knob:
+        the set of queried codes is determined by whatever `EQ_generate_training_tasks`
+        wrote into the task-labels parquet at `$TASK_DIR`. Code filtering happens
+        upstream in preprocessing.
     - `fast_config.yaml` — speed-tuned override bundle that inherits `config.yaml` and
         shrinks `max_seq_len`, bumps batch size, etc. Targeted at tokenization-sweep
         runs that fit in ~5 minutes on one L40S.
