@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from omegaconf import OmegaConf
 
 from every_query.train.resume_check import LEGACY_REMOVED_KEYS, validate_resume_directory
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _write_cfg(path: Path, **overrides) -> None:
@@ -20,9 +23,8 @@ def _write_cfg(path: Path, **overrides) -> None:
 
 
 def test_resume_ignores_legacy_query_stanza(tmp_path: Path) -> None:
-    """An old run dir whose saved config still carries a top-level ``query`` stanza must resume
-    cleanly after #64 removed the field.
-    """
+    """An old run dir whose saved config still carries a top-level ``query`` stanza must resume cleanly after
+    #64 removed the field."""
     assert "query" in LEGACY_REMOVED_KEYS
 
     saved = tmp_path / "config.yaml"
