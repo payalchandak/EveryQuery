@@ -147,6 +147,20 @@ EQ_generate_evaluation_tasks \
 
 Samples `K` prediction times per subject, cross-joins with the full `(codes × durations)` grid, labels via the same primitive as training. Output lands under `$TASK_DIR/eval/{split}/*.parquet` (separate `eval/` subdir so it doesn't collide with the training-task output).
 
+`codes=` accepts an inline list (as above), a metadata root / `codes.parquet` path, or — for reproducible pre-sampled code universes kept out of git — a path to a YAML file. The YAML is either a bare list or a mapping with a `codes:` key:
+
+```yaml
+# sampled_codes.yaml
+codes:
+  - HR
+  - TEMP
+  - ICD//A01
+```
+
+```bash
+EQ_generate_evaluation_tasks codes=/path/to/sampled_codes.yaml …
+```
+
 ### 3. Train
 
 ```bash
