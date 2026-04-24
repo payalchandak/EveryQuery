@@ -53,7 +53,9 @@ class TestModelForwardShape:
     def test_loss_decomposes(self, demo_model, sample_batch):
         loss, outputs = demo_model(sample_batch)
         assert outputs.censor_loss.isfinite() and outputs.occurs_loss.isfinite()
-        assert torch.allclose(loss, outputs.censor_loss + outputs.occurs_loss)
+        w = demo_model.occurs_loss_weight
+        expected = w * outputs.occurs_loss + (1 - w) * outputs.censor_loss
+        assert torch.allclose(loss, expected)
 
 
 # ── test_model_backward ─────────────────────────────────────────────────

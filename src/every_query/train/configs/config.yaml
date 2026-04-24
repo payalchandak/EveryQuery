@@ -29,6 +29,7 @@ lightning_module:
     do_grad_ckpt: false
     mlp_dropout: 0.1
     num_hidden_layers: 22
+    occurs_loss_weight: 0.5
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true

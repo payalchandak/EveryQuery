@@ -281,6 +281,7 @@ class EveryQueryModel(torch.nn.Module):
         model_name: str = "answerdotai/ModernBERT-base",
         num_hidden_layers: int | None = None,
         config_overrides: dict[str, Any] | None = None,
+        occurs_loss_weight: float = 0.5,
     ):
         super().__init__()
 
@@ -334,6 +335,7 @@ class EveryQueryModel(torch.nn.Module):
         )
         self.duration_embed = MLP(layers=[1, 64, self.HF_model.config.hidden_size], dropout_prob=0)
         self.criterion = torch.nn.BCEWithLogitsLoss()
+        self.occurs_loss_weight = occurs_loss_weight
 
         self.do_demo = do_demo
         if self.do_demo:
@@ -348,6 +350,7 @@ class EveryQueryModel(torch.nn.Module):
             "model_name": model_name,
             "num_hidden_layers": self.HF_model_config.num_hidden_layers,
             "config_overrides": dict(config_overrides) if config_overrides else None,
+            "occurs_loss_weight": self.occurs_loss_weight,
         }
 
     @property
@@ -618,7 +621,7 @@ class EveryQueryModel(torch.nn.Module):
         occurs_logits = self.occurs_mlp(query_embed)
         occurs_loss = self._get_loss(occurs_logits, batch.occurs, mask=~batch.censor)
 
-        loss = censor_loss + occurs_loss
+        loss = self.occurs_loss_weight * occurs_loss + (1 - self.occurs_loss_weight) * censor_loss
 
         outputs = EveryQueryOutput(
             last_hidden_state=outputs.last_hidden_state if self.do_demo else None,
