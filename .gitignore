@@ -186,7 +186,9 @@ src/every_query/paper_experiments/sample_codes/outputs/
 
 # AI
 .cursor/
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 CLAUDE.md
 
 # GCP analysis
