@@ -417,6 +417,14 @@ def read_query_codes(codes_or_path: list[str] | ListConfig | str | Path) -> list
     if codes_or_path is None:
         raise ValueError("codes must be a list of query codes or a path to codes.parquet")
     p = Path(str(codes_or_path))
+    if p.suffix in {".yaml", ".yml"}:
+        import yaml
+
+        with open(p) as f:
+            data = yaml.safe_load(f)
+        raw = data["codes"] if isinstance(data, dict) else data
+        seen: set[str] = set()
+        return [c for c in raw if not (c in seen or seen.add(c))]
     if p.is_dir():
         p = p / "metadata" / "codes.parquet"
     return pl.read_parquet(p, columns=["code"])["code"].unique().sort().to_list()

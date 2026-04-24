@@ -182,6 +182,7 @@ cython_debug/
 #.idea/
 
 src/every_query/evaluate/outputs/
+src/every_query/paper_experiments/sample_codes/outputs/
 
 # AI
 .cursor/
