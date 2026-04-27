@@ -38,9 +38,11 @@ from pathlib import Path
 
 import hydra
 import polars as pl
+import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 from hydra.utils import instantiate
+from lightning.pytorch.callbacks import BasePredictionWriter
 from meds import held_out_split, tuning_split
 from omegaconf import DictConfig
 
@@ -194,37 +196,6 @@ def _check_vocab(task_codes: set[str], train_cfg: DictConfig) -> None:
         )
 
 
-def _gather_probabilities(pred_batches: list[dict[str, torch.Tensor]]) -> pl.DataFrame:
-    """Flatten Lightning's per-batch ``predict_step`` dicts into a two-column probabilities frame.
-
-    Returns ``(censor_prob, occurs_prob)`` in dataset iteration order.  Column names
-    come from :class:`PredictionSchema` so a rename on the schema flows through.
-
-    ``logits_to_probs`` does a trailing ``.squeeze()``, so a single-item batch emits a
-    0-d scalar tensor that ``torch.cat`` refuses to stack — ``reshape(-1)`` on every
-    per-batch tensor makes the concat well-defined regardless of batch size.
-    """
-    if not pred_batches:
-        return pl.DataFrame(
-            schema={
-                PredictionSchema.censor_prob_name: pl.Float32,
-                PredictionSchema.occurs_prob_name: pl.Float32,
-            }
-        )
-
-    def cat(key: str) -> pl.Series:
-        # ``PredictionSchema.{censor,occurs}_prob`` are ``pa.float32()`` — cast here
-        # so the final ``PredictionSchema.align`` doesn't have to coerce f64 → f32.
-        return pl.Series(torch.cat([b[key].reshape(-1) for b in pred_batches]).numpy()).cast(pl.Float32)
-
-    return pl.DataFrame(
-        {
-            PredictionSchema.censor_prob_name: cat("censor_probs"),
-            PredictionSchema.occurs_prob_name: cat("occurs_probs"),
-        }
-    )
-
-
 def _identifiers_from_schema_df(schema_df: pl.DataFrame) -> pl.DataFrame:
     """Build an output identifier frame from the dataset's post-``__init__`` schema_df.
 
@@ -253,6 +224,103 @@ def _identifiers_from_schema_df(schema_df: pl.DataFrame) -> pl.DataFrame:
             .alias(TaskQuerySchema.boolean_value_name)
         )
     return out
+
+
+class _StreamingPredictionWriter(BasePredictionWriter):
+    """Lightning ``BasePredictionWriter`` that streams per-batch results to a single parquet.
+
+    Each ``write_on_batch_end`` call appends one row group to ``output_parquet`` so
+    EQ_predict's CPU-memory footprint doesn't scale with cohort size — only one batch's
+    ``predict_step`` dict is alive at a time (Lightning drops it after the writer hook
+    returns when ``return_predictions=False``).
+
+    Identifiers come from slicing the dataset's pre-loaded ``schema_df`` with a running
+    offset; correctness depends on the dataloader iterating in ``schema_df`` row order,
+    which ``main()`` enforces via the ``SequentialSampler`` guard.
+
+    Partial-write semantics: ``close()`` is idempotent and is invoked from ``main()``'s
+    ``try/finally`` block, so a Python-level exception mid-stream still flushes the parquet
+    footer and leaves a valid ``PredictionSchema`` parquet covering exactly the batches that
+    completed.  Hard kills (SIGKILL) cannot be recovered — parquet has no
+    append-after-close, so single-file streaming has no defense against them.
+    """
+
+    def __init__(self, output_parquet: Path, schema_df: pl.DataFrame) -> None:
+        super().__init__(write_interval="batch")
+        self._output_parquet = output_parquet
+        self._schema_df = schema_df
+        self._writer: pq.ParquetWriter | None = None
+        self._offset: int = 0
+        self._arrow_schema: pa.Schema | None = None
+
+    def setup(self, trainer, pl_module, stage: str) -> None:
+        if stage != "predict":
+            return
+        # Pre-build the canonical arrow schema from a zero-row aligned table.  Doing
+        # this up front (rather than on the first batch) means an empty cohort still
+        # produces a valid PredictionSchema parquet — matches the pre-streaming
+        # behavior where ``_gather_probabilities`` returned an empty frame and the
+        # final ``pq.write_table`` still ran.
+        empty_ids = _identifiers_from_schema_df(self._schema_df.head(0))
+        empty_probs = pl.DataFrame(
+            schema={
+                PredictionSchema.censor_prob_name: pl.Float32,
+                PredictionSchema.occurs_prob_name: pl.Float32,
+            }
+        )
+        empty_aligned = PredictionSchema.align(empty_ids.hstack(empty_probs).to_arrow())
+        self._arrow_schema = empty_aligned.schema
+
+        self._output_parquet.parent.mkdir(parents=True, exist_ok=True)
+        self._writer = pq.ParquetWriter(self._output_parquet, schema=self._arrow_schema)
+
+    def write_on_batch_end(
+        self,
+        trainer,
+        pl_module,
+        prediction: dict[str, torch.Tensor],
+        batch_indices,
+        batch,
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        if self._writer is None:
+            raise RuntimeError(
+                "_StreamingPredictionWriter received a batch before setup() opened the "
+                "parquet writer.  This shouldn't happen in normal predict flow."
+            )
+
+        n = prediction["occurs_probs"].reshape(-1).numel()
+        if n == 0:
+            return
+
+        identifiers = _identifiers_from_schema_df(self._schema_df.slice(self._offset, n))
+        # Cast to Float32 here so the per-batch ``PredictionSchema.align`` doesn't have
+        # to coerce f64 → f32 every row group (mirrors the old ``_gather_probabilities``).
+        probs = pl.DataFrame(
+            {
+                PredictionSchema.censor_prob_name: pl.Series(
+                    prediction["censor_probs"].reshape(-1).numpy()
+                ).cast(pl.Float32),
+                PredictionSchema.occurs_prob_name: pl.Series(
+                    prediction["occurs_probs"].reshape(-1).numpy()
+                ).cast(pl.Float32),
+            }
+        )
+        aligned = PredictionSchema.align(identifiers.hstack(probs).to_arrow())
+        self._writer.write_table(aligned)
+        self._offset += n
+
+    def close(self) -> None:
+        """Idempotent close — safe to call from both Lightning's teardown and main()'s finally."""
+        if self._writer is not None:
+            self._writer.close()
+            self._writer = None
+
+    def teardown(self, trainer, pl_module, stage: str) -> None:
+        # Defense-in-depth: ``main()``'s ``try/finally`` is the primary closer.
+        if stage == "predict":
+            self.close()
 
 
 _SPLIT_TO_DATAMODULE_ATTRS: dict[str, tuple[str, str]] = {
@@ -311,36 +379,38 @@ def main(cfg: DictConfig) -> None:
     _check_vocab(set(dataset.query.unique().to_list()), train_cfg)
     logger.info(f"Loaded {len(dataset)} tasks across {dataset.query.n_unique()} query codes")
 
+    # Stream per-batch predictions to ``output_parquet`` so memory doesn't scale with
+    # cohort size.  The callback opens the parquet writer in ``setup``, appends one row
+    # group per batch in ``write_on_batch_end``, and is closed by the ``finally`` below
+    # (idempotent — Lightning's ``teardown`` also calls ``close()``).  Pairing this with
+    # ``return_predictions=False`` means Lightning drops each batch's ``predict_step``
+    # dict as soon as the writer hook returns.
+    writer = _StreamingPredictionWriter(output_parquet, dataset.schema_df)
+    trainer.callbacks.append(writer)
+
     # Pass the split's dataloader directly — MTD's ``Datamodule`` has no
     # ``predict_dataloader``, so ``trainer.predict(datamodule=D)`` would hit the base
     # class's ``MisconfigurationException``.  The SequentialSampler check above
     # guarantees order preservation.
-    pred_batches = trainer.predict(model=model, dataloaders=dataloader, ckpt_path=None)
-
-    probs = _gather_probabilities(pred_batches)
-    identifiers = _identifiers_from_schema_df(dataset.schema_df)
-
-    # MTD guarantees ``schema_df`` preserves the input labels frame's length + order
-    # (see ``get_task_seq_bounds_and_labels`` docstring), and the dataloader is
-    # ``shuffle=False`` — so ``probs`` comes back 1:1 matched with ``identifiers``.
-    # A row-count mismatch would indicate a silent invariant violation; fail loudly.
-    if probs.height != identifiers.height:
-        raise RuntimeError(
-            f"Prediction row count ({probs.height}) doesn't match dataset row count "
-            f"({identifiers.height}).  This is an MTD invariant violation — "
-            f"the dataloader should have yielded one prediction per schema_df row."
+    try:
+        trainer.predict(
+            model=model, dataloaders=dataloader, ckpt_path=None, return_predictions=False
         )
+        # Success-path invariant — MTD guarantees ``schema_df`` preserves the input
+        # labels frame's length + order, so the writer should have streamed one
+        # prediction per schema_df row.  A mismatch is a silent invariant violation;
+        # fail loudly.  On an exception path, ``writer._offset`` will legitimately be
+        # < ``schema_df.height`` (partial write) so we skip the check there.
+        if writer._offset != dataset.schema_df.height:
+            raise RuntimeError(
+                f"Prediction row count ({writer._offset}) doesn't match dataset row count "
+                f"({dataset.schema_df.height}).  This is an MTD invariant violation — "
+                f"the dataloader should have yielded one prediction per schema_df row."
+            )
+    finally:
+        writer.close()
 
-    out = identifiers.hstack(probs)
-
-    output_parquet.parent.mkdir(parents=True, exist_ok=True)
-    # Final canonicalization pass — ``align`` casts / reorders columns to match the
-    # schema's canonical arrow layout, and we write the aligned arrow table directly
-    # via pyarrow so the schema-coerced dtypes actually land on disk (a polars
-    # round-trip would re-infer types from the aligned data, which defeats the point).
-    aligned = PredictionSchema.align(out.to_arrow())
-    pq.write_table(aligned, output_parquet)
-    logger.info(f"Wrote {out.height} predictions to {output_parquet}")
+    logger.info(f"Wrote {writer._offset} predictions to {output_parquet}")
 
 
 if __name__ == "__main__":
