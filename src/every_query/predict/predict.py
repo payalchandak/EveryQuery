@@ -393,9 +393,7 @@ def main(cfg: DictConfig) -> None:
     # class's ``MisconfigurationException``.  The SequentialSampler check above
     # guarantees order preservation.
     try:
-        trainer.predict(
-            model=model, dataloaders=dataloader, ckpt_path=None, return_predictions=False
-        )
+        trainer.predict(model=model, dataloaders=dataloader, ckpt_path=None, return_predictions=False)
         # Success-path invariant — MTD guarantees ``schema_df`` preserves the input
         # labels frame's length + order, so the writer should have streamed one
         # prediction per schema_df row.  A mismatch is a silent invariant violation;
