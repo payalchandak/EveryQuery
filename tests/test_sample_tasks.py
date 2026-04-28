@@ -102,9 +102,7 @@ class TestPrimitives:
         with pytest.raises(ValueError):
             sample_tasks(5, synthetic_query_codes, 100, 50, seed=0)
 
-    def test_read_query_codes_uses_processed_fallback(
-        self, monkeypatch, tmp_path, synthetic_query_codes
-    ):
+    def test_read_query_codes_uses_processed_fallback(self, monkeypatch, tmp_path, synthetic_query_codes):
         processed = tmp_path / "processed"
         metadata_dir = processed / "metadata"
         metadata_dir.mkdir(parents=True)
@@ -596,9 +594,7 @@ class TestRunWorkerPipeline:
         each shard's worker draws independent contexts (otherwise parallelism across shards
         would be statistically wasteful).
         """
-        data_dir, _ = _write_fake_cohort(
-            tmp_path, synthetic_events, synthetic_query_codes, shard_name="0"
-        )
+        data_dir, _ = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes, shard_name="0")
         # Write a second shard with the same events under a different basename so run_worker has
         # something to load.
         (data_dir / "data" / "train" / "1.parquet").write_bytes(
@@ -762,8 +758,8 @@ class TestRunWorkerPipeline:
 class TestResolvePath:
     """``_resolve_path`` is how ``main()`` threads explicit path roots / env fallbacks / required.
 
-    Directly exercising the helper lets us pin the fallback matrix without spinning up a full
-    Hydra run per case.
+    Directly exercising the helper lets us pin the fallback matrix without spinning up a full Hydra run per
+    case.
     """
 
     def test_explicit_cfg_value_wins(self, monkeypatch):
