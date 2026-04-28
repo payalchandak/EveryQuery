@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 import polars as pl
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -171,4 +172,106 @@ def test_eq_predict_preserves_input_row_order(
     assert df_out["duration_days"].to_list() == expected_durations, (
         f"Output duration_days order {df_out['duration_days'].to_list()} doesn't match input "
         f"{expected_durations}"
+    )
+
+
+def test_eq_predict_save_embeddings(
+    eq_trained_model_dir: Path,
+    predict_tasks_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """``save_embeddings=true`` writes a sibling parquet with row-aligned pooled embeddings.
+
+    Covers the issue #169 acceptance: enabling the new flag produces a
+    ``<output_parquet stem>.embeddings.parquet`` sibling carrying the
+    ``TaskQuerySchema`` identifiers plus a fixed-size-list ``embedding`` column
+    whose width matches the model's ``hidden_size``.  Also verifies that the
+    sibling participates in the existing ``overwrite`` clobber-protection
+    contract.
+    """
+    output_parquet = tmp_path / "predictions.parquet"
+    embeddings_parquet = output_parquet.with_suffix(".embeddings" + output_parquet.suffix)
+
+    env = os.environ.copy()
+    env["PATH"] = _VENV_BIN + os.pathsep + env.get("PATH", "")
+
+    cmd = [
+        "EQ_predict",
+        f"model_run_dir={eq_trained_model_dir}",
+        f"tasks_dir={predict_tasks_dir}",
+        f"output_parquet={output_parquet}",
+        "save_embeddings=true",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+    assert result.returncode == 0, (
+        f"EQ_predict failed (rc={result.returncode})\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    # Predictions branch is unchanged — sanity-check it still landed.
+    assert output_parquet.exists(), "predictions parquet was not written"
+    PredictionSchema.align(pq.read_table(output_parquet))
+
+    # Embeddings sibling lives next to predictions at the derived path.
+    assert embeddings_parquet.exists(), (
+        f"embeddings sibling not found at {embeddings_parquet}; got dir contents: "
+        f"{sorted(p.name for p in tmp_path.iterdir())}"
+    )
+
+    emb_table = pq.read_table(embeddings_parquet)
+    schema = emb_table.schema
+
+    # TaskQuerySchema identifier columns are present.
+    expected_id_cols = {
+        TaskQuerySchema.subject_id_name,
+        TaskQuerySchema.prediction_time_name,
+        TaskQuerySchema.query_name,
+        TaskQuerySchema.duration_days_name,
+    }
+    assert expected_id_cols.issubset(set(schema.names)), (
+        f"embeddings parquet missing identifier columns; got {schema.names}"
+    )
+
+    # The ``embedding`` column is a fixed-size-list of float32 with width > 0
+    # (the demo model's hidden_size is implementation detail; assert the
+    # invariant, not the constant).
+    assert "embedding" in schema.names, f"embeddings parquet missing 'embedding' column; got {schema.names}"
+    emb_type = schema.field("embedding").type
+    assert pa.types.is_fixed_size_list(emb_type), (
+        f"embedding column must be a fixed-size-list, got {emb_type!r}"
+    )
+    assert pa.types.is_float32(emb_type.value_type), (
+        f"embedding column inner type must be float32, got {emb_type.value_type!r}"
+    )
+    assert emb_type.list_size > 0, f"embedding hidden_size must be > 0, got {emb_type.list_size}"
+
+    # Row count matches the input task count, and identifier columns match the
+    # predictions parquet row-for-row (same `_identifiers_from_schema_df` source).
+    pred_df = pl.from_arrow(pq.read_table(output_parquet))
+    emb_df = pl.from_arrow(emb_table)
+    assert emb_df.height == pred_df.height, (
+        f"embeddings row count {emb_df.height} != predictions row count {pred_df.height}"
+    )
+    for col in (
+        TaskQuerySchema.subject_id_name,
+        TaskQuerySchema.prediction_time_name,
+        TaskQuerySchema.query_name,
+        TaskQuerySchema.duration_days_name,
+    ):
+        assert emb_df[col].to_list() == pred_df[col].to_list(), (
+            f"embeddings {col} ordering doesn't match predictions {col}"
+        )
+
+    # Embeddings sibling participates in the clobber-protection contract.  The
+    # predictions check fires first when both files exist, so to isolate the
+    # embeddings check we remove predictions and re-run — embeddings should now
+    # be the file that blocks the run.
+    output_parquet.unlink()
+    assert embeddings_parquet.exists(), "embeddings sibling unexpectedly missing for clobber test"
+    rerun = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+    assert rerun.returncode != 0, "expected re-run to fail (no overwrite=true) but it succeeded"
+    assert "FileExistsError" in rerun.stderr, (
+        f"expected FileExistsError in stderr, got:\nstdout:\n{rerun.stdout}\nstderr:\n{rerun.stderr}"
+    )
+    assert str(embeddings_parquet) in rerun.stderr, (
+        f"expected embeddings path in stderr, got:\nstderr:\n{rerun.stderr}"
     )

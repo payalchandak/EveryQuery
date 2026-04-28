@@ -38,6 +38,7 @@ from pathlib import Path
 
 import hydra
 import polars as pl
+import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 from hydra.utils import instantiate
@@ -225,6 +226,51 @@ def _gather_probabilities(pred_batches: list[dict[str, torch.Tensor]]) -> pl.Dat
     )
 
 
+_EMBEDDING_COLUMN = "embedding"
+
+
+def _gather_embeddings(pred_batches: list[dict[str, torch.Tensor]]) -> pl.DataFrame:
+    """Flatten Lightning's per-batch ``predict_step`` ``query_embed`` tensors into a one-column frame.
+
+    Mirrors :func:`_gather_probabilities`: concatenates each batch's
+    ``query_embed`` along dim 0 and returns a single-column polars frame whose
+    ``embedding`` column is backed by an arrow ``fixed_size_list<float32>[H]``,
+    where ``H`` is the model's ``hidden_size`` derived from the first batch's
+    tensor shape.  Going through ``pa.FixedSizeListArray.from_arrays`` and
+    ``pl.from_arrow`` preserves the fixed-width invariant onto the eventual
+    parquet write.
+
+    Examples:
+        Two batches of three rows each with hidden_size=4:
+
+        >>> b1 = {"query_embed": torch.arange(12, dtype=torch.float32).reshape(3, 4)}
+        >>> b2 = {"query_embed": torch.arange(12, 20, dtype=torch.float32).reshape(2, 4)}
+        >>> df = _gather_embeddings([b1, b2])
+        >>> df.height
+        5
+        >>> df.columns
+        ['embedding']
+        >>> df.to_arrow().schema.field("embedding").type
+        FixedSizeListType(fixed_size_list<item: float>[4])
+
+        Empty input round-trips as an empty list-typed frame (defensive — same
+        empty-frame pattern as ``_gather_probabilities``):
+
+        >>> _gather_embeddings([]).height
+        0
+        >>> _gather_embeddings([]).columns
+        ['embedding']
+    """
+    if not pred_batches:
+        return pl.DataFrame(schema={_EMBEDDING_COLUMN: pl.List(pl.Float32)})
+
+    embeddings = torch.cat([b["query_embed"] for b in pred_batches], dim=0)
+    hidden_size = embeddings.shape[-1]
+    flat = pa.array(embeddings.reshape(-1).numpy().astype("float32"), type=pa.float32())
+    fixed = pa.FixedSizeListArray.from_arrays(flat, hidden_size)
+    return pl.from_arrow(pa.table({_EMBEDDING_COLUMN: fixed}))
+
+
 def _identifiers_from_schema_df(schema_df: pl.DataFrame) -> pl.DataFrame:
     """Build an output identifier frame from the dataset's post-``__init__`` schema_df.
 
@@ -255,6 +301,32 @@ def _identifiers_from_schema_df(schema_df: pl.DataFrame) -> pl.DataFrame:
     return out
 
 
+def _derive_embeddings_path(output_parquet: Path) -> Path:
+    """Derive the embeddings sibling path from ``output_parquet``.
+
+    Inserts ``.embeddings`` immediately before the trailing suffix so the
+    sibling lives next to the predictions file and is easy to glob.
+
+    Examples:
+        Standard ``.parquet`` predictions path:
+
+        >>> _derive_embeddings_path(Path("/tmp/predictions.parquet"))
+        PosixPath('/tmp/predictions.embeddings.parquet')
+
+        Nested directories are preserved:
+
+        >>> _derive_embeddings_path(Path("/a/b/c/run42.parquet"))
+        PosixPath('/a/b/c/run42.embeddings.parquet')
+
+        Non-``.parquet`` suffix is preserved (defensive — the EQ_predict input
+        is always ``.parquet`` in practice, but keep the rule generic):
+
+        >>> _derive_embeddings_path(Path("predictions.pq"))
+        PosixPath('predictions.embeddings.pq')
+    """
+    return output_parquet.with_suffix(".embeddings" + output_parquet.suffix)
+
+
 _SPLIT_TO_DATAMODULE_ATTRS: dict[str, tuple[str, str]] = {
     tuning_split: ("val_dataset", "val_dataloader"),
     held_out_split: ("test_dataset", "test_dataloader"),
@@ -270,6 +342,8 @@ def main(cfg: DictConfig) -> None:
     ckpt_name = cfg.get("ckpt_name")
     split = cfg.get("split", held_out_split)
     overwrite = bool(cfg.get("overwrite", False))
+    save_embeddings = bool(cfg.get("save_embeddings", False))
+    embeddings_output_parquet = _derive_embeddings_path(output_parquet) if save_embeddings else None
 
     if split not in _SPLIT_TO_DATAMODULE_ATTRS:
         raise ValueError(
@@ -282,6 +356,13 @@ def main(cfg: DictConfig) -> None:
         raise FileExistsError(
             f"output_parquet {output_parquet} already exists.  Pass overwrite=true to replace, "
             f"or point at a new path — EQ_predict refuses to silently clobber existing output."
+        )
+
+    if embeddings_output_parquet is not None and embeddings_output_parquet.exists() and not overwrite:
+        raise FileExistsError(
+            f"embeddings sibling {embeddings_output_parquet} already exists.  Pass overwrite=true to "
+            f"replace, or point output_parquet at a new path — EQ_predict refuses to silently clobber "
+            f"existing output."
         )
 
     _validate_tasks_dir(tasks_dir)
@@ -341,6 +422,12 @@ def main(cfg: DictConfig) -> None:
     aligned = PredictionSchema.align(out.to_arrow())
     pq.write_table(aligned, output_parquet)
     logger.info(f"Wrote {out.height} predictions to {output_parquet}")
+
+    if embeddings_output_parquet is not None:
+        embeddings_out = identifiers.hstack(_gather_embeddings(pred_batches))
+        embeddings_output_parquet.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(embeddings_out.to_arrow(), embeddings_output_parquet)
+        logger.info(f"Wrote {embeddings_out.height} embeddings to {embeddings_output_parquet}")
 
 
 if __name__ == "__main__":

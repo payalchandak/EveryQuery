@@ -39,6 +39,15 @@ split: held_out
 # same output path without this flag raises ``FileExistsError`` at startup.
 overwrite: false
 
+# Optional: also write per-row pooled query embeddings to a sibling parquet at
+# ``<output_parquet stem>.embeddings.parquet`` (e.g. ``predictions.parquet`` →
+# ``predictions.embeddings.parquet``).  The sibling carries the same TaskQuerySchema
+# identifiers as the predictions file plus a single ``embedding`` column of
+# ``fixed_size_list<float32>[hidden_size]``.  Default false.  Subject to the same
+# ``overwrite`` guard as ``output_parquet`` — re-running without ``overwrite=true``
+# raises ``FileExistsError`` at startup if the sibling already exists.
+save_embeddings: false
+
 hydra:
   output_subdir: null
   job:
