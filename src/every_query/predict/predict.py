@@ -356,6 +356,23 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Loading tasks from {tasks_dir} (split={split})")
 
     train_cfg, model, trainer = setup_model(model_run_dir, ckpt_name=ckpt_name)
+
+    # ``_StreamingPredictionWriter`` opens a single ``output_parquet`` and tracks a
+    # process-local offset into ``schema_df``.  Under multi-process predict (DDP /
+    # multi-device / multi-node), every rank would open the same path and start slicing
+    # ``schema_df`` from offset 0 — corrupting the parquet and mispairing probabilities
+    # with identifiers.  ``setup_model`` instantiates the trainer from the saved training
+    # config, so a model trained with ``trainer.devices > 1`` carries that strategy into
+    # predict.  Refuse loudly; predict is single-pass by design (see module docstring).
+    if trainer.world_size > 1:
+        raise RuntimeError(
+            f"EQ_predict requires single-process prediction, but the trainer instantiated from "
+            f"the training config has world_size={trainer.world_size} "
+            f"(num_devices={trainer.num_devices}, num_nodes={trainer.num_nodes}).  "
+            f"Override the run dir's resolved_config.yaml to set "
+            f"trainer.devices=1, trainer.strategy=auto, trainer.num_nodes=1 before running predict."
+        )
+
     train_cfg.datamodule.config.task_labels_dir = str(tasks_dir)
     D = instantiate(train_cfg.datamodule)
 
