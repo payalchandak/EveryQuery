@@ -323,6 +323,27 @@ class _StreamingPredictionWriter(BasePredictionWriter):
             self.close()
 
 
+def _check_single_process_trainer(trainer) -> None:
+    """Refuse multi-process predict — :class:`_StreamingPredictionWriter` assumes one rank.
+
+    The writer opens a single ``output_parquet`` and tracks a process-local offset into
+    ``schema_df``.  Under multi-process predict (DDP / multi-device / multi-node), every
+    rank would open the same path and start slicing ``schema_df`` from offset 0 —
+    corrupting the parquet and mispairing probabilities with identifiers.  ``setup_model``
+    instantiates the trainer from the saved training config, so a model trained with
+    ``trainer.devices > 1`` carries that strategy into predict.  Predict is single-pass
+    by design (see module docstring); refuse loudly rather than write corrupted output.
+    """
+    if trainer.world_size > 1:
+        raise RuntimeError(
+            f"EQ_predict requires single-process prediction, but the trainer instantiated from "
+            f"the training config has world_size={trainer.world_size} "
+            f"(num_devices={trainer.num_devices}, num_nodes={trainer.num_nodes}).  "
+            f"Override the run dir's resolved_config.yaml to set "
+            f"trainer.devices=1, trainer.strategy=auto, trainer.num_nodes=1 before running predict."
+        )
+
+
 _SPLIT_TO_DATAMODULE_ATTRS: dict[str, tuple[str, str]] = {
     tuning_split: ("val_dataset", "val_dataloader"),
     held_out_split: ("test_dataset", "test_dataloader"),
@@ -356,22 +377,7 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Loading tasks from {tasks_dir} (split={split})")
 
     train_cfg, model, trainer = setup_model(model_run_dir, ckpt_name=ckpt_name)
-
-    # ``_StreamingPredictionWriter`` opens a single ``output_parquet`` and tracks a
-    # process-local offset into ``schema_df``.  Under multi-process predict (DDP /
-    # multi-device / multi-node), every rank would open the same path and start slicing
-    # ``schema_df`` from offset 0 — corrupting the parquet and mispairing probabilities
-    # with identifiers.  ``setup_model`` instantiates the trainer from the saved training
-    # config, so a model trained with ``trainer.devices > 1`` carries that strategy into
-    # predict.  Refuse loudly; predict is single-pass by design (see module docstring).
-    if trainer.world_size > 1:
-        raise RuntimeError(
-            f"EQ_predict requires single-process prediction, but the trainer instantiated from "
-            f"the training config has world_size={trainer.world_size} "
-            f"(num_devices={trainer.num_devices}, num_nodes={trainer.num_nodes}).  "
-            f"Override the run dir's resolved_config.yaml to set "
-            f"trainer.devices=1, trainer.strategy=auto, trainer.num_nodes=1 before running predict."
-        )
+    _check_single_process_trainer(trainer)
 
     train_cfg.datamodule.config.task_labels_dir = str(tasks_dir)
     D = instantiate(train_cfg.datamodule)
