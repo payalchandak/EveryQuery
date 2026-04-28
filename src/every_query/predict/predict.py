@@ -229,23 +229,26 @@ def _gather_probabilities(pred_batches: list[dict[str, torch.Tensor]]) -> pl.Dat
 _EMBEDDING_COLUMN = "embedding"
 
 
-def _gather_embeddings(pred_batches: list[dict[str, torch.Tensor]]) -> pl.DataFrame:
+def _gather_embeddings(pred_batches: list[dict[str, torch.Tensor]], hidden_size: int) -> pl.DataFrame:
     """Flatten Lightning's per-batch ``predict_step`` ``query_embed`` tensors into a one-column frame.
 
     Mirrors :func:`_gather_probabilities`: concatenates each batch's
     ``query_embed`` along dim 0 and returns a single-column polars frame whose
-    ``embedding`` column is backed by an arrow ``fixed_size_list<float32>[H]``,
-    where ``H`` is the model's ``hidden_size`` derived from the first batch's
-    tensor shape.  Going through ``pa.FixedSizeListArray.from_arrays`` and
-    ``pl.from_arrow`` preserves the fixed-width invariant onto the eventual
-    parquet write.
+    ``embedding`` column is backed by an arrow ``fixed_size_list<float32>[hidden_size]``.
+    Going through ``pa.FixedSizeListArray.from_arrays`` and ``pl.from_arrow``
+    preserves the fixed-width invariant onto the eventual parquet write.
+
+    ``hidden_size`` is required so the empty-batch case (degenerate cohort that
+    produces zero predictions) still emits a fixed-size-list-typed column on
+    disk — falling back to a variable-length ``list<float32>`` would silently
+    diverge from the documented sidecar schema.
 
     Examples:
         Two batches of three rows each with hidden_size=4:
 
         >>> b1 = {"query_embed": torch.arange(12, dtype=torch.float32).reshape(3, 4)}
         >>> b2 = {"query_embed": torch.arange(12, 20, dtype=torch.float32).reshape(2, 4)}
-        >>> df = _gather_embeddings([b1, b2])
+        >>> df = _gather_embeddings([b1, b2], hidden_size=4)
         >>> df.height
         5
         >>> df.columns
@@ -253,20 +256,23 @@ def _gather_embeddings(pred_batches: list[dict[str, torch.Tensor]]) -> pl.DataFr
         >>> df.to_arrow().schema.field("embedding").type
         FixedSizeListType(fixed_size_list<item: float>[4])
 
-        Empty input round-trips as an empty list-typed frame (defensive — same
-        empty-frame pattern as ``_gather_probabilities``):
+        Empty input still produces a fixed-size-list-typed frame so the
+        on-disk sidecar schema matches the documented contract regardless of
+        cohort size:
 
-        >>> _gather_embeddings([]).height
+        >>> empty = _gather_embeddings([], hidden_size=4)
+        >>> empty.height
         0
-        >>> _gather_embeddings([]).columns
+        >>> empty.columns
         ['embedding']
+        >>> empty.to_arrow().schema.field("embedding").type
+        FixedSizeListType(fixed_size_list<item: float>[4])
     """
-    if not pred_batches:
-        return pl.DataFrame(schema={_EMBEDDING_COLUMN: pl.List(pl.Float32)})
-
-    embeddings = torch.cat([b["query_embed"] for b in pred_batches], dim=0)
-    hidden_size = embeddings.shape[-1]
-    flat = pa.array(embeddings.reshape(-1).numpy().astype("float32"), type=pa.float32())
+    if pred_batches:
+        embeddings = torch.cat([b["query_embed"] for b in pred_batches], dim=0)
+        flat = pa.array(embeddings.reshape(-1).numpy().astype("float32"), type=pa.float32())
+    else:
+        flat = pa.array([], type=pa.float32())
     fixed = pa.FixedSizeListArray.from_arrays(flat, hidden_size)
     return pl.from_arrow(pa.table({_EMBEDDING_COLUMN: fixed}))
 
@@ -424,7 +430,16 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Wrote {out.height} predictions to {output_parquet}")
 
     if embeddings_output_parquet is not None:
-        embeddings_out = identifiers.hstack(_gather_embeddings(pred_batches))
+        # Prefer the runtime tensor shape (the actual data we just produced) and fall
+        # back to the model's config when there are zero batches — keeps the sidecar
+        # column typed as ``fixed_size_list<float32>[hidden_size]`` even on an empty
+        # cohort, matching the documented contract.
+        hidden_size = (
+            pred_batches[0]["query_embed"].shape[-1]
+            if pred_batches
+            else model.model.HF_model.config.hidden_size
+        )
+        embeddings_out = identifiers.hstack(_gather_embeddings(pred_batches, hidden_size))
         embeddings_output_parquet.parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(embeddings_out.to_arrow(), embeddings_output_parquet)
         logger.info(f"Wrote {embeddings_out.height} embeddings to {embeddings_output_parquet}")
