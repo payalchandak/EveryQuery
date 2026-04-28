@@ -430,15 +430,13 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Wrote {out.height} predictions to {output_parquet}")
 
     if embeddings_output_parquet is not None:
-        # Prefer the runtime tensor shape (the actual data we just produced) and fall
-        # back to the model's config when there are zero batches — keeps the sidecar
-        # column typed as ``fixed_size_list<float32>[hidden_size]`` even on an empty
-        # cohort, matching the documented contract.
-        hidden_size = (
-            pred_batches[0]["query_embed"].shape[-1]
-            if pred_batches
-            else model.model.HF_model.config.hidden_size
-        )
+        # ``hidden_size`` comes from the model's own config so the sidecar's
+        # ``fixed_size_list<float32>[hidden_size]`` schema is well-defined even
+        # for a degenerate empty cohort that produces zero predict batches.
+        # The model object is already owned here (returned by ``setup_model``
+        # and passed into ``trainer.predict``), so reading the property is not
+        # additional coupling.
+        hidden_size = model.model.HF_model.config.hidden_size
         embeddings_out = identifiers.hstack(_gather_embeddings(pred_batches, hidden_size))
         embeddings_output_parquet.parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(embeddings_out.to_arrow(), embeddings_output_parquet)
