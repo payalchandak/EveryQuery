@@ -134,6 +134,22 @@ Sweep across shards with
 `python -m every_query.generate_tasks.sample_tasks -m input_shard=0,1,2,… task_shard=range(0,K)`.
 Each worker writes labeled task parquets under `$TASK_DIR/{split}/*.parquet` idempotently. Output columns conform to [`TaskQuerySchema`](src/every_query/data/schema.py) — `subject_id, prediction_time, query, duration_days, boolean_value` — where `boolean_value` is a nullable three-valued label (`null` = censored, `True` = event occurred in `[prediction_time, prediction_time + duration_days)`, `False` = observed-but-no-event).
 
+`query_codes=` is optional for training. Leave it unset/null to sample query codes from
+`$PROCESSED/metadata/codes.parquet`, or set it to an inline list / YAML path to restrict which
+codes can be sampled as queries. YAML files may be a flat list or a mapping with a `codes:`
+key. This does not remove codes from patient histories.
+
+```bash
+EQ_generate_training_tasks query_codes=/path/to/train_query_codes.yaml …
+```
+
+```yaml
+# train_query_codes.yaml
+codes:
+  - HR
+  - TEMP
+```
+
 ### 2b. Generate evaluation task labels
 
 ```bash

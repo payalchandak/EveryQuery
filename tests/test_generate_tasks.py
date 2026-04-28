@@ -172,7 +172,6 @@ def test_reproducible_with_same_seed(
         [
             "EQ_generate_training_tasks",
             f"data_dir={intermediate!s}",
-            f"codes_dir={eq_preprocessed_dataset!s}",
             f"out_dir={rerun_out!s}",
             "split=train",
             "input_shard=0",
@@ -184,6 +183,7 @@ def test_reproducible_with_same_seed(
             f"min_context_per_subject={_MIN_CONTEXT_PER_SUBJECT}",
             "seed=1",
         ],
+        env={"PROCESSED": str(eq_preprocessed_dataset)},
         timeout=120.0,
     )
 
@@ -230,7 +230,6 @@ def test_n_tasks_knob_is_honored(
         [
             "EQ_generate_training_tasks",
             f"data_dir={intermediate!s}",
-            f"codes_dir={eq_preprocessed_dataset!s}",
             f"out_dir={big_out!s}",
             "split=train",
             "input_shard=0",
@@ -242,6 +241,7 @@ def test_n_tasks_knob_is_honored(
             f"min_context_per_subject={_MIN_CONTEXT_PER_SUBJECT}",
             "seed=1",  # same seed as the fixture; only n_tasks differs
         ],
+        env={"PROCESSED": str(eq_preprocessed_dataset)},
         timeout=120.0,
     )
 

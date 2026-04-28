@@ -40,8 +40,8 @@ Both endpoints consume:
 
 1. Event shards at `$INTERMEDIATE/data/{split}/*.parquet` (from
     [`preprocessing/`](../preprocessing/)).
-2. The query-code universe at `$PROCESSED/metadata/codes.parquet` — or an
-    explicit `codes: [...]` override on the CLI.
+2. The query-code universe at `$PROCESSED/metadata/codes.parquet` — or a CLI override:
+    `query_codes=...` for training, `codes=...` for evaluation.
 
 Training-task outputs land at `$TASK_DIR/{split}/*.parquet`; evaluation-task
 outputs land at `$TASK_DIR/eval/{split}/*.parquet`. The separate `eval/`
@@ -53,6 +53,13 @@ subdirectory keeps the two row distributions from colliding in one directory.
 # Pretraining tasks (random tasks × random contexts):
 python -m every_query.generate_tasks.sample_tasks -m \
     input_shard=0,1,2,... task_shard=range(0,K)
+
+# Restrict sampled training queries to a YAML code list:
+python -m every_query.generate_tasks.sample_tasks -m \
+    input_shard=0,1,2,... task_shard=range(0,K) \
+    query_codes=/path/to/train_query_codes.yaml
+
+# `train_query_codes.yaml` may be either a flat list or `{codes: [...]}`.
 
 # Evaluation tasks (dense grid over the held-out cohort):
 python -m every_query.generate_tasks.sample_evaluation_tasks -m \

@@ -182,8 +182,8 @@ def eq_preprocessed_dataset(simple_static_MEDS: Path, tmp_path_factory: pytest.T
     """Runs ``EQ_process_data do_demo=True`` against ``simple_static_MEDS``.
 
     Returns the tensorized-cohort output dir (``final/``), ready to feed into
-    ``EQ_generate_training_tasks`` and ``EQ_train`` as ``codes_dir`` and ``tensorized_cohort_dir``
-    respectively.
+    ``EQ_generate_training_tasks`` and ``EQ_train`` as ``$PROCESSED`` and
+    ``tensorized_cohort_dir`` respectively.
 
     Sibling ``intermediate/`` dir is also produced (needed as ``data_dir`` for
     ``EQ_generate_training_tasks``) and stored alongside ``final/`` — callers can reach it via
@@ -236,7 +236,6 @@ def eq_sampled_tasks_dir(eq_preprocessed_dataset: Path, tmp_path_factory: pytest
             [
                 "EQ_generate_training_tasks",
                 f"data_dir={intermediate!s}",
-                f"codes_dir={eq_preprocessed_dataset!s}",
                 f"out_dir={out_dir!s}",
                 f"split={split}",
                 "input_shard=0",
@@ -248,6 +247,7 @@ def eq_sampled_tasks_dir(eq_preprocessed_dataset: Path, tmp_path_factory: pytest
                 "min_context_per_subject=1",
                 "seed=1",
             ],
+            env={"PROCESSED": str(eq_preprocessed_dataset)},
             timeout=120.0,
         )
 
