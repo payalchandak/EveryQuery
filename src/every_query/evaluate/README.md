@@ -16,7 +16,8 @@ comparison (what the old `EQ_select_model` did) moves to `paper_experiments/lead
 predict/ predictions.parquet  ──►  EQ_evaluate  ──►  metrics.parquet
 (PredictionSchema)                                  (per-(query, duration_days): n_rows,
                                                      n_occurs_labeled, n_positive,
-                                                     occurs_auroc, censor_auroc)
+                                                     occurs_auroc, censor_auroc,
+                                                     prevalence)
 ```
 
 ```bash
