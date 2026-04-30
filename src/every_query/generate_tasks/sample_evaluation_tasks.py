@@ -267,9 +267,7 @@ def subsample_subject_ids(
             f"got {type(fraction).__name__}: {fraction!r}"
         )
     if not math.isfinite(fraction) or not (0.0 < fraction <= 1.0):
-        raise ValueError(
-            f"subject_subsample_fraction must be a finite number in (0, 1], got {fraction!r}"
-        )
+        raise ValueError(f"subject_subsample_fraction must be a finite number in (0, 1], got {fraction!r}")
     if fraction == 1.0:
         return events_df
 

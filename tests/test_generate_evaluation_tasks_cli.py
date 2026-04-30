@@ -219,8 +219,28 @@ def test_subsample_subject_ids_pinned_selection() -> None:
     out = subsample_subject_ids(df, 0.1, seed=42)
     kept = sorted(out[DataSchema.subject_id_name].unique().to_list())
     assert kept == [
-        13, 19, 20, 23, 29, 43, 48, 60, 63, 70,
-        87, 93, 95, 110, 133, 140, 153, 172, 185, 188, 193, 199,
+        13,
+        19,
+        20,
+        23,
+        29,
+        43,
+        48,
+        60,
+        63,
+        70,
+        87,
+        93,
+        95,
+        110,
+        133,
+        140,
+        153,
+        172,
+        185,
+        188,
+        193,
+        199,
     ]
 
 
