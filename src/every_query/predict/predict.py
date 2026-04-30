@@ -460,12 +460,8 @@ def main(cfg: DictConfig) -> None:
             "total_seconds": pa.array([total_seconds], type=pa.float64()),
             "n_rows": pa.array([n_rows], type=pa.int64()),
             "n_tasks": pa.array([n_tasks], type=pa.int64()),
-            "seconds_per_row": pa.array(
-                [total_seconds / n_rows if n_rows else 0.0], type=pa.float64()
-            ),
-            "seconds_per_task": pa.array(
-                [total_seconds / n_tasks if n_tasks else 0.0], type=pa.float64()
-            ),
+            "seconds_per_row": pa.array([total_seconds / n_rows if n_rows else 0.0], type=pa.float64()),
+            "seconds_per_task": pa.array([total_seconds / n_tasks if n_tasks else 0.0], type=pa.float64()),
         }
     )
     timing_output_parquet.parent.mkdir(parents=True, exist_ok=True)
