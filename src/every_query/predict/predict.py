@@ -397,6 +397,9 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Loading tasks from {tasks_dir} (split={split})")
 
     train_cfg, model, trainer = setup_model(model_run_dir, ckpt_name=ckpt_name)
+    batch_size_override = cfg.get("batch_size")
+    if batch_size_override is not None:
+        train_cfg.datamodule.batch_size = int(batch_size_override)
     train_cfg.datamodule.config.task_labels_dir = str(tasks_dir)
     D = instantiate(train_cfg.datamodule)
 

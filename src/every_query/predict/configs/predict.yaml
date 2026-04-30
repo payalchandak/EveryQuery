@@ -48,6 +48,13 @@ overwrite: false
 # raises ``FileExistsError`` at startup if the sibling already exists.
 save_embeddings: false
 
+# Optional: override the dataloader batch size for inference.  Defaults to null,
+# which reuses the training run's ``datamodule.batch_size`` (typically 128).
+# Inference is forward-only with no gradients, so larger batches (e.g. 4–8x
+# training) usually fit on the same GPU and improve throughput.  Does not touch
+# the saved training ``resolved_config.yaml``.
+batch_size: null
+
 hydra:
   output_subdir: null
   job:
