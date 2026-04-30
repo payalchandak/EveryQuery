@@ -466,9 +466,7 @@ def main(cfg: DictConfig) -> None:
     )
     timing_output_parquet.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(timing_table, timing_output_parquet)
-    logger.info(
-        f"Wrote timing ({total_seconds:.2f}s, {n_tasks} tasks) to {timing_output_parquet}"
-    )
+    logger.info(f"Wrote timing ({total_seconds:.2f}s, {n_tasks} tasks) to {timing_output_parquet}")
 
     if embeddings_output_parquet is not None:
         # ``hidden_size`` comes from the model's own config so the sidecar's
