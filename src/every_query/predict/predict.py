@@ -33,6 +33,7 @@ parquets for them.
 """
 
 import logging
+import time
 from importlib.resources import files
 from pathlib import Path
 
@@ -333,6 +334,19 @@ def _derive_embeddings_path(output_parquet: Path) -> Path:
     return output_parquet.with_suffix(".embeddings" + output_parquet.suffix)
 
 
+def _derive_timing_path(output_parquet: Path) -> Path:
+    """Derive the timing sibling path from ``output_parquet``.
+
+    Mirrors :func:`_derive_embeddings_path` so the timing artifact lives next
+    to the predictions file and is easy to glob.
+
+    Examples:
+        >>> _derive_timing_path(Path("/tmp/predictions.parquet"))
+        PosixPath('/tmp/predictions.timing.parquet')
+    """
+    return output_parquet.with_suffix(".timing" + output_parquet.suffix)
+
+
 _SPLIT_TO_DATAMODULE_ATTRS: dict[str, tuple[str, str]] = {
     tuning_split: ("val_dataset", "val_dataloader"),
     held_out_split: ("test_dataset", "test_dataloader"),
@@ -350,6 +364,7 @@ def main(cfg: DictConfig) -> None:
     overwrite = bool(cfg.get("overwrite", False))
     save_embeddings = bool(cfg.get("save_embeddings", False))
     embeddings_output_parquet = _derive_embeddings_path(output_parquet) if save_embeddings else None
+    timing_output_parquet = _derive_timing_path(output_parquet)
 
     if split not in _SPLIT_TO_DATAMODULE_ATTRS:
         raise ValueError(
@@ -367,6 +382,13 @@ def main(cfg: DictConfig) -> None:
     if embeddings_output_parquet is not None and embeddings_output_parquet.exists() and not overwrite:
         raise FileExistsError(
             f"embeddings sibling {embeddings_output_parquet} already exists.  Pass overwrite=true to "
+            f"replace, or point output_parquet at a new path — EQ_predict refuses to silently clobber "
+            f"existing output."
+        )
+
+    if timing_output_parquet.exists() and not overwrite:
+        raise FileExistsError(
+            f"timing sibling {timing_output_parquet} already exists.  Pass overwrite=true to "
             f"replace, or point output_parquet at a new path — EQ_predict refuses to silently clobber "
             f"existing output."
         )
@@ -402,7 +424,9 @@ def main(cfg: DictConfig) -> None:
     # ``predict_dataloader``, so ``trainer.predict(datamodule=D)`` would hit the base
     # class's ``MisconfigurationException``.  The SequentialSampler check above
     # guarantees order preservation.
+    t0 = time.perf_counter()
     pred_batches = trainer.predict(model=model, dataloaders=dataloader, ckpt_path=None)
+    total_seconds = time.perf_counter() - t0
 
     probs = _gather_probabilities(pred_batches)
     identifiers = _identifiers_from_schema_df(dataset.schema_df)
@@ -428,6 +452,27 @@ def main(cfg: DictConfig) -> None:
     aligned = PredictionSchema.align(out.to_arrow())
     pq.write_table(aligned, output_parquet)
     logger.info(f"Wrote {out.height} predictions to {output_parquet}")
+
+    n_rows = dataset.schema_df.height
+    n_tasks = dataset.schema_df.select(["query", "duration_days"]).unique().height
+    timing_table = pa.table(
+        {
+            "total_seconds": pa.array([total_seconds], type=pa.float64()),
+            "n_rows": pa.array([n_rows], type=pa.int64()),
+            "n_tasks": pa.array([n_tasks], type=pa.int64()),
+            "seconds_per_row": pa.array(
+                [total_seconds / n_rows if n_rows else 0.0], type=pa.float64()
+            ),
+            "seconds_per_task": pa.array(
+                [total_seconds / n_tasks if n_tasks else 0.0], type=pa.float64()
+            ),
+        }
+    )
+    timing_output_parquet.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(timing_table, timing_output_parquet)
+    logger.info(
+        f"Wrote timing ({total_seconds:.2f}s, {n_tasks} tasks) to {timing_output_parquet}"
+    )
 
     if embeddings_output_parquet is not None:
         # ``hidden_size`` comes from the model's own config so the sidecar's
