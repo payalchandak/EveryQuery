@@ -28,7 +28,7 @@ seed: 1
 
 # How many prediction times to sample per subject.  The dense grid is
 # `prediction_times_per_subject x len(codes) x len(durations)` rows per subject.
-prediction_times_per_subject: 5
+prediction_times_per_subject: 1
 
 # Minimum prior events a subject must have accumulated before a prediction time is
 # valid.  Same semantics as `sample_tasks_config.yaml`.
