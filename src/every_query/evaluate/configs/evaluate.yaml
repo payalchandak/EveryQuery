@@ -11,7 +11,7 @@ defaults:
 predictions_parquet: ???
 
 # Required: output metrics parquet path.  One row per (query, duration_days) group
-# with columns: n_rows, n_occurs_labeled, n_positive, occurs_auroc, censor_auroc.
+# with columns: n_rows, n_occurs_labeled, n_positive, prevalence, occurs_auroc, censor_auroc.
 metrics_parquet: ???
 
 hydra:

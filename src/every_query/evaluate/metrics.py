@@ -49,6 +49,10 @@ def _metrics_for_group(group_df: pl.DataFrame) -> dict[str, float | int | None]:
       (``None`` if all labels are the same class, or if every row is censored).
     - ``censor_auroc`` — AUROC of ``censor_prob`` vs. ``is_censored`` over all rows
       (``None`` if every row has the same censor status).
+
+    The ``prevalence`` column is not computed here — :func:`compute_metrics` derives it
+    on the assembled frame as ``n_positive / n_occurs_labeled`` (null when
+    ``n_occurs_labeled == 0``).
     """
     is_censored = group_df[TaskQuerySchema.boolean_value_name].is_null().to_list()
     censor_prob = group_df[PredictionSchema.censor_prob_name].to_list()
@@ -79,7 +83,10 @@ def compute_metrics(predictions: pl.DataFrame) -> pl.DataFrame:
     """Group :class:`PredictionSchema`-shaped rows by ``(query, duration_days)`` and compute metrics.
 
     Returns a dataframe with columns ``query``, ``duration_days``, ``n_rows``,
-    ``n_occurs_labeled``, ``n_positive``, ``occurs_auroc``, ``censor_auroc``.
+    ``n_occurs_labeled``, ``n_positive``, ``occurs_auroc``, ``censor_auroc``,
+    ``prevalence``.  ``prevalence`` is the positive rate among non-censored rows
+    (``n_positive / n_occurs_labeled``, null when ``n_occurs_labeled == 0``); its
+    denominator matches ``occurs_auroc``'s, so the two metrics are over the same cohort.
 
     Raises:
         ValueError: if ``predictions`` is missing any of the required input columns.
@@ -87,9 +94,10 @@ def compute_metrics(predictions: pl.DataFrame) -> pl.DataFrame:
     Examples:
         Two queries over two durations, censored rows mixed in via null
         ``boolean_value``.  Query ``A`` at duration 30 has two labeled rows with
-        differing labels (AUROC defined).  Query ``B`` at duration 30 has two labeled
-        rows both positive (AUROC undefined, null).  Every row has a censor probability,
-        so the censor AUROC is computed across the entire group.
+        differing labels (AUROC defined; prevalence 0.5).  Query ``B`` at duration 30
+        has two labeled rows both positive (AUROC undefined, null; prevalence 1.0).
+        Every row has a censor probability, so the censor AUROC is computed across
+        the entire group.
 
         >>> import polars as pl
         >>> preds = pl.DataFrame({
@@ -104,9 +112,10 @@ def compute_metrics(predictions: pl.DataFrame) -> pl.DataFrame:
         >>> out = compute_metrics(preds).sort("query")
         >>> for row in out.iter_rows(named=True):
         ...     print(f"{row['query']} n={row['n_rows']} pos={row['n_positive']} "
+        ...           f"prevalence={row['prevalence']} "
         ...           f"occurs_auroc={row['occurs_auroc']} censor_auroc={row['censor_auroc']}")
-        A n=3 pos=1 occurs_auroc=1.0 censor_auroc=1.0
-        B n=3 pos=2 occurs_auroc=None censor_auroc=1.0
+        A n=3 pos=1 prevalence=0.5 occurs_auroc=1.0 censor_auroc=1.0
+        B n=3 pos=2 prevalence=1.0 occurs_auroc=None censor_auroc=1.0
         >>> out["duration_days"].dtype
         Float32
 
@@ -118,7 +127,7 @@ def compute_metrics(predictions: pl.DataFrame) -> pl.DataFrame:
         ...     "censor_prob": pl.Float32, "occurs_prob": pl.Float32,
         ... })
         >>> compute_metrics(empty).shape
-        (0, 7)
+        (0, 8)
     """
     required = {
         TaskQuerySchema.query_name,
@@ -157,14 +166,22 @@ def compute_metrics(predictions: pl.DataFrame) -> pl.DataFrame:
                 "n_positive": pl.Int64,
                 "occurs_auroc": pl.Float64,
                 "censor_auroc": pl.Float64,
+                "prevalence": pl.Float64,
             }
         )
     # Cast the AUROC columns to Float64 explicitly — when every group has null AUROCs
     # (e.g. all single-class, or every row censored), polars would otherwise infer
     # Null dtype for those columns, producing an unstable on-disk schema where parquet
     # files from different runs have different types for the same logical column.
+    # Derive prevalence from the per-group counts so it can never drift from the
+    # n_positive / n_occurs_labeled it's defined against; null when no labeled rows.
     return pl.DataFrame(rows).with_columns(
         pl.col(TaskQuerySchema.duration_days_name).cast(pl.Float32),
         pl.col("occurs_auroc").cast(pl.Float64),
         pl.col("censor_auroc").cast(pl.Float64),
+        pl.when(pl.col("n_occurs_labeled") > 0)
+        .then(pl.col("n_positive") / pl.col("n_occurs_labeled"))
+        .otherwise(None)
+        .cast(pl.Float64)
+        .alias("prevalence"),
     )

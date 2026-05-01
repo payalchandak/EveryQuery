@@ -393,11 +393,12 @@ def _read_event_shard(file_path: str | Path) -> pl.DataFrame:
     )
 
 
-def read_query_codes(codes_or_path: list[str] | ListConfig | str | Path) -> list[str]:
-    """Resolve a query-code list — from an explicit CLI list, a metadata dir, or a codes parquet.
+def read_query_codes(codes_or_path: list[str] | ListConfig | str | Path | None) -> list[str]:
+    """Resolve a query-code list — from default metadata, an explicit list, or a file path.
 
     Accepts:
-    - an explicit list (from Hydra ``codes: [A, B, C]`` or a code-group YAML default),
+    - ``None`` (load ``$PROCESSED/metadata/codes.parquet``),
+    - an explicit list (from Hydra ``query_codes: [A, B, C]`` or a code-group YAML default),
     - a metadata root directory (``codes.parquet`` is expected at ``{dir}/metadata/codes.parquet``
       — matches the ``$PROCESSED`` layout), or
     - a direct path to a ``codes.parquet`` file.
@@ -415,14 +416,25 @@ def read_query_codes(codes_or_path: list[str] | ListConfig | str | Path) -> list
         seen: set[str] = set()
         return [c for c in codes_or_path if not (c in seen or seen.add(c))]
     if codes_or_path is None:
-        raise ValueError("codes must be a list of query codes or a path to codes.parquet")
-    p = Path(str(codes_or_path))
+        processed = os.environ.get("PROCESSED")
+        if not processed:
+            raise ValueError(
+                "query_codes is null and $PROCESSED is not set; pass query_codes=... or export "
+                "$PROCESSED so the sampler can read $PROCESSED/metadata/codes.parquet."
+            )
+        p = Path(processed)
+    else:
+        p = Path(str(codes_or_path))
     if p.suffix in {".yaml", ".yml"}:
         import yaml
 
         with open(p) as f:
             data = yaml.safe_load(f)
-        raw = data["codes"] if isinstance(data, dict) else data
+        raw = data["codes"] if isinstance(data, dict) and "codes" in data else data
+        if raw is None:
+            raise ValueError(f"{p} must contain a YAML list or a mapping with a `codes` key")
+        if not isinstance(raw, list | ListConfig):
+            raise ValueError(f"{p} must contain a list of codes, got {type(raw).__name__}")
         seen: set[str] = set()
         return [c for c in raw if not (c in seen or seen.add(c))]
     if p.is_dir():
@@ -474,7 +486,7 @@ def _labels_fp(out_dir: Path, split: str, input_shard: str, task_shard: int) -> 
 def run_worker(
     data_dir: Path,
     out_dir: Path,
-    codes_dir: Path,
+    query_codes: list[str],
     split: str,
     input_shard: str,
     task_shard: int,
@@ -488,7 +500,7 @@ def run_worker(
 ) -> Path | None:
     """Run the three-stage sampling pipeline for one worker in-memory.
 
-    The worker is a pure function of ``(data_dir, codes_dir, config, seed, split, input_shard,
+    The worker is a pure function of ``(data_dir, query_codes, config, seed, split, input_shard,
     task_shard)`` — no per-stage checkpoints on disk, no meta sidecar, no cache-validation
     protocol.  Determinism comes from :func:`derive_seed` separating the task and context
     axes; a rerun with identical inputs produces identical labels.
@@ -503,7 +515,6 @@ def run_worker(
         logger.info("Labels already exist at %s, skipping.", labels_fp)
         return None
 
-    query_codes = read_query_codes(codes_dir)
     tasks_seed = derive_seed(seed, "tasks", task_shard)
     tasks = sample_tasks(
         n=n_tasks,
@@ -546,7 +557,7 @@ def run_worker(
 def _resolve_path(cfg_value: str | None, env_var: str, name: str) -> Path:
     """Prefer an explicit cfg value; fall back to ``$env_var``; otherwise raise.
 
-    Used by ``main`` to resolve the three path roots (``data_dir``, ``out_dir``, ``codes_dir``).
+    Used by ``main`` to resolve path roots such as ``data_dir`` and ``out_dir``.
     Factored out so tests can exercise the fallback matrix without spinning up a full Hydra run.
     """
     if cfg_value is not None:
@@ -570,7 +581,8 @@ def main(cfg: DictConfig) -> None:
     Loads ``.env`` via python-dotenv before resolving paths, following the repo convention where
     ``$INTERMEDIATE`` / ``$PROCESSED`` / ``$TASK_DIR`` live in a gitignored ``.env`` file rather
     than being exported by the user.  Path fallbacks: ``cfg.data_dir`` falls back to
-    ``$INTERMEDIATE``, ``cfg.codes_dir`` to ``$PROCESSED``, ``cfg.out_dir`` to ``$TASK_DIR``.
+    ``$INTERMEDIATE`` and ``cfg.out_dir`` to ``$TASK_DIR``.  Query codes are resolved by
+    :func:`read_query_codes`, which falls back to ``$PROCESSED`` when ``cfg.query_codes`` is null.
 
     See :func:`run_worker` for the per-worker pipeline.
     """
@@ -582,12 +594,12 @@ def main(cfg: DictConfig) -> None:
 
     data_dir = _resolve_path(cfg.get("data_dir"), "INTERMEDIATE", "data_dir")
     out_dir = _resolve_path(cfg.get("out_dir"), "TASK_DIR", "out_dir")
-    codes_dir = _resolve_path(cfg.get("codes_dir"), "PROCESSED", "codes_dir")
+    query_codes = read_query_codes(cfg.get("query_codes"))
 
     run_worker(
         data_dir=data_dir,
         out_dir=out_dir,
-        codes_dir=codes_dir,
+        query_codes=query_codes,
         split=str(cfg.split),
         input_shard=str(cfg.input_shard),
         task_shard=int(cfg.task_shard),

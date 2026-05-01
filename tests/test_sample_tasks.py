@@ -102,6 +102,51 @@ class TestPrimitives:
         with pytest.raises(ValueError):
             sample_tasks(5, synthetic_query_codes, 100, 50, seed=0)
 
+    def test_read_query_codes_uses_processed_fallback(self, monkeypatch, tmp_path, synthetic_query_codes):
+        processed = tmp_path / "processed"
+        metadata_dir = processed / "metadata"
+        metadata_dir.mkdir(parents=True)
+        pl.DataFrame({"code": synthetic_query_codes}).write_parquet(metadata_dir / "codes.parquet")
+
+        monkeypatch.setenv("PROCESSED", str(processed))
+
+        assert st.read_query_codes(None) == sorted(synthetic_query_codes)
+
+    def test_read_query_codes_requires_processed_when_null(self, monkeypatch):
+        monkeypatch.delenv("PROCESSED", raising=False)
+
+        with pytest.raises(ValueError, match="query_codes is null"):
+            st.read_query_codes(None)
+
+    def test_read_query_codes_reads_codes_key_yaml(self, tmp_path):
+        codes_yaml = tmp_path / "allowed_codes.yaml"
+        codes_yaml.write_text("codes:\n  - A\n  - B\n  - A\n")
+
+        assert st.read_query_codes(codes_yaml) == ["A", "B"]
+
+    def test_read_query_codes_reads_flat_yaml_list(self, tmp_path):
+        codes_yaml = tmp_path / "allowed_codes.yaml"
+        codes_yaml.write_text("- A\n- B\n- A\n")
+
+        assert st.read_query_codes(codes_yaml) == ["A", "B"]
+
+    def test_read_query_codes_rejects_yaml_mapping_without_codes(self, tmp_path):
+        codes_yaml = tmp_path / "allowed_codes.yaml"
+        codes_yaml.write_text("query_codes:\n  - A\n  - B\n")
+
+        with pytest.raises(ValueError, match="list of codes"):
+            st.read_query_codes(codes_yaml)
+
+    def test_read_query_codes_rejects_non_list_yaml(self, tmp_path):
+        codes_yaml = tmp_path / "allowed_codes.yaml"
+        codes_yaml.write_text("codes: A\n")
+
+        with pytest.raises(ValueError, match="list of codes"):
+            st.read_query_codes(codes_yaml)
+
+    def test_read_query_codes_deduplicates_inline_list(self):
+        assert st.read_query_codes(["A", "B", "A"]) == ["A", "B"]
+
     def test_sample_contexts_returns_exactly_n_rows(self, synthetic_events):
         # Each subject has 30 events, min_context=5 leaves 26 candidates per subject.
         contexts = sample_contexts(synthetic_events, n=50, min_context_per_subject=5, seed=1)
@@ -384,20 +429,21 @@ def _write_fake_cohort(
     directories rather than the same root, so the cohort this helper writes uses:
 
         {data_dir}/data/{split}/{shard_name}.parquet     <- event shards ($INTERMEDIATE)
-        {codes_dir}/metadata/codes.parquet               <- query universe ($PROCESSED)
+        {processed_dir}/metadata/codes.parquet           <- query universe ($PROCESSED)
 
-    Returns ``(data_dir, codes_dir)`` as two distinct paths so the tests exercise the separation.
+    Returns ``(data_dir, processed_dir)`` as two distinct paths so tests can exercise the
+    separation.
     """
     data_dir = tmp_path / "intermediate"
     split_dir = data_dir / "data" / split
     split_dir.mkdir(parents=True, exist_ok=True)
     events.write_parquet(split_dir / f"{shard_name}.parquet")
 
-    codes_dir = tmp_path / "processed"
-    metadata_dir = codes_dir / "metadata"
+    processed_dir = tmp_path / "processed"
+    metadata_dir = processed_dir / "metadata"
     metadata_dir.mkdir(parents=True, exist_ok=True)
     pl.DataFrame({"code": query_codes}).write_parquet(metadata_dir / "codes.parquet")
-    return data_dir, codes_dir
+    return data_dir, processed_dir
 
 
 class TestRunWorkerPipeline:
@@ -409,11 +455,11 @@ class TestRunWorkerPipeline:
         labels) was silently globbed as a task-label by MTD downstream, breaking training.
         Catching any future re-introduction of intermediate artifacts alongside labels.
         """
-        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, _ = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         labels_fp = run_worker(
             data_dir=data_dir,
-            codes_dir=codes_dir,
+            query_codes=synthetic_query_codes,
             out_dir=out_dir,
             split="train",
             input_shard="0",
@@ -439,11 +485,11 @@ class TestRunWorkerPipeline:
 
     def test_rerun_is_idempotent_noop(self, tmp_path, synthetic_events, synthetic_query_codes):
         """Second invocation with identical args returns ``None`` and leaves outputs untouched."""
-        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, _ = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         kwargs = {
             "data_dir": data_dir,
-            "codes_dir": codes_dir,
+            "query_codes": synthetic_query_codes,
             "out_dir": out_dir,
             "split": "train",
             "input_shard": "0",
@@ -476,11 +522,11 @@ class TestRunWorkerPipeline:
         ``overwrite=True`` when they've changed sampling parameters.  See the
         ``test_stale_labels_on_config_change_without_overwrite`` guard below.
         """
-        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, _ = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         kwargs = {
             "data_dir": data_dir,
-            "codes_dir": codes_dir,
+            "query_codes": synthetic_query_codes,
             "out_dir": out_dir,
             "split": "train",
             "input_shard": "0",
@@ -515,11 +561,11 @@ class TestRunWorkerPipeline:
         ``(query, duration_days)`` multiset — that's the full surface of what "tasks" means
         downstream.
         """
-        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, _ = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         kwargs = {
             "data_dir": data_dir,
-            "codes_dir": codes_dir,
+            "query_codes": synthetic_query_codes,
             "out_dir": out_dir,
             "split": "train",
             "input_shard": "0",
@@ -548,9 +594,7 @@ class TestRunWorkerPipeline:
         each shard's worker draws independent contexts (otherwise parallelism across shards
         would be statistically wasteful).
         """
-        data_dir, codes_dir = _write_fake_cohort(
-            tmp_path, synthetic_events, synthetic_query_codes, shard_name="0"
-        )
+        data_dir, _ = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes, shard_name="0")
         # Write a second shard with the same events under a different basename so run_worker has
         # something to load.
         (data_dir / "data" / "train" / "1.parquet").write_bytes(
@@ -560,7 +604,7 @@ class TestRunWorkerPipeline:
         out_dir = tmp_path / "out"
         kwargs = {
             "data_dir": data_dir,
-            "codes_dir": codes_dir,
+            "query_codes": synthetic_query_codes,
             "out_dir": out_dir,
             "split": "train",
             "task_shard": 0,
@@ -604,11 +648,11 @@ class TestRunWorkerPipeline:
         This test pins that behavior so a future reviewer sees the tradeoff explicitly rather than
         discovering it via surprise in production.
         """
-        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        data_dir, _ = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         out_dir = tmp_path / "out"
         kwargs = {
             "data_dir": data_dir,
-            "codes_dir": codes_dir,
+            "query_codes": synthetic_query_codes,
             "out_dir": out_dir,
             "split": "train",
             "input_shard": "0",
@@ -635,23 +679,26 @@ class TestRunWorkerPipeline:
         assert regenerated is not None
         assert pl.read_parquet(regenerated).height == 32
 
-    def test_codes_dir_is_read_from_a_distinct_root(self, tmp_path, synthetic_events, synthetic_query_codes):
-        """Smoke test that codes_dir is actually read *from* codes_dir, not data_dir.
+    def test_processed_env_fallback_is_read_from_a_distinct_root(
+        self, monkeypatch, tmp_path, synthetic_events, synthetic_query_codes
+    ):
+        """Smoke test that query-code fallback reads from $PROCESSED, not data_dir.
 
         The ``.env.example`` layout has ``$INTERMEDIATE`` (event shards) and ``$PROCESSED``
         (metadata/codes.parquet) as sibling directories; the sampler must not conflate them.
-        ``_write_fake_cohort`` writes codes.parquet *only* under ``codes_dir`` — so if
-        ``run_worker`` were still reading codes from ``data_dir`` it would raise ``FileNotFoundError``.
+        ``_write_fake_cohort`` writes codes.parquet *only* under the processed dir — so if
+        ``read_query_codes(None)`` were reading from ``data_dir`` it would raise ``FileNotFoundError``.
         """
-        data_dir, codes_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
-        # Precondition: codes.parquet lives *only* under codes_dir, not data_dir.
+        data_dir, processed_dir = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        # Precondition: codes.parquet lives *only* under the processed root, not data_dir.
         assert not (data_dir / "metadata" / "codes.parquet").exists()
-        assert (codes_dir / "metadata" / "codes.parquet").exists()
+        assert (processed_dir / "metadata" / "codes.parquet").exists()
+        monkeypatch.setenv("PROCESSED", str(processed_dir))
 
         out_dir = tmp_path / "out"
         labels_fp = run_worker(
             data_dir=data_dir,
-            codes_dir=codes_dir,
+            query_codes=st.read_query_codes(None),
             out_dir=out_dir,
             split="train",
             input_shard="0",
@@ -665,8 +712,37 @@ class TestRunWorkerPipeline:
         )
         assert labels_fp is not None
         labels = pl.read_parquet(labels_fp)
-        # The queries in the output must all come from codes.parquet under codes_dir.
+        # The queries in the output must all come from codes.parquet under $PROCESSED.
         assert set(labels["query"].to_list()) <= set(synthetic_query_codes)
+
+    def test_yaml_code_list_restricts_sampled_queries(
+        self, tmp_path, synthetic_events, synthetic_query_codes
+    ):
+        """A YAML code-list override limits the training sampler's query universe."""
+        data_dir, _ = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
+        allowed_codes = synthetic_query_codes[:2]
+        codes_yaml = tmp_path / "allowed_codes.yaml"
+        codes_yaml.write_text("codes:\n" + "\n".join(f"  - {code}" for code in allowed_codes) + "\n")
+
+        labels_fp = run_worker(
+            data_dir=data_dir,
+            query_codes=st.read_query_codes(codes_yaml),
+            out_dir=tmp_path / "out",
+            split="train",
+            input_shard="0",
+            task_shard=0,
+            seed=1,
+            n_tasks=64,
+            contexts_per_task=1,
+            duration_min=10,
+            duration_max=365,
+            min_context_per_subject=5,
+        )
+
+        assert labels_fp is not None
+        labels = pl.read_parquet(labels_fp)
+        assert set(labels["query"].to_list()) <= set(allowed_codes)
+        assert set(labels["query"].to_list())
 
 
 # ---------------------------------------------------------------------------
@@ -680,11 +756,10 @@ class TestRunWorkerPipeline:
 
 
 class TestResolvePath:
-    """``_resolve_path`` is how ``main()`` threads ``cfg.data_dir`` / ``$INTERMEDIATE`` / required.
+    """``_resolve_path`` is how ``main()`` threads explicit path roots / env fallbacks / required.
 
-    The three path roots (``data_dir``, ``codes_dir``, ``out_dir``) share this resolution logic,
-    which is why it was factored out.  Directly exercising the helper lets us pin the fallback
-    matrix without spinning up a full Hydra run per case.
+    Directly exercising the helper lets us pin the fallback matrix without spinning up a full Hydra run per
+    case.
     """
 
     def test_explicit_cfg_value_wins(self, monkeypatch):

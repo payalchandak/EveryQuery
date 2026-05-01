@@ -24,6 +24,7 @@ Seeding:
 """
 
 import logging
+import math
 from importlib.resources import files
 from pathlib import Path
 
@@ -236,6 +237,53 @@ def build_evaluation_index_df(
     return prediction_times.join(grid, how="cross").select(list(out_schema))
 
 
+def subsample_subject_ids(
+    events_df: pl.DataFrame,
+    fraction: float | None,
+    seed: int,
+) -> pl.DataFrame:
+    """Deterministically retain a fraction of unique subject IDs in ``events_df``.
+
+    Returns ``events_df`` unchanged when ``fraction`` is ``None`` or exactly
+    ``1.0``.  Otherwise applies a per-subject hash-threshold filter: each
+    subject's stable ``blake2b((subject_id, seed))`` digest is mapped onto
+    ``[0, 2**64)`` and the subject is kept iff that value is below
+    ``fraction * 2**64``.  This makes the expected fraction kept independent
+    of shard size — small shards no longer round up to ``1`` and bias the
+    global sample.
+
+    Raises ``ValueError`` for non-finite values or any value outside
+    ``(0, 1]`` so misconfigured runs fail fast rather than silently producing
+    a full-population evaluation.
+    """
+    if fraction is None:
+        return events_df
+    # ``bool`` is an ``int`` subclass in Python, so a stray ``True`` would pass
+    # ``isinstance(..., (int, float))`` checks elsewhere and become ``1.0`` here —
+    # silently turning a misconfiguration into a full-population run.  Reject it.
+    if isinstance(fraction, bool) or not isinstance(fraction, int | float):
+        raise TypeError(
+            f"subject_subsample_fraction must be a number in (0, 1] or None, "
+            f"got {type(fraction).__name__}: {fraction!r}"
+        )
+    if not math.isfinite(fraction) or not (0.0 < fraction <= 1.0):
+        raise ValueError(f"subject_subsample_fraction must be a finite number in (0, 1], got {fraction!r}")
+    if fraction == 1.0:
+        return events_df
+
+    threshold = int(fraction * (1 << 64))
+    return events_df.filter(
+        pl.concat_str(
+            [
+                pl.col(DataSchema.subject_id_name).cast(pl.Utf8),
+                pl.lit(str(seed)),
+            ],
+            separator="|",
+        ).hash()
+        < pl.lit(threshold, dtype=pl.UInt64)
+    )
+
+
 # ---------------------------------------------------------------------------
 # I/O helpers
 # ---------------------------------------------------------------------------
@@ -261,6 +309,7 @@ def run_worker(
     min_context_per_subject: int,
     seed: int,
     overwrite: bool = False,
+    subject_subsample_fraction: float | None = None,
 ) -> Path | None:
     """Generate one evaluation-tasks parquet for one input shard + split.
 
@@ -275,6 +324,16 @@ def run_worker(
     shard_path = data_dir / "data" / split / f"{input_shard}.parquet"
     events_df = _read_event_shard(shard_path)
     logger.info("Loaded %d events from %s", events_df.height, shard_path)
+
+    if subject_subsample_fraction is not None:
+        subj_seed = derive_seed(seed, "subject_subsample", split, input_shard)
+        events_df = subsample_subject_ids(events_df, subject_subsample_fraction, subj_seed)
+        logger.info(
+            "Subsampled to %d events / %d subjects (fraction=%.4f)",
+            events_df.height,
+            events_df[DataSchema.subject_id_name].n_unique(),
+            subject_subsample_fraction,
+        )
 
     pt_seed = derive_seed(seed, "prediction_times", split, input_shard)
     pred_times = sample_prediction_times_per_subject(
@@ -371,6 +430,17 @@ def main(cfg: DictConfig) -> None:
     split = cfg.split
     input_shard = str(cfg.input_shard)
 
+    # Reject booleans up front: Hydra/OmegaConf parses ``subject_subsample_fraction=true``
+    # as a Python ``True``, which would otherwise become ``1.0`` and silently disable
+    # subsampling — the opposite of the fail-fast contract documented in the helper.
+    ssf_raw = cfg.get("subject_subsample_fraction")
+    if isinstance(ssf_raw, bool) or (ssf_raw is not None and not isinstance(ssf_raw, int | float)):
+        raise TypeError(
+            f"cfg.subject_subsample_fraction must be a number in (0, 1] or null, "
+            f"got {type(ssf_raw).__name__}: {ssf_raw!r}"
+        )
+    subject_subsample_fraction = None if ssf_raw is None else float(ssf_raw)
+
     run_worker(
         data_dir=data_dir,
         out_dir=Path(out_dir) / "eval",
@@ -382,6 +452,7 @@ def main(cfg: DictConfig) -> None:
         min_context_per_subject=int(cfg.min_context_per_subject),
         seed=int(cfg.seed),
         overwrite=bool(cfg.get("overwrite", False)),
+        subject_subsample_fraction=subject_subsample_fraction,
     )
 
 

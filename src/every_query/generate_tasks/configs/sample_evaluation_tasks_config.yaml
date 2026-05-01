@@ -43,6 +43,16 @@ codes: null
 # fixed, caller-specified duration grid.
 durations: [30, 90, 180, 365, 731]
 
+# Optional subject subsample.  When set to a float in (0, 1], each worker
+# applies a deterministic per-subject hash-threshold filter so each unique
+# subject ID is independently kept with probability ~= the fraction.  Because
+# the threshold is per-subject (not a per-shard quota), the expected fraction
+# is honored regardless of shard size — small shards do not get rounded up
+# to one retained subject.  Subject IDs are disjoint across shards, so this
+# is also a uniform global subsample.  Values outside (0, 1] or non-finite
+# values raise ValueError.  Leave as null to disable.
+subject_subsample_fraction: null
+
 overwrite: false
 
 hydra:

@@ -92,6 +92,7 @@ def test_evaluate_end_to_end(tmp_path: Path) -> None:
         "n_positive",
         "occurs_auroc",
         "censor_auroc",
+        "prevalence",
     }
     rows = metrics.to_dicts()
     # Query "A" has a mixed-label labeled subset ([True, False]), so occurs_auroc is defined (1.0).
@@ -103,3 +104,7 @@ def test_evaluate_end_to_end(tmp_path: Path) -> None:
     # Censor AUROC is defined for both groups (censor_prob correctly ranks censored rows higher).
     assert rows[0]["censor_auroc"] == 1.0
     assert rows[1]["censor_auroc"] == 1.0
+    # Prevalence is n_positive / n_occurs_labeled: A has 1 positive of 2 labeled (0.5),
+    # B has 2 positives of 2 labeled (1.0).
+    assert rows[0]["prevalence"] == 0.5
+    assert rows[1]["prevalence"] == 1.0
