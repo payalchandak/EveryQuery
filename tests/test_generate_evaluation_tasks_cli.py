@@ -34,14 +34,10 @@ def test_eq_generate_evaluation_tasks_end_to_end(
     eq_preprocessed_dataset: Path,
     tmp_path: Path,
 ) -> None:
-    """``EQ_generate_evaluation_tasks`` writes a TaskQuerySchema-conformant dense-grid parquet."""
+    """CLI writes a TaskQuerySchema parquet with censored rows dropped and a sibling unique parquet."""
     intermediate = eq_preprocessed_dataset.parent / "intermediate"
     out_dir = tmp_path / "eval_tasks"
 
-    # Small but nontrivial: two codes, three durations, two prediction times per
-    # subject → at most 2 * 2 * 3 = 12 rows per subject.
-    codes = ["HR", "TEMP"]
-    durations = [1, 7, 30]
     pt_per_subject = 2
 
     run_and_check(
@@ -54,49 +50,48 @@ def test_eq_generate_evaluation_tasks_end_to_end(
             "input_shard=0",
             f"prediction_times_per_subject={pt_per_subject}",
             "min_context_per_subject=1",
-            f"codes=[{','.join(codes)}]",
-            f"durations=[{','.join(str(d) for d in durations)}]",
+            "codes=[HR,TEMP]",
+            "durations=[1,7,30]",
             "seed=42",
         ],
         env=ENSURE_ENV_PLACEHOLDERS,
         timeout=120.0,
     )
 
-    written = out_dir / "eval" / "tuning" / "0.parquet"
-    assert written.is_file(), f"expected {written} to exist; got {list(out_dir.rglob('*.parquet'))}"
+    labels_fp = out_dir / "eval" / "tuning" / "0.parquet"
+    unique_fp = out_dir / "eval_unique" / "tuning" / "0.parquet"
+    assert labels_fp.is_file(), f"expected {labels_fp} to exist; got {list(out_dir.rglob('*.parquet'))}"
+    assert unique_fp.is_file(), f"expected sibling unique parquet at {unique_fp}"
 
-    # Schema conformance.
-    TaskQuerySchema.align(pq.read_table(written))
+    TaskQuerySchema.align(pq.read_table(labels_fp))
 
-    df = pl.read_parquet(written)
-    assert df.height > 0, "dense grid should be non-empty for the tuning split of the demo cohort"
-
-    # Dense-grid shape: for every sampled prediction_time, we emitted one row per
-    # (code x duration) pair.  Count distinct (subject_id, prediction_time) pairs
-    # in the output and confirm the grid expansion factor is exactly |codes| x |durations|.
-    n_unique_contexts = (
-        df.select(TaskQuerySchema.subject_id_name, TaskQuerySchema.prediction_time_name).unique().height
-    )
-    assert df.height == n_unique_contexts * len(codes) * len(durations), (
-        f"expected dense grid height {n_unique_contexts * len(codes) * len(durations)} "
-        f"({n_unique_contexts} contexts x {len(codes)} codes x {len(durations)} durations), "
-        f"got {df.height}"
+    labels = pl.read_parquet(labels_fp)
+    # Don't assert non-empty: with censoring dropped, the demo cohort can legitimately
+    # produce zero surviving rows for some (codes, durations, split) combinations.
+    assert labels[TaskQuerySchema.boolean_value_name].null_count() == 0, (
+        "censored (null boolean_value) rows should be dropped from the labeled output"
     )
 
-    # At most ``prediction_times_per_subject`` prediction times per subject.
-    per_subject_times = (
-        df.select(TaskQuerySchema.subject_id_name, TaskQuerySchema.prediction_time_name)
-        .unique()
-        .group_by(TaskQuerySchema.subject_id_name)
-        .len()
-    )
-    assert per_subject_times["len"].max() <= pt_per_subject, (
-        f"per-subject prediction-time count exceeded cap: {per_subject_times['len'].to_list()}"
-    )
+    if labels.height > 0:
+        per_subject_times = (
+            labels.select(TaskQuerySchema.subject_id_name, TaskQuerySchema.prediction_time_name)
+            .unique()
+            .group_by(TaskQuerySchema.subject_id_name)
+            .len()
+        )
+        assert per_subject_times["len"].max() <= pt_per_subject, (
+            f"per-subject prediction-time count exceeded cap: {per_subject_times['len'].to_list()}"
+        )
 
-    # Every (query, duration_days) cell covers the same set of (subject, time) pairs.
-    cell_sizes = df.group_by(TaskQuerySchema.query_name, TaskQuerySchema.duration_days_name).len()
-    assert cell_sizes["len"].n_unique() == 1, f"cell sizes should all be equal (dense grid); got {cell_sizes}"
+    uniq = pl.read_parquet(unique_fp)
+    assert uniq.columns == [
+        TaskQuerySchema.subject_id_name,
+        TaskQuerySchema.prediction_time_name,
+    ]
+    expected_unique = labels.select(
+        [TaskQuerySchema.subject_id_name, TaskQuerySchema.prediction_time_name]
+    ).unique()
+    assert uniq.height == expected_unique.height
 
 
 def test_eq_generate_evaluation_tasks_deterministic(

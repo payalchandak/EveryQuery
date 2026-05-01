@@ -53,6 +53,12 @@ durations: [30, 90, 180, 365, 731]
 # values raise ValueError.  Leave as null to disable.
 subject_subsample_fraction: null
 
+# Also emit a deduped (subject_id, prediction_time) parquet under
+# {out_dir}/eval_unique/{split}/{shard}.parquet — the input shape MEDS_EIC_AR's
+# trajectory-generation baseline expects (one trajectory per prediction time,
+# not one per (code, duration) pair). Computed after the censor filter.
+write_unique_prediction_times: true
+
 overwrite: false
 
 hydra:

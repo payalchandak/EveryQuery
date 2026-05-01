@@ -293,6 +293,10 @@ def _labels_fp(out_dir: Path, split: str, input_shard: str) -> Path:
     return out_dir / split / f"{input_shard}.parquet"
 
 
+def _unique_fp(unique_out_dir: Path, split: str, input_shard: str) -> Path:
+    return unique_out_dir / split / f"{input_shard}.parquet"
+
+
 # ---------------------------------------------------------------------------
 # Worker
 # ---------------------------------------------------------------------------
@@ -310,6 +314,8 @@ def run_worker(
     seed: int,
     overwrite: bool = False,
     subject_subsample_fraction: float | None = None,
+    write_unique_prediction_times: bool = True,
+    unique_out_dir: Path | None = None,
 ) -> Path | None:
     """Generate one evaluation-tasks parquet for one input shard + split.
 
@@ -317,7 +323,16 @@ def run_worker(
     ``overwrite=False``.
     """
     labels_fp = _labels_fp(out_dir, split, input_shard)
-    if labels_fp.exists() and not overwrite:
+    unique_fp = (
+        _unique_fp(unique_out_dir, split, input_shard)
+        if write_unique_prediction_times and unique_out_dir is not None
+        else None
+    )
+    if (
+        not overwrite
+        and labels_fp.exists()
+        and (unique_fp is None or unique_fp.exists())
+    ):
         logger.info("Labels already exist at %s, skipping.", labels_fp)
         return None
 
@@ -366,9 +381,29 @@ def run_worker(
         max_time_df = compute_max_time_per_subject(events_df)
         labeled = evaluate_index_df(index_df, events_df, max_time_df)
 
+    # Censored rows (null boolean_value) are not actionable downstream — drop them
+    # so EQ_predict / EQ_evaluate consume a ready-to-score parquet.
+    labeled = labeled.filter(pl.col(TaskQuerySchema.boolean_value_name).is_not_null())
+
     aligned = TaskQuerySchema.align(labeled.to_arrow())
     _atomic_write_parquet(pl.from_arrow(aligned), labels_fp)
     logger.info("Wrote %d labeled eval rows to %s", labeled.height, labels_fp)
+
+    if unique_fp is not None:
+        unique_df = (
+            labeled.select(
+                [TaskQuerySchema.subject_id_name, TaskQuerySchema.prediction_time_name]
+            )
+            .unique()
+            .sort([TaskQuerySchema.subject_id_name, TaskQuerySchema.prediction_time_name])
+        )
+        _atomic_write_parquet(unique_df, unique_fp)
+        logger.info(
+            "Wrote %d unique (subject_id, prediction_time) rows to %s",
+            unique_df.height,
+            unique_fp,
+        )
+
     return labels_fp
 
 
@@ -441,6 +476,7 @@ def main(cfg: DictConfig) -> None:
         )
     subject_subsample_fraction = None if ssf_raw is None else float(ssf_raw)
 
+    write_unique_prediction_times = bool(cfg.get("write_unique_prediction_times", True))
     run_worker(
         data_dir=data_dir,
         out_dir=Path(out_dir) / "eval",
@@ -453,6 +489,8 @@ def main(cfg: DictConfig) -> None:
         seed=int(cfg.seed),
         overwrite=bool(cfg.get("overwrite", False)),
         subject_subsample_fraction=subject_subsample_fraction,
+        write_unique_prediction_times=write_unique_prediction_times,
+        unique_out_dir=Path(out_dir) / "eval_unique" if write_unique_prediction_times else None,
     )
 
 
