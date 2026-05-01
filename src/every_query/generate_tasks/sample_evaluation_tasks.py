@@ -328,11 +328,7 @@ def run_worker(
         if write_unique_prediction_times and unique_out_dir is not None
         else None
     )
-    if (
-        not overwrite
-        and labels_fp.exists()
-        and (unique_fp is None or unique_fp.exists())
-    ):
+    if not overwrite and labels_fp.exists() and (unique_fp is None or unique_fp.exists()):
         logger.info("Labels already exist at %s, skipping.", labels_fp)
         return None
 
@@ -391,9 +387,7 @@ def run_worker(
 
     if unique_fp is not None:
         unique_df = (
-            labeled.select(
-                [TaskQuerySchema.subject_id_name, TaskQuerySchema.prediction_time_name]
-            )
+            labeled.select([TaskQuerySchema.subject_id_name, TaskQuerySchema.prediction_time_name])
             .unique()
             .sort([TaskQuerySchema.subject_id_name, TaskQuerySchema.prediction_time_name])
         )
