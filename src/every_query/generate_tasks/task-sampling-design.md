@@ -191,10 +191,10 @@ class PatientContext:
 class ContextDistribution:
     """Defines a distribution that provides samples of patient contexts for EQ training. A sample from the distribution is a single PatientContext i.e. a (subject_id, prediction_time) tuple drawn from the eligible (subject, event-time) pairs in the dataset."""
 
-    min_context_events: int  # a (subject, time) pair is eligible only once the subject has >= this many prior events
-    with_replacement: (
-        bool  # True for PT, so N*M may exceed the number of eligible pairs
-    )
+    # a (subject, time) pair is eligible only once the subject has >= this many prior events
+    min_context_events: int
+    # True for PT, so N*M may exceed the number of eligible pairs
+    with_replacement: bool
 ```
 
 ### Sampling Semantics
