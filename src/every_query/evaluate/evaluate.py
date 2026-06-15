@@ -7,11 +7,11 @@ duration_days)`` metrics parquet.
 
 The CLI is intentionally narrow: no model instantiation, no trainer loop, no multi-model
 orchestration.  Cross-model comparison (pairwise win-rate ranking, what the old
-``EQ_select_model`` did) moves to ``paper_experiments/`` per the #82 inventory.
+``EQ_select_model`` did) moves to ``experiments/`` per the #82 inventory.
 
 ``EQ_evaluate`` now points at this module (rewired in Phase 2.5, see #131).  The legacy
 four-stage evaluator (``every_query.evaluate.eval`` and siblings) has been deleted;
-recover from git history if needed.  ``paper_experiments/leaderboard/`` relocation for
+recover from git history if needed.  ``experiments/leaderboard/`` relocation for
 cross-model comparison is tracked on #83.
 """
 

@@ -50,13 +50,16 @@ src/every_query/
 ├── evaluate/           → EQ_evaluate           (metrics on a PredictionSchema parquet)
 ├── model/              (shared: nn.Module + LightningModule)
 ├── data/               (shared: PyTorch Dataset + Batch types + TaskQuerySchema)
-├── paper_experiments/  (research-only: ID/OOD splits, ablations, figure code)
-│   └── sample_codes/   (query-code sampling for paper experiments; dataset-agnostic on #97)
 └── utils/              (helpers: seeds, code slugs, env-var validation, model_loader)
 ```
 
 Every submodule has its own `README.md` explaining what belongs there, its pipeline
 position, and the tracking issues for remaining work.
+
+Research-only, paper-specific code (ID/OOD code sampling, ablations, the results notebook,
+figure code) lives in the top-level [`experiments/`](experiments/) directory, **outside** the
+shipped `every_query` package. It is a staging area for the planned `EveryQueryExperiments`
+repo split tracked in [#186](https://github.com/payalchandak/EveryQuery/issues/186).
 
 ## Console scripts
 
@@ -75,7 +78,7 @@ and end-to-end subprocess tests that run the real script against a fixture cohor
 | `EQ_predict`                   | inference        | Consume a `TaskQuerySchema` parquet dir + checkpoint, emit a `PredictionSchema` parquet (`censor_prob`, `occurs_prob`)  | smoke; E2E `test_predict_cli.py` (row-order preserved); exercised by `tests/training_validity/` (slow)                   |
 | `EQ_evaluate`                  | metrics          | Consume a `PredictionSchema` parquet, write per-`(query, duration_days)` metrics (`occurs_auroc`, `censor_auroc`, etc.) | smoke; E2E `test_evaluate_cli.py`; exercised by `tests/training_validity/` (slow)                                        |
 
-The legacy four-stage evaluator (`every_query.evaluate.eval`, with `gen_index_times`, `gen_task`, `select_model` siblings) has been deleted; recover from git history if needed. [#83](https://github.com/payalchandak/EveryQuery/issues/83) tracks any `paper_experiments/leaderboard/` relocation for cross-model comparison.
+The legacy four-stage evaluator (`every_query.evaluate.eval`, with `gen_index_times`, `gen_task`, `select_model` siblings) has been deleted; recover from git history if needed. [#83](https://github.com/payalchandak/EveryQuery/issues/83) tracks any `experiments/leaderboard/` relocation for cross-model comparison.
 
 ## Pipeline
 

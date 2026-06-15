@@ -3,7 +3,7 @@
 Takes a trained model run directory and a directory of task-query parquets
 (:class:`TaskQuerySchema`), runs per-row inference, writes a
 :class:`PredictionSchema`-conformant parquet.  No AUCs, no model selection, no
-multi-model orchestration — all of that is ``evaluate/`` or ``paper_experiments/``
+multi-model orchestration — all of that is ``evaluate/`` or ``experiments/``
 territory.
 
 Implementation is a single pass through :class:`EveryQueryPytorchDataset`:
