@@ -125,7 +125,20 @@ class QueryDistribution:
     max_duration_days: float
     duration_days_distribution: uniform | log-uniform   # how QuerySpec.duration_days is drawn over [min_duration_days, max_duration_days]
 ```
-    
+
+### Reuse / implementation note
+This stage is the existing `sample_tasks` primitive (`sample_tasks.py`), generalized in two
+ways, with the rest carried over unchanged:
+- **Durations become `float`.** `sample_tasks` currently quantizes to `int` and raises
+  `TypeError` on float bounds; `QuerySpec.duration_days` is `float` (emitted as `float32`), so
+  the duration draw drops the integer-rounding/clipping-to-int step.
+- **Distribution kind becomes configurable.** `sample_tasks` hardcodes the log-uniform draw;
+  here `QueryDistribution.duration_days_distribution` selects `uniform` vs. log-uniform.
+- **Unchanged:** the uniform code-index draw (`rng.integers(0, len(codes), n)`), the
+  single pre-derived-`seed` purity contract, and the `n == 0 → []` / validation edge cases.
+`TaskSpec` is renamed to `QuerySpec` (the rename is `code`→`query` only at the *matching*
+stage, not here).
+
 ## Patient Context Sampling Stage Details
 ### Function Signature
 ```python
@@ -135,11 +148,14 @@ def sample_patient_contexts(
     N: int,
     M: int,
     seed: int,                       # already stage-derived, e.g. derive_seed(global_seed, "contexts", input_shard)
-) -> list[PatientContext]:
+) -> pl.DataFrame:                   # columns (subject_id, prediction_time), len N*M (or 0 rows if the eligible pool is empty)
 ```
 `N` is the number of sampled queries and `M` is the number of patient context samples per sampled query, so this stage draws `N*M` contexts in total (one flat list, ordered so the first `M` belong to query 0, the next `M` to query 1, and so on). Rather than re-running the sampler `N` times, all `N*M` contexts are drawn in a single seeded call and then sliced into per-query chunks of size `M` downstream (see Matching Stage) — under iid sampling this is equivalent to `M` independent draws per query but requires only one seed.
 
 ### Datastructures
+`PatientContext` is the **conceptual** unit of a context draw; the stage materializes contexts
+directly as a two-column `pl.DataFrame` (`subject_id`, `prediction_time`) rather than a list of
+dataclasses, since the matching stage consumes a frame anyway (avoids a list→frame round-trip).
 ```python
 @dataclass(frozen=True)
 class PatientContext:
@@ -177,6 +193,19 @@ before sampling so that a position-based sampler is reproducible.
 
 > **Note (all-or-nothing fill).** Because sampling is with replacement, a non-empty pool *always* yields exactly `N*M` contexts — under-fill is never partial. A shard pool either has ≥1 eligible pair (→ exactly `N*M` rows) or is empty (→ 0 rows). The empty case is the only one the matching stage must special-case; see [Empty-Pool Handling](#empty-pool-handling).
 
+### Reuse / implementation note
+This stage is the existing `sample_contexts` primitive (`sample_tasks.py`) essentially
+verbatim — the candidate-pool body carries over unchanged:
+- eligibility via `cum_count().over("subject_id") >= min_context_events`,
+- the explicit `.sort(["subject_id", "prediction_time"])` that makes the hash-ordered
+  `.unique()` pool position-stable so a seeded `.sample` is reproducible,
+- `with_replacement` sampling and the `n == 0` / empty-pool → 0-row-frame edge cases.
+
+Only the surface changes: `min_context_per_subject` is named `min_context_events` (and
+`with_replacement` is read off `ContextDistribution` instead of hardcoded), and the single
+`n` argument is computed by the wrapper as `N*M` — which is exactly how the current worker
+already calls it (`n=len(tasks) * contexts_per_task`).
+
 
 
 ## Match up Query and Patient Context Stage Details
@@ -184,21 +213,35 @@ before sampling so that a position-based sampler is reproducible.
 ```python
 def match_queries_and_contexts(
     queries: list[QuerySpec],     # len N
-    contexts: list[PatientContext]  # len N*M
+    contexts: pl.DataFrame        # (subject_id, prediction_time), len N*M (or 0 rows; see Empty-Pool Handling)
 ) --> pl.DataFrame  # len N*M, one row per (query, context) pair
 ```
 
-Zip the `N` queries with the `N*M` contexts by assigning query `i` to its block of `M` consecutive contexts (`contexts[i*M : (i+1)*M]`). Each output row carries the query's `code` (written into the `TaskQuerySchema.query` column — note the rename) and `duration_days` (as `float32`) alongside the context's `subject_id` and `prediction_time` — i.e. the unlabeled `(query, context)` pairs that the next stage labels.
+Zip the `N` queries with the `N*M` contexts by assigning query `i` to its block of `M` consecutive contexts (`contexts[i*M : (i+1)*M]`). Implementation-wise this is a single columnar broadcast — `np.repeat` the per-query `query`/`duration_days` values across the block-ordered contexts frame — not a per-query loop. Each output row carries the query's `code` (written into the `TaskQuerySchema.query` column — note the rename) and `duration_days` (as `float32`) alongside the context's `subject_id` and `prediction_time` — i.e. the unlabeled `(query, context)` pairs that the next stage labels.
 
 This stage and `compute_labels` are **deterministic** (no `seed` argument) — all randomness is confined to the two sampling stages, so reproducibility is fully pinned by the `(global_seed, input_shard)` that produced `queries` and `contexts`.
 
 Under iid sampling this block assignment is equivalent to drawing `M` fresh contexts per query.
 
+### Reuse / implementation note
+This stage is the existing `build_index_df` primitive (`sample_tasks.py`) verbatim, renamed:
+- the `np.repeat(np.arange(n_tasks), M)` block-broadcast, the `M = contexts.height // n_tasks`
+  derivation, and the `code`→`query` rename + `float32` duration emission all carry over
+  unchanged;
+- the empty-pool / divisibility contract above is exactly `build_index_df`'s existing
+  `contexts.height == 0 → empty schema frame` and `contexts.height % n_tasks != 0 → ValueError`.
+
+Surface changes only: `TaskSpec`→`QuerySpec` (the `[t.code …]` / `[t.duration_days …]`
+comprehensions are untouched — `QuerySpec` already carries both, and the `.astype(np.float32)`
+on durations becomes a widening no-op instead of an int→float cast). `build_index_df` also
+emits an intermediate `task_id` column that `compute_labels` ignores and drops; keep it for
+debugging or strip it — it's not part of the output contract either way.
+
 #### Empty-Pool Handling
 
 The precondition is `len(contexts) == len(queries) * M` **or** `len(contexts) == 0`. The second
 case is the empty-pool short-circuit: when a shard has no eligible contexts,
-`sample_patient_contexts` returns an empty list and this stage returns an empty
+`sample_patient_contexts` returns a 0-row frame and this stage returns an empty
 `TaskQuerySchema`-shaped frame (the worker then writes a 0-row parquet) rather than raising.
 That shard's `n_k` queries are dropped — by design (Option A): the worker stays a pure,
 resumable function of `(input_shard, seed)` and never coordinates with other shards to
