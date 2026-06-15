@@ -1,7 +1,9 @@
 # EveryQuery Task Sampler Design Doc
 
 ## Pipeline Inputs and Outputs
+
 Inputs:
+
 - Query Distribution: `QueryDistribution` (codes drawn uniformly; only the duration draw is configurable)
 - Context Distribution: `ContextDistribution` (eligibility + replacement policy)
 - MEDS Dataset (D) — sharded on disk as `{data_dir}/data/{split}/{input_shard}.parquet`
@@ -12,7 +14,8 @@ Inputs:
 - `out_dir` + `overwrite` flag — output root and whether to recompute existing `{split}/{input_shard}.parquet` (resume support)
 
 Output:
-- `TaskQuerySchema` parquet of len (N*M)
+
+- `TaskQuerySchema` parquet of len (N\*M)
 
 ### Output Schema (`TaskQuerySchema`)
 
@@ -21,30 +24,32 @@ and `evaluate/` consume — this pipeline must emit rows that pass `TaskQuerySch
 at the write boundary. It **extends MEDS `LabelSchema`**, so it inherits `subject_id` and
 `prediction_time` plus the optional label columns, and adds the two query fields:
 
-| Column | Arrow type / polars dtype | Required? | Meaning |
-|---|---|---|---|
-| `subject_id` | inherited (`Int64`) | yes | subject the context belongs to |
-| `prediction_time` | inherited (`Datetime("us")`) | yes | history cutoff; label window opens here |
-| `query` | `pa.large_string` / `Utf8` | yes | the MEDS **code** the query asks about |
-| `duration_days` | `pa.float32` | yes | prediction-window horizon in days (continuous) |
-| `boolean_value` | `pa.bool_`, **nullable** | optional | collapsed label: `True`/`False` = occurs/not; **`null` = censored** |
+| Column            | Arrow type / polars dtype    | Required? | Meaning                                                             |
+| ----------------- | ---------------------------- | --------- | ------------------------------------------------------------------- |
+| `subject_id`      | inherited (`Int64`)          | yes       | subject the context belongs to                                      |
+| `prediction_time` | inherited (`Datetime("us")`) | yes       | history cutoff; label window opens here                             |
+| `query`           | `pa.large_string` / `Utf8`   | yes       | the MEDS **code** the query asks about                              |
+| `duration_days`   | `pa.float32`                 | yes       | prediction-window horizon in days (continuous)                      |
+| `boolean_value`   | `pa.bool_`, **nullable**     | optional  | collapsed label: `True`/`False` = occurs/not; **`null` = censored** |
 
 Two naming/dtype gotchas the stages must honor:
 
 - The label code column is named **`query`, not `code`**. The internal `QuerySpec.code`
-  field maps onto the `query` column at the matching stage (`EveryQueryBatch.code` is a
-  *different*, event-token tensor — do not rename `query`→`code`).
+    field maps onto the `query` column at the matching stage (`EveryQueryBatch.code` is a
+    *different*, event-token tensor — do not rename `query`→`code`).
 - `duration_days` is **`float32`**; emit Float32 directly so `TaskQuerySchema.align()`
-  is a no-op cast.
+    is a no-op cast.
 - `boolean_value` is the *only* label column: the three-valued occurs/censored/negative
-  outcome collapses into it, with `null` reserved for censored. There is no separate
-  `censored` column in the on-disk schema (`empty_task_query_df()` shows the exact empty
-  shape: `subject_id, prediction_time, query, duration_days, boolean_value`).
+    outcome collapses into it, with `null` reserved for censored. There is no separate
+    `censored` column in the on-disk schema (`empty_task_query_df()` shows the exact empty
+    shape: `subject_id, prediction_time, query, duration_days, boolean_value`).
+
 ## Stages
-1) Sample `N` Queries
-2) Sample `N*M` patient contexts
-3) Match up each query with a patient context
-4) Compute Censor and Occurs label
+
+1. Sample `N` Queries
+2. Sample `N*M` patient contexts
+3. Match up each query with a patient context
+4. Compute Censor and Occurs label
 
 ## Pipeline Diagram
 
@@ -92,9 +97,10 @@ Across all `S` shards the per-shard budgets sum to `N`, so the union of outputs 
 
 > **What `dataset` is in the stage signatures.** The `dataset: MEDSDataset` parameter on `sample_patient_contexts` and `compute_labels` is the **single-shard events table** — the worker loads *only its own* shard via `read_event_shard(data_dir, split, input_shard)` (one `{split}/{input_shard}.parquet`, a polars frame of `(subject_id, time, code, ...)` rows), never the whole dataset. This is what keeps the worker a pure function of its `input_shard` and the pipeline embarrassingly parallel: contexts and labels for shard `k` depend only on shard `k`'s events. Both stages receive this same in-memory frame; it is read once per worker.
 
-
 ## Query Sampling Stage Details
+
 ### Function Signature
+
 ```python
 def sample_queries(
     distribution: QueryDistribution,
@@ -105,42 +111,55 @@ def sample_queries(
 
 The stage takes a single pre-derived `seed` (a 31-bit int from
 `every_query.utils.seeds.derive_seed`, ready for `np.random.default_rng(seed)`) rather than
-the raw global seed, so the function stays a pure deterministic mapping `(distribution, N,
-seed) -> queries` and is agnostic to the sharding/stage-tag scheme. The worker is
+the raw global seed, so the function stays a pure deterministic mapping `(distribution, N, seed) -> queries` and is agnostic to the sharding/stage-tag scheme. The worker is
 responsible for the derivation: `derive_seed(global_seed, "queries", input_shard)` — the
 `"queries"` stage tag keeps this draw decorrelated from the context draw even though both
 use the same `(global_seed, input_shard)`.
+
 ### Datstructures
+
 ```python
 @dataclass(frozen=True)
 class QuerySpec:
     """A single pre-training query/task: one query code and one prediction-window duration (in days)."""
+
     code: str
     duration_days: float
+
+
 @dataclass(frozen=True)
 class QueryDistribution:
     """Defines a distribution that will provide samples of queries for EQ training. A sample is a single QuerySpec i.e. a (code, duration) tuple. The code is drawn **uniformly** over `codes` (no per-code weighting); only the duration draw is configurable."""
-    codes: list[str]                                     # QuerySpec.code is drawn uniformly at random from this list
-    min_duration_days: float = 1.0   # lower bound of the duration draw (default 1 day; must be > 0 so log-uniform is well-defined)
+
+    codes: list[str]  # QuerySpec.code is drawn uniformly at random from this list
+    min_duration_days: float = (
+        1.0  # lower bound of the duration draw (default 1 day; must be > 0 so log-uniform is well-defined)
+    )
     max_duration_days: float
-    duration_days_distribution: uniform | log-uniform   # how QuerySpec.duration_days is drawn over [min_duration_days, max_duration_days]
+    duration_days_distribution: (
+        uniform | log - uniform
+    )  # how QuerySpec.duration_days is drawn over [min_duration_days, max_duration_days]
 ```
 
 ### Reuse / implementation note
+
 This stage is the existing `sample_tasks` primitive (`sample_tasks.py`), generalized in two
 ways, with the rest carried over unchanged:
+
 - **Durations become `float`.** `sample_tasks` currently quantizes to `int` and raises
-  `TypeError` on float bounds; `QuerySpec.duration_days` is `float` (emitted as `float32`), so
-  the duration draw drops the integer-rounding/clipping-to-int step.
+    `TypeError` on float bounds; `QuerySpec.duration_days` is `float` (emitted as `float32`), so
+    the duration draw drops the integer-rounding/clipping-to-int step.
 - **Distribution kind becomes configurable.** `sample_tasks` hardcodes the log-uniform draw;
-  here `QueryDistribution.duration_days_distribution` selects `uniform` vs. log-uniform.
+    here `QueryDistribution.duration_days_distribution` selects `uniform` vs. log-uniform.
 - **Unchanged:** the uniform code-index draw (`rng.integers(0, len(codes), n)`), the
-  single pre-derived-`seed` purity contract, and the `n == 0 → []` / validation edge cases.
-`TaskSpec` is renamed to `QuerySpec` (the rename is `code`→`query` only at the *matching*
-stage, not here).
+    single pre-derived-`seed` purity contract, and the `n == 0 → []` / validation edge cases.
+    `TaskSpec` is renamed to `QuerySpec` (the rename is `code`→`query` only at the *matching*
+    stage, not here).
 
 ## Patient Context Sampling Stage Details
+
 ### Function Signature
+
 ```python
 def sample_patient_contexts(
     dataset: MEDSDataset,            # this shard's events table (read_event_shard), not the whole dataset
@@ -150,32 +169,42 @@ def sample_patient_contexts(
     seed: int,                       # already stage-derived, e.g. derive_seed(global_seed, "contexts", input_shard)
 ) -> pl.DataFrame:                   # columns (subject_id, prediction_time), len N*M (or 0 rows if the eligible pool is empty)
 ```
+
 `N` is the number of sampled queries and `M` is the number of patient context samples per sampled query, so this stage draws `N*M` contexts in total (one flat list, ordered so the first `M` belong to query 0, the next `M` to query 1, and so on). Rather than re-running the sampler `N` times, all `N*M` contexts are drawn in a single seeded call and then sliced into per-query chunks of size `M` downstream (see Matching Stage) — under iid sampling this is equivalent to `M` independent draws per query but requires only one seed.
 
 ### Datastructures
+
 `PatientContext` is the **conceptual** unit of a context draw; the stage materializes contexts
 directly as a two-column `pl.DataFrame` (`subject_id`, `prediction_time`) rather than a list of
 dataclasses, since the matching stage consumes a frame anyway (avoids a list→frame round-trip).
+
 ```python
 @dataclass(frozen=True)
 class PatientContext:
     """A single patient context: one subject and the prediction time that cuts off their observable history. Everything *at or before* `prediction_time` is model input; the label is evaluated over the window *strictly after* `prediction_time`. The inclusive cutoff matches `meds-torch-data`'s loader, which slices input with a backward `join_asof` (`time <= prediction_time`), so the event at the cutoff is fed to the model and the input/label boundary partitions the timeline cleanly with no overlap and no gap (see Compute Labels)."""
+
     subject_id: int
     prediction_time: datetime
+
 
 @dataclass(frozen=True)
 class ContextDistribution:
     """Defines a distribution that provides samples of patient contexts for EQ training. A sample from the distribution is a single PatientContext i.e. a (subject_id, prediction_time) tuple drawn from the eligible (subject, event-time) pairs in the dataset."""
-    min_context_events: int   # a (subject, time) pair is eligible only once the subject has >= this many prior events
-    with_replacement: bool    # True for PT, so N*M may exceed the number of eligible pairs
+
+    min_context_events: int  # a (subject, time) pair is eligible only once the subject has >= this many prior events
+    with_replacement: (
+        bool  # True for PT, so N*M may exceed the number of eligible pairs
+    )
 ```
 
 ### Sampling Semantics
-- **Candidate pool.** The candidate prediction times are every event time at which a subject has already accumulated at least `min_context_events` prior events. 
+
+- **Candidate pool.** The candidate prediction times are every event time at which a subject has already accumulated at least `min_context_events` prior events.
 - **Uniformity.** Each draw is uniform over the deduplicated set of eligible `(subject_id, prediction_time)` pairs. Sampling at the event-pair level (rather than first sampling a subject, then a time) means subjects with longer histories are proportionally more likely to be drawn — contexts are uniform over *eligible time points*, not over patients.
 - **Replacement.** Sampling is with replacement so the caller can request `N*M` larger than the number of eligible pairs in a shard; for pre-training, iid-ness of contexts matters more than strict coverage of distinct time points.
 
 ### Determinism
+
 The caller passes a pre-derived `seed` = `derive_seed(global_seed, "contexts", input_shard)`
 (no task-shard axis in this design — queries and contexts are both drawn once per shard from
 the same `global_seed`, split only by the stage tag `"queries"` vs `"contexts"` so the two
@@ -188,17 +217,20 @@ across calls, the eligible-pair pool is explicitly sorted by `(subject_id, predi
 before sampling so that a position-based sampler is reproducible.
 
 ### Edge Cases
+
 - `N*M == 0` or an empty eligible pool returns an empty list (zero-row frame), not an error.
 - A subject whose entire record is shorter than `min_context_events` contributes no candidates.
 
 > **Note (all-or-nothing fill).** Because sampling is with replacement, a non-empty pool *always* yields exactly `N*M` contexts — under-fill is never partial. A shard pool either has ≥1 eligible pair (→ exactly `N*M` rows) or is empty (→ 0 rows). The empty case is the only one the matching stage must special-case; see [Empty-Pool Handling](#empty-pool-handling).
 
 ### Reuse / implementation note
+
 This stage is the existing `sample_contexts` primitive (`sample_tasks.py`) essentially
 verbatim — the candidate-pool body carries over unchanged:
+
 - eligibility via `cum_count().over("subject_id") >= min_context_events`,
 - the explicit `.sort(["subject_id", "prediction_time"])` that makes the hash-ordered
-  `.unique()` pool position-stable so a seeded `.sample` is reproducible,
+    `.unique()` pool position-stable so a seeded `.sample` is reproducible,
 - `with_replacement` sampling and the `n == 0` / empty-pool → 0-row-frame edge cases.
 
 Only the surface changes: `min_context_per_subject` is named `min_context_events` (and
@@ -206,10 +238,10 @@ Only the surface changes: `min_context_per_subject` is named `min_context_events
 `n` argument is computed by the wrapper as `N*M` — which is exactly how the current worker
 already calls it (`n=len(tasks) * contexts_per_task`).
 
-
-
 ## Match up Query and Patient Context Stage Details
+
 ### Function Signature
+
 ```python
 def match_queries_and_contexts(
     queries: list[QuerySpec],     # len N
@@ -224,12 +256,14 @@ This stage and `compute_labels` are **deterministic** (no `seed` argument) — a
 Under iid sampling this block assignment is equivalent to drawing `M` fresh contexts per query.
 
 ### Reuse / implementation note
+
 This stage is the existing `build_index_df` primitive (`sample_tasks.py`) verbatim, renamed:
+
 - the `np.repeat(np.arange(n_tasks), M)` block-broadcast, the `M = contexts.height // n_tasks`
-  derivation, and the `code`→`query` rename + `float32` duration emission all carry over
-  unchanged;
+    derivation, and the `code`→`query` rename + `float32` duration emission all carry over
+    unchanged;
 - the empty-pool / divisibility contract above is exactly `build_index_df`'s existing
-  `contexts.height == 0 → empty schema frame` and `contexts.height % n_tasks != 0 → ValueError`.
+    `contexts.height == 0 → empty schema frame` and `contexts.height % n_tasks != 0 → ValueError`.
 
 Surface changes only: `TaskSpec`→`QuerySpec` (the `[t.code …]` / `[t.duration_days …]`
 comprehensions are untouched — `QuerySpec` already carries both, and the `.astype(np.float32)`
@@ -252,7 +286,9 @@ Any *other* mismatch (`len(contexts)` neither `0` nor `len(queries) * M`) is a h
 it can only mean a sampling bug, since with-replacement sampling makes fill all-or-nothing.
 
 ## Compute Censor and Occurs label Stage Details
+
 ### Function Signature
+
 ```python
 def compute_labels(
     pairs: pl.DataFrame,    # output of the matching stage, len N*M
@@ -271,7 +307,7 @@ For each `(query, context)` row, look at the window `(prediction_time, predictio
 These collapse into a single nullable `boolean_value` (the `TaskQuerySchema` label): `True`/`False` from occurs takes precedence, and `null` only when not-occurred *and* censored.
 
 | occurs (in observed window) | censored | boolean_value |
-|-----------------------------|----------|---------------|
+| --------------------------- | -------- | ------------- |
 | yes                         | —        | True          |
 | no                          | yes      | null          |
 | no                          | no       | False         |
@@ -293,20 +329,22 @@ The per-shard worker is a **pure, idempotent function of `(input_shard, seed)`**
 Parallelization is two decoupled concerns:
 
 1. **Discovery** — glob the shards that exist on disk:
-   ```python
-   def discover_input_shards(data_dir: Path, split: str) -> list[str]:
-       """Basenames (sans .parquet) of every MEDS shard for `split`, sorted for determinism."""
-       return sorted(p.stem for p in (data_dir / "data" / split).glob("*.parquet"))
-   ```
-   The sort fixes a stable shard ordering across invocations.
+
+    ```python
+    def discover_input_shards(data_dir: Path, split: str) -> list[str]:
+        """Basenames (sans .parquet) of every MEDS shard for `split`, sorted for determinism."""
+        return sorted(p.stem for p in (data_dir / "data" / split).glob("*.parquet"))
+    ```
+
+    The sort fixes a stable shard ordering across invocations.
 
 2. **Fan-out** — a thin wrapper turns discovery into a Hydra multirun sweep over a single axis, `input_shard=<csv>`. The sweep is **launcher-agnostic**: the *only* thing that varies between environments is the `hydra/launcher` override, so there is a single orchestration code path rather than separate SLURM vs. single-process implementations.
 
-| Environment | Override | Behavior |
-|---|---|---|
-| SLURM, many parallel jobs | `hydra/launcher=submitit_slurm` | one SLURM task per `input_shard`, fanned out |
-| Single-process machine | `hydra/launcher=basic` | runs every shard sequentially in one process (Hydra multirun default) |
-| Single machine, local cores | `hydra/launcher=joblib n_jobs=N` | local process pool (`n_jobs=1` for strictly one process) |
+| Environment                 | Override                         | Behavior                                                              |
+| --------------------------- | -------------------------------- | --------------------------------------------------------------------- |
+| SLURM, many parallel jobs   | `hydra/launcher=submitit_slurm`  | one SLURM task per `input_shard`, fanned out                          |
+| Single-process machine      | `hydra/launcher=basic`           | runs every shard sequentially in one process (Hydra multirun default) |
+| Single machine, local cores | `hydra/launcher=joblib n_jobs=N` | local process pool (`n_jobs=1` for strictly one process)              |
 
 **Invariant.** Correctness across all three launchers rests on the worker staying a pure function of `(input_shard, seed)`: for any *given* shard, the local loop and the SLURM fan-out write a byte-identical `{input_shard}.parquet` (different shards still produce different content — this is determinism across launchers/reruns for the same shard, not across shards) — which requires not just identical row *sets* but identical row *order*, guaranteed by the pinned final sort in the labeling stage (see [Pinned output order](#compute-censor-and-occurs-label-stage-details)). `overwrite=false` makes a killed run resumable (only missing `{input_shard}.parquet` files are recomputed; failed SLURM tasks rerun just their own shard) — note resume keys off file *existence*, so it is correct even where byte-identity is not.
 
@@ -320,8 +358,8 @@ Parallelization is two decoupled concerns:
 So "distributing N" means **partitioning the global query budget** so the per-shard counts sum to `N`:
 
 ```python
-base, rem = divmod(N, S)             # S = len(discover_input_shards(...))
-n_k = base + (1 if k < rem else 0)   # k = this shard's index in the sorted shard list
+base, rem = divmod(N, S)  # S = len(discover_input_shards(...))
+n_k = base + (1 if k < rem else 0)  # k = this shard's index in the sorted shard list
 ```
 
 `base` queries to every shard, the `rem` remainder spread one-each over the first `rem` shards — exact, deterministic, sums to `N`. Shard `k` then emits `n_k * M` rows (or `0` if its eligible context pool is empty — see [Empty-Pool Handling](#empty-pool-handling)); summed over shards this is **at most** `N * M`, and exactly `N * M` when every shard has at least one eligible context.
