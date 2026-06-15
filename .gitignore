@@ -21,7 +21,6 @@ core*
 
 # C extensions
 *.so
-scripts/logs/
 # Distribution / packaging
 .Python
 build/
