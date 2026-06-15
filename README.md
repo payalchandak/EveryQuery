@@ -235,8 +235,8 @@ env vars when CLI config values are supplied).
 | `FINAL_DATA_DIR` | Tensorized cohort (output of `EQ_process_data`)        |
 | `WANDB_ENTITY`   | W&B entity for training telemetry                      |
 
-`.env.example` is the reference — copy to `.env` and edit. Both Python (via
-`python-dotenv`) and the SLURM wrappers under `scripts/` source it. Further phases of
+`.env.example` is the reference — copy to `.env` and edit. Python loads it via
+`python-dotenv`. Further phases of
 [#117](https://github.com/payalchandak/EveryQuery/issues/117) will migrate the remaining
 gated vars to `${oc.env:VAR,???}` / `${oc.env:VAR,default}` form (Hydra-native required
 or optional-with-fallback) and eventually retire `ensure_env()` entirely.
