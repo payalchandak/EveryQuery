@@ -44,14 +44,9 @@ class QuerySpec:
 class QueryDistribution:
     """Distribution that provides samples of queries for EQ training.
 
-    A sample is a single :class:`QuerySpec`, i.e. a ``(code, duration_days)`` tuple. The
+    A sample is a `QuerySpec` instance, i.e. a ``(code, duration_days)`` tuple. The
     ``code`` is drawn **uniformly** over ``codes`` (no per-code weighting); only the
     duration draw is configurable.
-
-    Note on field order: the design doc lists ``min_duration_days`` before the required
-    ``max_duration_days``, but a dataclass cannot place a required field after a defaulted
-    one, so the defaulted fields are moved last here. Construct with keywords to avoid
-    confusion.
     """
 
     codes: list[str]  # QuerySpec.code is drawn uniformly at random from this list
