@@ -82,11 +82,17 @@ These hold throughout the design; later sections reference them rather than rest
 | `min_prediction_times_per_subject` | minimum prior **prediction times** (distinct `(subject_id, time)` rows, not events) required before a prediction time is eligible. Default 50. Governs Stage 0 eligibility and the Stage 2 draw range. |
 | `QueryDistribution` | generative model of a query `(code, duration_days)`; owns both draws (see below) |
 | `max_workers` | optional cap on Stage 4 worker count; caps `resolve_workers()` downward only |
-| `path_to_data` | MEDS dataset root, with `path_to_data/data/{train,tuning,test}/{i}.parquet` |
 | `split` | split to process |
-| `training_tasks_dir` | final-output-only root (see *Artifact layout*) |
-| `training_task_artifacts_dir` | optional intermediate-artifact root (see *Artifact layout*) |
 | `seed` | top-level seed; all draws derive from it |
+
+Path roots are **not** Hydra keys — they are machine-specific and resolved from env vars only (via
+`load_dotenv()` in `main()`); see `resolve_training_task_paths`:
+
+| env var / derived | meaning |
+| --- | --- |
+| `$INTERMEDIATE` → `path_to_data` | MEDS dataset root, with `path_to_data/data/{train,tuning,test}/{i}.parquet`. Required. |
+| `$TRAINING_TASKS_DIR` → `training_tasks_dir` | final-output-only root (see *Artifact layout*). Required. |
+| `training_task_artifacts_dir` | intermediate-artifact root (see *Artifact layout*). No env var: always the sibling default. |
 
 **`QueryDistribution(query_codes, min_duration, max_duration, uniform|log-uniform)`** — owns both the
 code draw and the duration draw, so Stage 1 is just `query_dist.sample(num_queries, rng) -> list[QuerySpec]`.
@@ -106,9 +112,9 @@ run OOMs (see *Orchestration & parallelism*). Supersedes the old `num_workers` k
 **`training_tasks_dir`** — after a run it contains **nothing but** `{split}/{shard}.parquet`. The only
 transient files are the same-dir atomic-write temps in Stage 4, present only mid-write.
 
-**`training_task_artifacts_dir`** — Hydra key, default `null`. Root for all intermediates: Stage 0's
-`_prediction_time_counts.parquet` and `_prediction_times/`, and Stage 3's `_index/`. When `null` it defaults to a
-**sibling** of `training_tasks_dir` (`{parent}/{name}_artifacts`) so the two trees never nest.
+**`training_task_artifacts_dir`** — not a config key and has no env var. Root for all intermediates:
+Stage 0's `_prediction_time_counts.parquet` and `_prediction_times/`, and Stage 3's `_index/`. Always the
+**sibling** of `training_tasks_dir` (`{parent}/{name}_artifacts`), so the two trees never nest by construction.
 
 > `patient_universe_size` and per-subject `n_prediction_times` are computed-and-cached by Stage 0 from the
 > split's shards, not supplied. `n_prediction_times` is a **column of `_prediction_time_counts`** and `subject_idx`

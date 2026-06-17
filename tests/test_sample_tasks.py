@@ -900,48 +900,29 @@ class TestEndToEndWithDataset:
 
 
 class TestResolveTrainingTaskPaths:
-    """Unit tests for the redesigned sampler's config-key + path-resolution surface.
+    """Unit tests for the redesigned sampler's env-only path-resolution surface.
 
-    Pure path functions (no file I/O, no dir creation), so they exercise the cfg -> env-var ->
-    sibling-default fallback matrix without a Hydra run — the cluster-only end-to-end pipeline is
-    out of scope here (and ``sample_tasks_config`` stages don't exist yet).
+    The three roots are not config keys — they come from env vars only (``$INTERMEDIATE`` and
+    ``$TRAINING_TASKS_DIR``, with the artifacts root always the sibling default).  Pure path
+    functions (no file I/O, no dir creation), so they exercise the env-var matrix without a Hydra
+    run.
     """
 
-    @staticmethod
-    def _cfg(**overrides):
-        from omegaconf import OmegaConf
-
-        base = {
-            "path_to_data": None,
-            "training_tasks_dir": None,
-            "training_task_artifacts_dir": None,
-        }
-        base.update(overrides)
-        return OmegaConf.create(base)
+    @pytest.fixture(autouse=True)
+    def _clear_env(self, monkeypatch):
+        # Isolate from the developer's own .env / shell so assertions are deterministic.
+        monkeypatch.delenv("INTERMEDIATE", raising=False)
+        monkeypatch.delenv("TRAINING_TASKS_DIR", raising=False)
 
     def test_default_artifacts_dir_is_a_sibling(self):
         assert default_artifacts_dir(Path("/x/y/tasks")) == Path("/x/y/tasks_artifacts")
         # Sibling, never nested under the final-output root (invariant 7).
         assert default_artifacts_dir(Path("/x/y/tasks")).parent == Path("/x/y/tasks").parent
 
-    def test_explicit_cfg_paths_win(self):
-        cfg = self._cfg(
-            path_to_data="/data",
-            training_tasks_dir="/out/tasks",
-            training_task_artifacts_dir="/scratch/arts",
-        )
-        data, tasks, arts = resolve_training_task_paths(cfg)
-        assert (data, tasks, arts) == (Path("/data"), Path("/out/tasks"), Path("/scratch/arts"))
-
-    def test_null_artifacts_dir_defaults_to_sibling(self):
-        cfg = self._cfg(path_to_data="/data", training_tasks_dir="/out/tasks")
-        _, _, arts = resolve_training_task_paths(cfg)
-        assert arts == Path("/out/tasks_artifacts")
-
-    def test_required_roots_fall_back_to_env_vars(self, monkeypatch):
+    def test_roots_resolve_from_env_vars(self, monkeypatch):
         monkeypatch.setenv("INTERMEDIATE", "/env/data")
         monkeypatch.setenv("TRAINING_TASKS_DIR", "/env/tasks")
-        data, tasks, arts = resolve_training_task_paths(self._cfg())
+        data, tasks, arts = resolve_training_task_paths()
         assert data == Path("/env/data")
         assert tasks == Path("/env/tasks")
         # Artifacts dir is NOT its own env var; it derives from training_tasks_dir.
@@ -952,39 +933,18 @@ class TestResolveTrainingTaskPaths:
         monkeypatch.setenv("INTERMEDIATE", "/env/data")
         monkeypatch.setenv("TRAINING_TASKS_DIR", "/env/tasks")
         monkeypatch.setenv("TRAINING_TASK_ARTIFACTS_DIR", "/env/should_be_ignored")
-        _, _, arts = resolve_training_task_paths(self._cfg())
+        _, _, arts = resolve_training_task_paths()
         assert arts == Path("/env/tasks_artifacts")
 
     def test_missing_path_to_data_raises(self, monkeypatch):
-        monkeypatch.delenv("INTERMEDIATE", raising=False)
-        cfg = self._cfg(training_tasks_dir="/out/tasks")
+        monkeypatch.setenv("TRAINING_TASKS_DIR", "/env/tasks")
         with pytest.raises(ValueError, match="path_to_data"):
-            resolve_training_task_paths(cfg)
+            resolve_training_task_paths()
 
     def test_missing_training_tasks_dir_raises(self, monkeypatch):
-        monkeypatch.delenv("TRAINING_TASKS_DIR", raising=False)
-        cfg = self._cfg(path_to_data="/data")
+        monkeypatch.setenv("INTERMEDIATE", "/env/data")
         with pytest.raises(ValueError, match="training_tasks_dir"):
-            resolve_training_task_paths(cfg)
-
-    def test_nested_artifacts_dir_raises(self):
-        # Artifacts dir inside the final-output root violates invariant 7.
-        cfg = self._cfg(
-            path_to_data="/data",
-            training_tasks_dir="/out/tasks",
-            training_task_artifacts_dir="/out/tasks/_artifacts",
-        )
-        with pytest.raises(ValueError, match="never-nested"):
-            resolve_training_task_paths(cfg)
-
-    def test_equal_roots_raise(self):
-        cfg = self._cfg(
-            path_to_data="/data",
-            training_tasks_dir="/out/tasks",
-            training_task_artifacts_dir="/out/tasks",
-        )
-        with pytest.raises(ValueError, match="never-nested"):
-            resolve_training_task_paths(cfg)
+            resolve_training_task_paths()
 
 
 class TestRedesignConfigFile:
@@ -1003,10 +963,13 @@ class TestRedesignConfigFile:
         cfg = self._load()
         assert cfg.min_prediction_times_per_subject == 50
         assert cfg.max_workers is None
-        assert cfg.training_task_artifacts_dir is None
-        assert cfg.path_to_data is None
-        assert cfg.training_tasks_dir is None
         assert cfg.duration_distribution == "log-uniform"
+
+    def test_path_roots_are_not_config_keys(self):
+        cfg = self._load()
+        # Path roots are env-only (see resolve_training_task_paths); they must not be config keys.
+        for path_key in ("path_to_data", "training_tasks_dir", "training_task_artifacts_dir"):
+            assert path_key not in cfg
 
     def test_legacy_keys_are_gone(self):
         cfg = self._load()
