@@ -914,9 +914,12 @@ def build_prediction_times(
     eligible = counts.filter(pl.col("n_prediction_times") >= min_prediction_times_per_subject + 1).sort(
         "subject_id"
     )
-    eligible_ids = eligible["subject_id"].to_list()
 
-    prediction_times = prediction_times.filter(pl.col("subject_id").is_in(eligible_ids))
+    prediction_times = prediction_times.join(
+        eligible.select("subject_id"),
+        on="subject_id",
+        how="semi",
+    )
 
     # Rebuild from scratch: drop any stale partitions so a shrunken shard set leaves no orphans.
     map_dir = training_task_artifacts_dir / split / PREDICTION_TIMES_DIRNAME
