@@ -820,6 +820,25 @@ def _prediction_time_cache_valid(
     return int(counts["n_prediction_times"].sum()) == meta.get("n_prediction_time_rows")
 
 
+def _assert_no_subject_spans_shards(distinct: pl.DataFrame) -> None:
+    """Invariant 4: a subject lives in exactly one shard (Stage 4 derives ``max_time`` from a single
+    shard).  Raises ``ValueError`` naming the offenders ``{subject_id: shards}`` on violation.
+    """
+    spanning = (
+        distinct.group_by("subject_id")
+        .agg(pl.col("shard").n_unique().alias("n_shards"), pl.col("shard").unique().alias("shards"))
+        .filter(pl.col("n_shards") > 1)
+        .sort("subject_id")
+    )
+    if spanning.height == 0:
+        return
+    offenders = {row["subject_id"]: sorted(row["shards"]) for row in spanning.iter_rows(named=True)}
+    raise ValueError(
+        "Subjects span multiple shards (invariant 4 violation); each must live in exactly one "
+        f"shard. Offenders {{subject_id: shards}}: {offenders}"
+    )
+
+
 def build_prediction_times(
     path_to_data: Path,
     training_task_artifacts_dir: Path,
@@ -868,19 +887,7 @@ def build_prediction_times(
         ]
     )
 
-    # Invariant 4: a subject lives in exactly one shard (Stage 4 derives max_time from a single shard).
-    spanning = (
-        distinct.group_by("subject_id")
-        .agg(pl.col("shard").n_unique().alias("n_shards"), pl.col("shard").unique().alias("shards"))
-        .filter(pl.col("n_shards") > 1)
-        .sort("subject_id")
-    )
-    if spanning.height > 0:
-        offenders = {row["subject_id"]: sorted(row["shards"]) for row in spanning.iter_rows(named=True)}
-        raise ValueError(
-            "Subjects span multiple shards (invariant 4 violation); each must live in exactly one "
-            f"shard. Offenders {{subject_id: shards}}: {offenders}"
-        )
+    _assert_no_subject_spans_shards(distinct)
 
     # Gapless zero-based index over each subject's ascending distinct times.  No within-subject ties
     # (step above deduped), so int_range is identical to a dense rank and cheaper (invariant 2).
