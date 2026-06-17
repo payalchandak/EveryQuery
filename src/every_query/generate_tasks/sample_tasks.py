@@ -571,6 +571,75 @@ def _resolve_path(cfg_value: str | None, env_var: str, name: str) -> Path:
     )
 
 
+# ---------------------------------------------------------------------------
+# Redesign (issue #203): config & path resolution for the 5-stage sampler
+# ---------------------------------------------------------------------------
+#
+# These helpers establish the redesign's input surface (see ``redesign-spec.md``); the legacy
+# pipeline above is untouched and the eventual ``main`` cutover lands with the stage issues
+# (#205-#210).  Kept as pure path functions (no file I/O, no dir creation) so they are unit-testable
+# without a Hydra run — same rationale as ``_resolve_path``.
+
+
+def default_artifacts_dir(training_tasks_dir: Path) -> Path:
+    """Return the sibling intermediate-artifacts root for ``training_tasks_dir``.
+
+    ``training_task_artifacts_dir`` defaults to ``{parent}/{name}_artifacts`` — a *sibling* of the
+    final-output root, never a child — so the final-output and intermediate trees stay disjoint and
+    never-nested (spec invariant 7) and ``rm -rf`` of either cannot touch the other.
+
+    Examples:
+        >>> default_artifacts_dir(Path("/x/y/tasks"))
+        PosixPath('/x/y/tasks_artifacts')
+    """
+    return training_tasks_dir.parent / f"{training_tasks_dir.name}_artifacts"
+
+
+def _is_nested(a: Path, b: Path) -> bool:
+    """True if ``a`` equals ``b`` or either resolved path lives inside the other."""
+    ra, rb = a.resolve(), b.resolve()
+    return ra == rb or rb in ra.parents or ra in rb.parents
+
+
+def resolve_training_task_paths(cfg: DictConfig) -> tuple[Path, Path, Path]:
+    """Resolve the redesigned sampler's three path roots from ``cfg`` + env vars.
+
+    - ``path_to_data`` — MEDS dataset root; falls back to ``$INTERMEDIATE``.
+    - ``training_tasks_dir`` — final-output-only root; falls back to ``$TRAINING_TASKS_DIR`` (the
+      user exports this before invoking).
+    - ``training_task_artifacts_dir`` — intermediate-artifacts root.  **Not** its own env var: when
+      ``cfg`` leaves it null it defaults to :func:`default_artifacts_dir` (the sibling of
+      ``training_tasks_dir``).  An explicit ``cfg`` value still wins.
+
+    Both required roots go through :func:`_resolve_path`, which raises a clear message when neither
+    ``cfg`` nor the env var is set.  The two output roots are asserted disjoint / never-nested
+    (invariant 7); a nested or equal pair raises ``ValueError``.
+
+    Returns:
+        ``(path_to_data, training_tasks_dir, training_task_artifacts_dir)`` as ``Path``s.
+    """
+    path_to_data = _resolve_path(cfg.get("path_to_data"), "INTERMEDIATE", "path_to_data")
+    training_tasks_dir = _resolve_path(
+        cfg.get("training_tasks_dir"), "TRAINING_TASKS_DIR", "training_tasks_dir"
+    )
+
+    artifacts_cfg = cfg.get("training_task_artifacts_dir")
+    training_task_artifacts_dir = (
+        Path(str(artifacts_cfg)) if artifacts_cfg is not None else default_artifacts_dir(training_tasks_dir)
+    )
+
+    if _is_nested(training_tasks_dir, training_task_artifacts_dir):
+        raise ValueError(
+            "training_tasks_dir and training_task_artifacts_dir must be disjoint, never-nested roots "
+            f"(invariant 7), got training_tasks_dir={training_tasks_dir} and "
+            f"training_task_artifacts_dir={training_task_artifacts_dir}. Leave "
+            "training_task_artifacts_dir null to use the sibling default, or point it outside "
+            "training_tasks_dir."
+        )
+
+    return path_to_data, training_tasks_dir, training_task_artifacts_dir
+
+
 CONFIGS = str(files("every_query") / "generate_tasks" / "configs")
 
 

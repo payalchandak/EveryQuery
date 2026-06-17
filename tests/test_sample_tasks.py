@@ -31,7 +31,9 @@ from every_query.generate_tasks.sample_tasks import (
     TaskSpec,
     build_index_df,
     compute_max_time_per_subject,
+    default_artifacts_dir,
     evaluate_index_df,
+    resolve_training_task_paths,
     run_worker,
     sample_contexts,
     sample_tasks,
@@ -890,3 +892,124 @@ class TestEndToEndWithDataset:
 
         assert torch.isfinite(loss).item(), f"Non-finite loss on sampler-produced batch: {loss}"
         assert out.query_embed.shape[0] == batch.batch_size
+
+
+# ---------------------------------------------------------------------------
+# Redesign config & path resolution (issue #203)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveTrainingTaskPaths:
+    """Unit tests for the redesigned sampler's config-key + path-resolution surface.
+
+    Pure path functions (no file I/O, no dir creation), so they exercise the cfg -> env-var ->
+    sibling-default fallback matrix without a Hydra run — the cluster-only end-to-end pipeline is
+    out of scope here (and ``sample_tasks_config`` stages don't exist yet).
+    """
+
+    @staticmethod
+    def _cfg(**overrides):
+        from omegaconf import OmegaConf
+
+        base = {
+            "path_to_data": None,
+            "training_tasks_dir": None,
+            "training_task_artifacts_dir": None,
+        }
+        base.update(overrides)
+        return OmegaConf.create(base)
+
+    def test_default_artifacts_dir_is_a_sibling(self):
+        assert default_artifacts_dir(Path("/x/y/tasks")) == Path("/x/y/tasks_artifacts")
+        # Sibling, never nested under the final-output root (invariant 7).
+        assert default_artifacts_dir(Path("/x/y/tasks")).parent == Path("/x/y/tasks").parent
+
+    def test_explicit_cfg_paths_win(self):
+        cfg = self._cfg(
+            path_to_data="/data",
+            training_tasks_dir="/out/tasks",
+            training_task_artifacts_dir="/scratch/arts",
+        )
+        data, tasks, arts = resolve_training_task_paths(cfg)
+        assert (data, tasks, arts) == (Path("/data"), Path("/out/tasks"), Path("/scratch/arts"))
+
+    def test_null_artifacts_dir_defaults_to_sibling(self):
+        cfg = self._cfg(path_to_data="/data", training_tasks_dir="/out/tasks")
+        _, _, arts = resolve_training_task_paths(cfg)
+        assert arts == Path("/out/tasks_artifacts")
+
+    def test_required_roots_fall_back_to_env_vars(self, monkeypatch):
+        monkeypatch.setenv("INTERMEDIATE", "/env/data")
+        monkeypatch.setenv("TRAINING_TASKS_DIR", "/env/tasks")
+        data, tasks, arts = resolve_training_task_paths(self._cfg())
+        assert data == Path("/env/data")
+        assert tasks == Path("/env/tasks")
+        # Artifacts dir is NOT its own env var; it derives from training_tasks_dir.
+        assert arts == Path("/env/tasks_artifacts")
+
+    def test_artifacts_dir_has_no_env_var(self, monkeypatch):
+        # Even if someone exports it, the resolver ignores it and uses the sibling default.
+        monkeypatch.setenv("INTERMEDIATE", "/env/data")
+        monkeypatch.setenv("TRAINING_TASKS_DIR", "/env/tasks")
+        monkeypatch.setenv("TRAINING_TASK_ARTIFACTS_DIR", "/env/should_be_ignored")
+        _, _, arts = resolve_training_task_paths(self._cfg())
+        assert arts == Path("/env/tasks_artifacts")
+
+    def test_missing_path_to_data_raises(self, monkeypatch):
+        monkeypatch.delenv("INTERMEDIATE", raising=False)
+        cfg = self._cfg(training_tasks_dir="/out/tasks")
+        with pytest.raises(ValueError, match="path_to_data"):
+            resolve_training_task_paths(cfg)
+
+    def test_missing_training_tasks_dir_raises(self, monkeypatch):
+        monkeypatch.delenv("TRAINING_TASKS_DIR", raising=False)
+        cfg = self._cfg(path_to_data="/data")
+        with pytest.raises(ValueError, match="training_tasks_dir"):
+            resolve_training_task_paths(cfg)
+
+    def test_nested_artifacts_dir_raises(self):
+        # Artifacts dir inside the final-output root violates invariant 7.
+        cfg = self._cfg(
+            path_to_data="/data",
+            training_tasks_dir="/out/tasks",
+            training_task_artifacts_dir="/out/tasks/_artifacts",
+        )
+        with pytest.raises(ValueError, match="never-nested"):
+            resolve_training_task_paths(cfg)
+
+    def test_equal_roots_raise(self):
+        cfg = self._cfg(
+            path_to_data="/data",
+            training_tasks_dir="/out/tasks",
+            training_task_artifacts_dir="/out/tasks",
+        )
+        with pytest.raises(ValueError, match="never-nested"):
+            resolve_training_task_paths(cfg)
+
+
+class TestRedesignConfigFile:
+    """The new ``sample_training_tasks_config.yaml`` exposes the spec's keys with stated defaults."""
+
+    @staticmethod
+    def _load():
+        from importlib.resources import files
+
+        from omegaconf import OmegaConf
+
+        path = files("every_query") / "generate_tasks" / "configs" / "sample_training_tasks_config.yaml"
+        return OmegaConf.load(str(path))
+
+    def test_defaults_match_spec(self):
+        cfg = self._load()
+        assert cfg.min_prediction_times_per_subject == 50
+        assert cfg.max_workers is None
+        assert cfg.training_task_artifacts_dir is None
+        assert cfg.path_to_data is None
+        assert cfg.training_tasks_dir is None
+        assert cfg.duration_distribution == "log-uniform"
+
+    def test_legacy_keys_are_gone(self):
+        cfg = self._load()
+        # Superseded knobs must not leak into the redesign surface.
+        for legacy in ("min_context_per_subject", "num_workers", "num_codes", "n_tasks"):
+            assert legacy not in cfg
