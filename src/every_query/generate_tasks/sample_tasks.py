@@ -776,18 +776,6 @@ def _split_shards(path_to_data: Path, split: str) -> list[str]:
     return sorted(p.stem for p in split_dir.glob("*.parquet"))
 
 
-def _map_partition_row_count(training_task_artifacts_dir: Path, split: str, shards: list[str]) -> int:
-    """Total rows across the ``_prediction_times/`` partitions for the given ``shards``.
-
-    Uses a lazy scan + ``select(pl.len())`` so only parquet metadata is touched, not the row data.
-    """
-    total = 0
-    for shard in shards:
-        fp = prediction_times_path(training_task_artifacts_dir, split, shard)
-        total += int(pl.scan_parquet(fp).select(pl.len()).collect().item())
-    return total
-
-
 def _prediction_time_cache_valid(
     training_task_artifacts_dir: Path,
     split: str,
@@ -795,12 +783,15 @@ def _prediction_time_cache_valid(
 ) -> bool:
     """True iff the cached Stage 0 artifacts are reusable for this ``(split, min)``.
 
+    The sidecar is written last as the commit marker and is treated as *authoritative*: rather than
+    re-scanning the ``subject_id`` column across every ``_prediction_times/`` partition, validation
+    cross-checks the cheap counts parquet against the subject/row totals recorded in the sidecar.
+
     Reuse requires *all* of:
     - the sidecar exists, parses, and its recorded ``min`` matches the requested ``min``;
-    - the counts parquet and every map partition named in the sidecar exist;
-    - the row-count identity holds (``sum(n_prediction_times)`` over the counts equals the total
-      number of rows across the map partitions, and the counts row count equals the number of
-      distinct subjects in the map).
+    - the counts parquet exists and every map partition named in the sidecar exists;
+    - the counts parquet agrees with the sidecar totals: ``counts.height == meta["n_subjects"]`` and
+      ``sum(n_prediction_times) == meta["n_prediction_time_rows"]``.
 
     Any mismatch means the sidecar is stale/corrupt relative to ``_prediction_times/`` and Stage 0
     must rebuild.  Read-only: never writes or deletes.
@@ -824,18 +815,9 @@ def _prediction_time_cache_valid(
         return False
 
     counts = pl.read_parquet(counts_fp)
-    map_rows = _map_partition_row_count(training_task_artifacts_dir, split, shards)
-    if int(counts["n_prediction_times"].sum()) != map_rows:
+    if counts.height != meta.get("n_subjects"):
         return False
-    return counts.height == _distinct_subjects_in_map(training_task_artifacts_dir, split, shards)
-
-
-def _distinct_subjects_in_map(training_task_artifacts_dir: Path, split: str, shards: list[str]) -> int:
-    """Number of distinct ``subject_id``s across the ``_prediction_times/`` partitions."""
-    if not shards:
-        return 0
-    fps = [str(prediction_times_path(training_task_artifacts_dir, split, s)) for s in shards]
-    return int(pl.scan_parquet(fps).select(pl.col("subject_id").n_unique()).collect().item())
+    return int(counts["n_prediction_times"].sum()) == meta.get("n_prediction_time_rows")
 
 
 def build_prediction_times(
@@ -941,12 +923,16 @@ def build_prediction_times(
     )
 
     # Sidecar last = commit marker. Only shards that survived the eligibility filter have partitions.
+    # ``n_subjects``/``n_prediction_time_rows`` make the sidecar authoritative for cache validation,
+    # so reuse never re-scans the subject_id column across the map partitions.
     written_shards = sorted(eligible["shard"].unique().to_list())
     _atomic_write_json(
         {
             "min_prediction_times_per_subject": min_prediction_times_per_subject,
             "split": split,
             "shards": written_shards,
+            "n_subjects": eligible.height,
+            "n_prediction_time_rows": prediction_times.height,
         },
         prediction_times_meta_path(training_task_artifacts_dir, split),
     )
