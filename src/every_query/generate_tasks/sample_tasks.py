@@ -880,6 +880,7 @@ def build_prediction_times(
             f"No shards found under {path_to_data / 'data' / split}; expected {{i}}.parquet files."
         )
 
+    # distinct columns: (subject_id, time, shard) -- one row per distinct (subject_id, time).
     distinct = pl.concat(
         [
             _read_prediction_time_shard(path_to_data / "data" / split / f"{shard}.parquet", shard)
@@ -891,10 +892,12 @@ def build_prediction_times(
 
     # Gapless zero-based index over each subject's ascending distinct times.  No within-subject ties
     # (step above deduped), so int_range is identical to a dense rank and cheaper (invariant 2).
+    # prediction_times columns: (subject_id, time, shard, prediction_time_index).
     prediction_times = distinct.sort(["subject_id", "time"]).with_columns(
         pl.int_range(pl.len()).over("subject_id").alias("prediction_time_index")
     )
 
+    # counts columns: (subject_id, shard, n_prediction_times) -- one row per subject.
     counts = prediction_times.group_by("subject_id").agg(
         pl.col("shard").first(),
         pl.len().alias("n_prediction_times"),
@@ -904,6 +907,7 @@ def build_prediction_times(
         "subject_id"
     )
 
+    # keep only the prediction_times rows whose subject_id appears in eligible, dropping the rest
     prediction_times = prediction_times.join(
         eligible.select("subject_id"),
         on="subject_id",
@@ -915,6 +919,8 @@ def build_prediction_times(
     if map_dir.exists():
         shutil.rmtree(map_dir)
 
+    # Write one prediction_time index parquet per shard, mirroring the source shard layout so each output
+    # partition lines up with its input shard.
     for shard, part in prediction_times.group_by("shard"):
         shard_name = shard[0] if isinstance(shard, tuple) else shard
         _atomic_write_parquet(
