@@ -192,8 +192,7 @@ class QueryDistribution:
         selected_codes = codes[code_indices]
 
         return [
-            QuerySpec(code=c, duration_days=float(d))
-            for c, d in zip(selected_codes, durations)
+            QuerySpec(code=c, duration_days=float(d)) for c, d in zip(selected_codes, durations, strict=True)
         ]
 
 
