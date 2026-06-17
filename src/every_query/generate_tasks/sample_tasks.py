@@ -571,6 +571,57 @@ def _resolve_path(cfg_value: str | None, env_var: str, name: str) -> Path:
     )
 
 
+# ---------------------------------------------------------------------------
+# Redesign (issue #203): config & path resolution for the 5-stage sampler
+# ---------------------------------------------------------------------------
+#
+# These helpers establish the redesign's input surface (see ``redesign-spec.md``); the legacy
+# pipeline above is untouched and the eventual ``main`` cutover lands with the stage issues
+# (#205-#210).  Kept as pure path functions (no file I/O, no dir creation) so they are unit-testable
+# without a Hydra run — same rationale as ``_resolve_path``.
+
+
+def default_artifacts_dir(training_tasks_dir: Path) -> Path:
+    """Return the sibling intermediate-artifacts root for ``training_tasks_dir``.
+
+    ``training_task_artifacts_dir`` defaults to ``{parent}/{name}_artifacts`` — a *sibling* of the
+    final-output root, never a child — so the final-output and intermediate trees stay disjoint and
+    never-nested (spec invariant 7) and ``rm -rf`` of either cannot touch the other.
+
+    Examples:
+        >>> default_artifacts_dir(Path("/x/y/tasks"))
+        PosixPath('/x/y/tasks_artifacts')
+    """
+    return training_tasks_dir.parent / f"{training_tasks_dir.name}_artifacts"
+
+
+def resolve_training_task_paths() -> tuple[Path, Path, Path]:
+    """Resolve the redesigned sampler's three path roots from env vars only.
+
+    These roots are intentionally *not* config keys: they are machine-specific and live in ``.env``
+    (loaded by ``main`` via ``load_dotenv()``), so there is no CLI/config override to reason about.
+
+    - ``path_to_data`` — MEDS dataset root; read from ``$INTERMEDIATE``.
+    - ``training_tasks_dir`` — final-output-only root; read from ``$TRAINING_TASKS_DIR`` (the user
+      exports this before invoking).
+    - ``training_task_artifacts_dir`` — intermediate-artifacts root.  Has no env var of its own: it
+      is always :func:`default_artifacts_dir` (the ``{name}_artifacts`` sibling of
+      ``training_tasks_dir``), which keeps the two output trees disjoint and never-nested by
+      construction (spec invariant 7).
+
+    Both required roots go through :func:`_resolve_path`, which raises a clear message when the env
+    var is unset.
+
+    Returns:
+        ``(path_to_data, training_tasks_dir, training_task_artifacts_dir)`` as ``Path``s.
+    """
+    path_to_data = _resolve_path(None, "INTERMEDIATE", "path_to_data")
+    training_tasks_dir = _resolve_path(None, "TRAINING_TASKS_DIR", "training_tasks_dir")
+    training_task_artifacts_dir = default_artifacts_dir(training_tasks_dir)
+
+    return path_to_data, training_tasks_dir, training_task_artifacts_dir
+
+
 CONFIGS = str(files("every_query") / "generate_tasks" / "configs")
 
 

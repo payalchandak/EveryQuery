@@ -1,0 +1,45 @@
+# Hydra config for the redesigned training-task sampler (5-stage pipeline; see
+# `redesign-spec.md`).  This is the redesign's input surface (issue #203) and is wired in by the
+# later stage issues (#205-#210); the legacy per-worker config lives in `sample_tasks_config.yaml`.
+#
+# Path roots are NOT config keys: they are machine-specific and resolved inside `main()` from env
+# vars only (via `load_dotenv()`), matching the repo convention where `.env` holds machine paths.
+#   path_to_data        <- $INTERMEDIATE        (event shards under `{path_to_data}/data/{split}/*.parquet`)
+#   training_tasks_dir  <- $TRAINING_TASKS_DIR  (final dataset only: `{split}/{shard}.parquet`)
+# Both env vars are required; `main()` raises if either is unset.  The intermediate-artifacts root
+# has no env var: it is always the sibling `{parent}/{name}_artifacts` of training_tasks_dir, so the
+# two trees never nest (invariant 7).
+
+# Sampling budget.
+num_queries: 1024
+num_contexts_per_query: 1
+
+# Minimum prior *prediction times* (distinct (subject_id, time) rows, NOT events) required before
+# a prediction time is eligible.  Governs Stage 0 eligibility and the Stage 2 draw range.
+# Supersedes the legacy event-based `min_context_per_subject`.
+min_prediction_times_per_subject: 50
+
+# Optional cap on the Stage 4 worker pool; null => resolve_workers() uses cores-on-node, an
+# explicit int caps that result downward only.  Supersedes the legacy `num_workers` knob.
+max_workers: null
+
+# Query-code sampling universe.  Leave null to load the full vocabulary from
+# `$PROCESSED/metadata/codes.parquet`, or pass an explicit Hydra list (`query_codes=[HR,TEMP]`)
+# or a YAML/parquet path.  Resolved by `read_query_codes` outside `QueryDistribution`.
+query_codes: null
+
+# Duration draw (Stage 1 / QueryDistribution).  `duration_days` is a float (no day-rounding).
+min_duration: 1
+max_duration: 731
+duration_distribution: log-uniform # uniform | log-uniform
+
+# Paths are resolved in `main()` from env vars only (see header) — not config keys.
+
+split: train
+seed: 1
+overwrite: false
+
+hydra:
+  output_subdir: null
+  job:
+    chdir: false
