@@ -363,6 +363,9 @@ with ProcessPoolExecutor(max_workers=resolve_workers()) as ex:
     for fut in as_completed(futs):
         fut.result()  # re-raise so a failed shard aborts the run loudly
 ```
+### Polars threadpool
+Each worker runs polars, which by default grabs all cores for its own threadpool. N workers each spawning a full pool gives N × cores threads and oversubscribes. The driver pins POLARS_MAX_THREADS=1 at the top of sample_tasks.py (before any polars import, so workers inherit it); with 200+ shards, process-level fan-out already saturates cores, so one polars thread per worker is correct and max_workers is sized by RAM, not cores. Keep the env line above all imports — a transitive import polars before it silently defeats the setting.
+
 
 Worker count is resolved from the environment, then optionally capped:
 
@@ -459,3 +462,6 @@ separated — Hydra for config, in-process `ProcessPoolExecutor` for parallelism
 - *Float durations.* Stage 1 keeps `duration_days` as a float (legacy quantized to whole days), so a given
   `seed` will not reproduce legacy `duration_days` or labels. Accepted: only the prediction-time space is
   held to legacy parity, not the duration draw.
+
+**Why pin POLARS_MAX_THREADS=1, not default threads.**
+ Process-level fan-out over 200+ shards already provides the parallelism; polars' intra-op threads on top only oversubscribe (num_workers × total_cores). The failure is silent (slower, never crashes), hence pinned rather than left default.**
