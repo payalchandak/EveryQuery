@@ -33,6 +33,10 @@ from every_query.generate_tasks.sample_tasks import (
     compute_max_time_per_subject,
     default_artifacts_dir,
     evaluate_index_df,
+    final_output_path,
+    index_path,
+    prediction_time_counts_path,
+    prediction_times_path,
     resolve_training_task_paths,
     run_worker,
     sample_contexts,
@@ -976,3 +980,58 @@ class TestRedesignConfigFile:
         # Superseded knobs must not leak into the redesign surface.
         for legacy in ("min_context_per_subject", "num_workers", "num_codes", "n_tasks"):
             assert legacy not in cfg
+
+
+class TestArtifactLayout:
+    """Issue #204: the two-root, never-nested on-disk layout every stage resolves against.
+
+    Pure path functions (no I/O), so they map roots+split+shard to the spec's fixed locations.  The
+    contract under test: the final-output root holds *only* ``{shard}.parquet`` while every
+    intermediate lands under the disjoint artifacts root with its ``_``-prefixed name (invariant 7).
+    """
+
+    TASKS = Path("/x/tasks")
+    ARTS = Path("/x/tasks_artifacts")
+
+    def test_final_output_path(self):
+        assert final_output_path(self.TASKS, "train", "0") == Path("/x/tasks/train/0.parquet")
+
+    def test_prediction_time_counts_path(self):
+        assert prediction_time_counts_path(self.ARTS, "train") == Path(
+            "/x/tasks_artifacts/train/_prediction_time_counts.parquet"
+        )
+
+    def test_prediction_times_path(self):
+        assert prediction_times_path(self.ARTS, "train", "0") == Path(
+            "/x/tasks_artifacts/train/_prediction_times/0.parquet"
+        )
+
+    def test_index_path(self):
+        assert index_path(self.ARTS, "train", "0") == Path("/x/tasks_artifacts/train/_index/0.parquet")
+
+    def test_final_root_split_dir_holds_only_shard_parquets(self):
+        # The final-output split dir must be directly glob-consumable as `{split}/*.parquet`: no
+        # `_`-prefixed entries (those all live under the artifacts root). Asserting on the name keeps
+        # the "nothing but {shard}.parquet" invariant auditable.
+        name = final_output_path(self.TASKS, "train", "0").name
+        assert name == "0.parquet"
+        assert not name.startswith("_")
+
+    def test_every_intermediate_is_under_the_artifacts_root_not_the_dataset(self):
+        # Invariant 7: no intermediate may resolve inside the final-output root.
+        intermediates = [
+            prediction_time_counts_path(self.ARTS, "train"),
+            prediction_times_path(self.ARTS, "train", "0"),
+            index_path(self.ARTS, "train", "0"),
+        ]
+        for p in intermediates:
+            assert self.ARTS in p.parents
+            assert self.TASKS not in p.parents
+
+    def test_default_artifacts_root_is_disjoint_so_rm_rf_cannot_touch_dataset(self):
+        # The sibling default (from #203) is what makes `rm -rf {artifacts}` safe: the artifacts root
+        # is neither equal to nor nested under the dataset root, and vice versa.
+        arts = default_artifacts_dir(self.TASKS)
+        assert arts != self.TASKS
+        assert self.TASKS not in arts.parents
+        assert arts not in self.TASKS.parents

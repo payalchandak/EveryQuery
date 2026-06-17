@@ -462,7 +462,15 @@ def _unique_tmp_path(fp: Path) -> Path:
 
 
 def _atomic_write_parquet(df: pl.DataFrame, fp: Path) -> None:
-    """Write ``df`` to ``fp`` atomically via a unique sibling tmpfile + ``os.replace``."""
+    """Write ``df`` to ``fp`` atomically via a unique sibling tmpfile + ``os.replace``.
+
+    The temp is always a *sibling* of ``fp`` (``_unique_tmp_path`` uses ``dir=fp.parent``) because
+    ``os.replace`` requires the temp and the final path to share a filesystem.  This is the spec's
+    one exception to the two-root layout (invariant 7): when Stage 4 writes a
+    :func:`final_output_path`, the hidden ``.{shard}.parquet.tmp.*`` temp lands in the final-output
+    split dir, not the artifacts root (which may be a different mount).  It is hidden and does not
+    end in ``.parquet``, so a ``{split}/*.parquet`` glob of the final root never sees it.
+    """
     tmp = _unique_tmp_path(fp)
     try:
         df.write_parquet(tmp)
@@ -620,6 +628,77 @@ def resolve_training_task_paths() -> tuple[Path, Path, Path]:
     training_task_artifacts_dir = default_artifacts_dir(training_tasks_dir)
 
     return path_to_data, training_tasks_dir, training_task_artifacts_dir
+
+
+# ---------------------------------------------------------------------------
+# Redesign (issue #204): artifact layout — two disjoint, never-nested roots
+# ---------------------------------------------------------------------------
+#
+# Every redesigned stage reads/writes against exactly two roots (spec invariant 7):
+#
+#   training_tasks_dir/{split}/{shard}.parquet            <- final outputs ONLY (Stage 4)
+#   training_task_artifacts_dir/{split}/                  <- all intermediates
+#       _prediction_time_counts.parquet                   <- Stage 0 summary
+#       _prediction_times/{shard}.parquet                 <- Stage 0 map
+#       _index/{shard}.parquet                            <- Stage 3 index
+#
+# The two roots are disjoint and never nested (guaranteed by ``default_artifacts_dir``'s sibling
+# rule), so cleanup is a single ``rm -rf`` of the artifacts root that *cannot* touch the dataset —
+# no bespoke cleanup helper needed.  These are pure path functions (no I/O, no mkdir) — the writing
+# stages create parents at write time via the atomic helpers, same as the legacy pipeline.
+#
+# The intermediate entry names are ``_``-prefixed and centralized here so (a) Stages 0/3 and any
+# consumer resolve identical paths with no string drift and (b) the "final root holds nothing but
+# {shard}.parquet" invariant stays auditable from one place.
+
+PREDICTION_TIME_COUNTS_NAME = "_prediction_time_counts.parquet"
+PREDICTION_TIMES_DIRNAME = "_prediction_times"
+INDEX_DIRNAME = "_index"
+
+
+def final_output_path(training_tasks_dir: Path, split: str, shard: str) -> Path:
+    """Stage 4 final per-shard output: ``training_tasks_dir/{split}/{shard}.parquet``.
+
+    The final-output root holds **nothing but** these files at rest — no ``_``-prefixed entries —
+    so its split dir is directly glob-consumable as ``{split}/*.parquet`` (spec invariant 7).  The
+    only transient siblings are Stage 4's hidden atomic-write temps, which exist solely mid-write;
+    see :func:`_atomic_write_parquet`.
+
+    Examples:
+        >>> final_output_path(Path("/x/tasks"), "train", "0")
+        PosixPath('/x/tasks/train/0.parquet')
+    """
+    return training_tasks_dir / split / f"{shard}.parquet"
+
+
+def prediction_time_counts_path(training_task_artifacts_dir: Path, split: str) -> Path:
+    """Stage 0 subject-level summary: ``{artifacts}/{split}/_prediction_time_counts.parquet``.
+
+    Examples:
+        >>> prediction_time_counts_path(Path("/x/tasks_artifacts"), "train")
+        PosixPath('/x/tasks_artifacts/train/_prediction_time_counts.parquet')
+    """
+    return training_task_artifacts_dir / split / PREDICTION_TIME_COUNTS_NAME
+
+
+def prediction_times_path(training_task_artifacts_dir: Path, split: str, shard: str) -> Path:
+    """Stage 0 canonical map partition: ``{artifacts}/{split}/_prediction_times/{shard}.parquet``.
+
+    Examples:
+        >>> prediction_times_path(Path("/x/tasks_artifacts"), "train", "0")
+        PosixPath('/x/tasks_artifacts/train/_prediction_times/0.parquet')
+    """
+    return training_task_artifacts_dir / split / PREDICTION_TIMES_DIRNAME / f"{shard}.parquet"
+
+
+def index_path(training_task_artifacts_dir: Path, split: str, shard: str) -> Path:
+    """Stage 3 partitioned index: ``{artifacts}/{split}/_index/{shard}.parquet``.
+
+    Examples:
+        >>> index_path(Path("/x/tasks_artifacts"), "train", "0")
+        PosixPath('/x/tasks_artifacts/train/_index/0.parquet')
+    """
+    return training_task_artifacts_dir / split / INDEX_DIRNAME / f"{shard}.parquet"
 
 
 CONFIGS = str(files("every_query") / "generate_tasks" / "configs")
