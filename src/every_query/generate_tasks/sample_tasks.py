@@ -56,6 +56,146 @@ class TaskSpec:
     duration_days: int
 
 
+@dataclass(frozen=True)
+class QuerySpec:
+    """A single sampled query: one code and one float prediction-window duration (in days).
+
+    The redesign's Stage 1 output (see ``redesign-spec.md``).  Unlike the legacy :class:`TaskSpec`,
+    ``duration_days`` is a **float** — durations are not rounded to whole days.
+    """
+
+    code: str
+    duration_days: float
+
+
+@dataclass(frozen=True)
+class QueryDistribution:
+    """The Stage 1 query distribution: owns both the code draw and the duration draw.
+
+    Stage 1 of the redesigned sampler is just ``query_dist.sample(num_queries, rng)``.  Code-universe
+    resolution stays **outside** this dataclass (the caller runs :func:`read_query_codes` and passes the
+    result in), so the dataclass does no file I/O.
+
+    Args:
+        query_codes: Already-resolved code universe (one code per query).  ``query_universe_size`` is
+            derived as ``len(query_codes)``.
+        min_duration: Lower duration bound in days (must be > 0).
+        max_duration: Upper duration bound in days (must be >= ``min_duration``).
+        duration_distribution: ``"uniform"`` or ``"log-uniform"``.  Log-uniform preferentially samples
+            shorter durations.
+
+    Examples:
+        >>> import numpy as np
+        >>> dist = QueryDistribution(["A", "B", "C"], min_duration=1.0, max_duration=365.0,
+        ...                          duration_distribution="log-uniform")
+        >>> dist.query_universe_size
+        3
+        >>> specs = dist.sample(5, np.random.default_rng(0))
+        >>> len(specs)
+        5
+        >>> all(s.code in {"A", "B", "C"} for s in specs)
+        True
+        >>> all(1.0 <= s.duration_days <= 365.0 for s in specs)
+        True
+
+        Durations are floats, not rounded to whole days:
+
+        >>> any(s.duration_days != round(s.duration_days) for s in specs)
+        True
+
+        Determinism — same seed yields identical output:
+
+        >>> from every_query.utils.seeds import derive_seed
+        >>> seed = derive_seed(42, "queries")
+        >>> a = dist.sample(3, np.random.default_rng(seed))
+        >>> b = dist.sample(3, np.random.default_rng(seed))
+        >>> a == b
+        True
+
+        ``num_queries=0`` is valid and returns an empty list:
+
+        >>> dist.sample(0, np.random.default_rng(0))
+        []
+    """
+
+    query_codes: list[str]
+    min_duration: float
+    max_duration: float
+    duration_distribution: str
+
+    _VALID_DISTRIBUTIONS = ("uniform", "log-uniform")
+
+    def __post_init__(self) -> None:
+        if not self.query_codes:
+            raise ValueError("query_codes must be non-empty")
+        if self.min_duration <= 0:
+            raise ValueError(
+                f"min_duration must be > 0 (got {self.min_duration}); durations must be positive days "
+                "and log-uniform needs positive bounds"
+            )
+        if self.max_duration < self.min_duration:
+            raise ValueError(
+                f"max_duration ({self.max_duration}) must be >= min_duration ({self.min_duration})"
+            )
+        if self.duration_distribution not in self._VALID_DISTRIBUTIONS:
+            raise ValueError(
+                f"duration_distribution must be one of {self._VALID_DISTRIBUTIONS} "
+                f"(got {self.duration_distribution!r})"
+            )
+
+    @property
+    def query_universe_size(self) -> int:
+        """Number of distinct query codes (``len(query_codes)``)."""
+        return len(self.query_codes)
+
+    @classmethod
+    def from_config(cls, cfg: DictConfig, query_codes: list[str]) -> "QueryDistribution":
+        """Build from a Hydra config plus a caller-resolved ``query_codes`` list.
+
+        Reads ``min_duration``, ``max_duration``, and ``duration_distribution`` from ``cfg``.  Code
+        resolution via :func:`read_query_codes` stays outside this dataclass (no file I/O here).
+        """
+        return cls(
+            query_codes=query_codes,
+            min_duration=float(cfg.min_duration),
+            max_duration=float(cfg.max_duration),
+            duration_distribution=str(cfg.duration_distribution),
+        )
+
+    def sample(self, num_queries: int, rng: np.random.Generator) -> list[QuerySpec]:
+        """Draw ``num_queries`` iid :class:`QuerySpec` s.
+
+        Codes are uniform over ``[0, query_universe_size)``; durations are drawn over
+        ``[min_duration, max_duration]`` per ``duration_distribution`` as **floats** (no rounding).
+
+        The caller owns the ``rng`` and its seed — for the redesign, seed the query axis via
+        ``np.random.default_rng(derive_seed(seed, "queries"))``.  Draws happen in a fixed order (codes
+        then durations) so output is deterministic for a fixed ``rng``.
+
+        Raises:
+            ValueError: If ``num_queries < 0``.
+        """
+        if num_queries < 0:
+            raise ValueError(f"num_queries must be >= 0 (got {num_queries})")
+        if num_queries == 0:
+            return []
+
+        code_indices = rng.integers(0, self.query_universe_size, size=num_queries)
+        if self.duration_distribution == "log-uniform":
+            durations = np.exp(
+                rng.uniform(np.log(self.min_duration), np.log(self.max_duration), size=num_queries)
+            )
+        else:  # "uniform"
+            durations = rng.uniform(self.min_duration, self.max_duration, size=num_queries)
+
+        codes = np.array(self.query_codes, dtype=object)
+        selected_codes = codes[code_indices]
+
+        return [
+            QuerySpec(code=c, duration_days=float(d)) for c, d in zip(selected_codes, durations, strict=True)
+        ]
+
+
 # ---------------------------------------------------------------------------
 # Pure primitives
 # ---------------------------------------------------------------------------
