@@ -198,8 +198,13 @@ re-sampling or re-resolving.
   2. Concatenate across shards, then enforce invariant 4:
      `group_by("subject_id").n_unique("shard")` — any count `> 1` **raises**, listing the offending
      `subject_id`s and their shards. Hard error, no warning.
-  3. Per subject, sort distinct timestamps ascending and assign a dense rank → `prediction_time_index`.
-     This is the canonical `_prediction_times/` map.
+  3. Per subject, sort distinct timestamps ascending and assign a **contiguous zero-based index** →
+     `prediction_time_index` (`pl.int_range(pl.len()).over("subject_id")` over the sorted distinct times).
+     Because step 1 already deduped to distinct `(subject_id, time)` rows, there are no within-subject
+     ties, so this positional index is identical to a dense rank — use `int_range`/row-number, not an
+     actual `.rank("dense")` (cheaper, same result). What matters is the gapless `[0, n)` property that
+     Stage 2's array-bounded `rng.integers` draw relies on (invariant 2). This is the canonical
+     `_prediction_times/` map.
   4. **Derive `_prediction_time_counts` from `_prediction_times/`:** per subject, take its `shard` and
      `n_prediction_times` = the per-subject row count in `_prediction_times/`.
   5. Filter both tables to the eligibility condition above, then sort `_prediction_time_counts` by `subject_id`. The
@@ -277,6 +282,8 @@ A patient context is a `(subject_idx, prediction_time_index)` pair; the timestam
   4. Align to `TaskQuerySchema` and write atomically (see below).
 - **Parallelism:** group by shard, one fully-independent worker per shard (own index partition + payload,
   own output file) — embarrassingly parallel. See *Orchestration & parallelism*.
+- After Stage 4, assert the union row count equals `num_queries * num_contexts_per_query`
+
 
 #### Labeling rule
 
