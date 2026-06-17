@@ -188,9 +188,12 @@ class QueryDistribution:
         else:  # "uniform"
             durations = rng.uniform(self.min_duration, self.max_duration, size=num_queries)
 
+        codes = np.array(self.query_codes, dtype=object)
+        selected_codes = codes[code_indices]
+
         return [
-            QuerySpec(code=self.query_codes[int(code_indices[i])], duration_days=float(durations[i]))
-            for i in range(num_queries)
+            QuerySpec(code=c, duration_days=float(d))
+            for c, d in zip(selected_codes, durations)
         ]
 
 
