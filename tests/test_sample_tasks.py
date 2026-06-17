@@ -1041,8 +1041,11 @@ class TestArtifactLayout:
 
 
 def _subject_events(subject_id: int, n_times: int, *, base: datetime, dups: int = 1) -> pl.DataFrame:
-    """``n_times`` distinct ``(subject_id, time)`` rows, each emitted ``dups`` times (same time, diff
-    code) so Stage 0's distinct-time dedup is exercised. Times are 1 day apart starting at ``base``."""
+    """``n_times`` distinct ``(subject_id, time)`` rows, each emitted ``dups`` times (same time, diff code) so
+    Stage 0's distinct-time dedup is exercised.
+
+    Times are 1 day apart starting at ``base``.
+    """
     rows = [
         {"subject_id": subject_id, "time": base + timedelta(days=i), "code": f"ICD//{d:02d}"}
         for i in range(n_times)
@@ -1054,8 +1057,8 @@ def _subject_events(subject_id: int, n_times: int, *, base: datetime, dups: int 
 def _write_split_shards(
     tmp_path: Path, shard_to_events: dict[str, pl.DataFrame], split: str = "train"
 ) -> Path:
-    """Write ``{shard: events}`` to ``tmp_path/intermediate/data/{split}/{shard}.parquet``; return
-    the ``path_to_data`` root."""
+    """Write ``{shard: events}`` to ``tmp_path/intermediate/data/{split}/{shard}.parquet``; return the
+    ``path_to_data`` root."""
     data_dir = tmp_path / "intermediate"
     split_dir = data_dir / "data" / split
     split_dir.mkdir(parents=True, exist_ok=True)
