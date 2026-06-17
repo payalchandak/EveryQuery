@@ -1,15 +1,28 @@
 # Training task sampler redesign
 
+## Pipeline overview
+
+```
+Stage 0  build _prediction_time_counts and _prediction_times (scan shards once, cache)
+Stage 1  sample queries
+Stage 2  sample (subject_idx, prediction_time_index)
+Stage 3  resolve prediction_time and write per-shard index df
+Stage 4  label each index shard independently
+```
+
+Stages 0–3 run in a single driver process; Stage 4 fans out one worker per shard.
+
 ## Pipeline
 
 ```mermaid
 flowchart TD
     subgraph driver["Global driver (single process) — Stages 0–3"]
-        S0["Stage 0 — Build & cache subject metadata<br/>scan shards (subject_id, time, code)<br/>count distinct (subject_id,time,code) events, filter eligible, sort by subject_id<br/>→ artifacts_dir/{split}/_subject_meta.parquet, patient_universe_size"]
-        S1["Stage 1 — Sample queries<br/>draw num_queries codes + float duration_days<br/>→ list[QuerySpec(code, duration_days)]"]
-        S2["Stage 2 — Sample patient contexts<br/>draw N subject_idx (with replacement)<br/>+ time_index in [min_context_per_subject, num_events)<br/>→ (subject_id, shard, time_index)"]
-        S3["Stage 3 — Zip & write partitioned index<br/>repeat queries, zip with contexts<br/>→ artifacts_dir/{split}/_index/{shard}.parquet"]
+        S0["<b>S0 — Subject metadata + prediction-time map</b><br/>scan shards, dedup (subject_id, time)<br/>dense-rank times → prediction_time_index<br/>filter eligible, sort by subject_id<br/>→ _prediction_time_counts.parquet, _prediction_times/"]
+        S1["<b>S1 — Sample queries</b><br/>draw codes + duration_days<br/>→ list[QuerySpec]"]
+        S2["<b>S2 — Sample patient contexts</b><br/>draw subject_idx + prediction_time_index<br/>→ (subject_id, shard, idx)"]
+        S3["<b>S3 — Resolve, zip & write index</b><br/>join _prediction_times → prediction_time<br/>repeat queries, zip with contexts<br/>→ _index/{shard}.parquet"]
         S0 --> S2
+        S0 --> S3
         S1 --> S3
         S2 --> S3
     end
@@ -17,111 +30,102 @@ flowchart TD
     S3 -- "Shardwise Labeling" --> S4
 
     subgraph workers["Parallelized across workers — Stage 4"]
-        S4["Stage 4 — Labeling (one worker per shard)<br/>load shard events, dedup to distinct (subject_id,time,code), sort by time<br/>resolve time_index → prediction_time<br/>label via join_asof (+1µs strict-after)<br/>→ training_tasks_dir/{split}/{shard}.parquet"]
+        S4["<b>S4 — Labeling (one worker per shard)</b><br/>load shard events + index partition<br/>compute max_time[subject_id]<br/>label via join_asof (+1µs strict-after)<br/>→ {split}/{shard}.parquet"]
     end
 
     meds[("MEDS dataset<br/>data/{split}/{i}.parquet")]
-    out[("Final dataset<br/>union of shard parquets<br/>aligned to TaskQuerySchema")]
+    out[("Final dataset<br/>union of shard parquets<br/>→ TaskQuerySchema")]
 
     meds --> S0
     meds --> S4
     S4 --> out
 ```
 
+## Core invariants
+
+These hold throughout the design; later sections reference them rather than restate them.
+
+1. **One indexing space.** Prediction times are the **distinct `(subject_id, time)` rows**, sorted
+   ascending by `(subject_id, time)` — in polars,
+   `events.select(["subject_id", "time"]).unique().sort(["subject_id", "time"])`. Every distinct event
+   time is a prediction time once the subject clears `min_prediction_times_per_subject`.
+2. **`prediction_time_index` is a zero-based dense rank** of a timestamp within its subject's sorted
+   distinct times. It equals the number of prediction times strictly before the chosen one.
+   `n_prediction_times` is the subject's count of distinct times.
+3. **Single source of truth.** The `(subject_id, prediction_time_index) → time` mapping is computed
+   **once** in Stage 0 and persisted as `_prediction_times/{shard}.parquet`. Stage 3 resolves indices to
+   timestamps by joining that map. **Stage 4 never performs index-space work** — no dedup, sort, rank,
+   or index→timestamp resolution; it receives a real `prediction_time` and labels.
+4. **Subjects may not span shards.** A subject lives in exactly one shard (Stage 4 derives
+   `max_time[subject_id]` from a single shard). Stage 0 enforces this as a hard error.
+5. **Determinism.** Distinct `(subject_id, time)` rows have no within-subject ties, so the dense rank is
+   unique and a given `seed`/`prediction_time_index` always maps to the same `prediction_time`. All draws
+   derive from `seed` with a fixed RNG consumption order (see *Determinism*).
+6. **Labels use `(prediction_time, prediction_time + duration]`** — strict lower bound (`+1µs`
+   asof), inclusive upper bound. This keeps labels leakage-safe against the loader (see Stage 4).
+7. **Separate directory trees.** Final outputs (`training_tasks_dir`) and intermediate artifacts
+   (`training_task_artifacts_dir`) live in disjoint, never-nested roots (see *Artifact layout*).
+8. **Atomic writes guarantee restartability.** Stage 4 writes via temp file + `os.replace`, so a present
+   `{shard}.parquet` is always complete and finished shards are skipped on rerun (see Stage 4).
+
+> **Leakage safety with same-`time` events.** A timestamp can carry several events (different `code`s at
+> the same `time`). The loader (`meds-torch-data`, backward `join_asof`, `time <= prediction_time`) pulls
+> all of them as *model input*. Because the label window is strictly after `prediction_time` (invariant 6),
+> a query-code occurrence at the cutoff timestamp is input, never a positive label.
+
 ## Inputs
-- `num_queries`
-- `num_contexts_per_query`
-- `min_context_per_subject` — minimum number of prior **distinct `(subject_id, time, code)` events** a
-  subject must have before an event row is eligible as a prediction time (default 50). Replaces the
-  magic `50`. **Unit is distinct `(subject_id, time, code)` event rows** — the same deduped basis the
-  legacy `cum_count`-over-events sampler counted (legacy `_read_event_shard` dedups via `.unique()`
-  before `cum_count`). See the indexing-space invariant below.
-- `QueryDistribution(query_codes, min_duration, max_duration, uniform|log-uniform)` — the full
-  generative model of a query `(code, duration_days)`. It owns **both** draws, so Stage 1 is just
-  `query_dist.sample(num_queries, rng) -> list[QuerySpec]`.
-  - `query_codes`: the code universe to sample query codes from (one code per query). Held as an
-    already-resolved `list[str]`. **Resolution stays outside the dataclass:** the caller runs
-    `read_query_codes()` (default `$PROCESSED/metadata/codes.parquet`, an explicit Hydra list, or a
-    YAML/parquet path — see `read_query_codes` in `sample_tasks.py`) and passes the result in, e.g.
-    `QueryDistribution.from_config(cfg, query_codes=read_query_codes(...))`. The dataclass holds the
-    resolved codes; it does not do file I/O. Stage 1 draws integer indices into this list, so the code
-    *strings* always come from `read_query_codes()`.
-  - `min_duration`, `max_duration`: bounds (in days) for the duration draw.
-  - `uniform|log-uniform`: duration sampling distribution.
-  - `query_universe_size` is **derived** as `len(query_codes)`, not supplied separately. (No
-    `num_codes` knob — the code universe and its size both come from `query_codes`.)
-- `max_workers` — **optional** (Hydra config key, default `null`/`None`) explicit cap on the number of
-  parallel Stage 4 labeling processes. When `null`, the pool defaults to cores-on-node
-  (`resolve_workers()`); when set, it caps that result **downward only** (`min(cores, max_workers)`),
-  never above the available cores. Set this when a run OOMs (see *Orchestration & parallelism*). This
-  supersedes the older `num_workers` knob for Stage 4 sizing.
-- `path_to_data` which points at a MEDS dataset s.t. `path_to_data/data/{train,tuning,test}/{i}.parquet`
-- `split`
-- `training_tasks_dir` — **final-output-only** root. After a run completes it contains **nothing but**
-  the split dirs and their shard outputs: `training_tasks_dir/{split}/{shard}.parquet`. No metadata,
-  no index, no scratch (the only transient files are the same-dir atomic-write temps in Stage 4, which
-  exist only mid-write and are renamed away — see *Artifact layout* and Stage 4).
-- `training_task_artifacts_dir` — **optional** (Hydra config key, default
-  `null`/`None`). Root for all **intermediate** pipeline artifacts: the Stage 0 `_subject_meta.parquet`
-  cache and the Stage 3 partitioned `_index/`. Keeping these out of `training_tasks_dir` is what lets
-  that directory hold only `{split}/{shard}.parquet`. When `null` it defaults to a **sibling** of
-  `training_tasks_dir` — `{training_tasks_dir.parent}/{training_tasks_dir.name}_artifacts` — so the two
-  trees never nest (a nested `_artifacts` under `training_tasks_dir` would reintroduce the very
-  non-split entries we are separating out). See *Artifact layout* below.
-- `seed` — top-level seed; all random draws derive from it (see Determinism).
 
-> `patient_universe_size` and the per-subject `num_events` are **computed-and-cached** by the
-> pipeline (see Stage 0), not supplied by the caller. They are derived from the split's shards. There
-> is no separate `subject_id`→`num_events` map: `num_events` is a **column of the Stage 0
-> `_subject_meta` table**, and `subject_idx` is that table's **row position** (after the
-> `subject_id`-sort), so Stage 2 gathers `num_events[subject_idx]` by row index, not by a dict lookup.
+| Input | Meaning |
+| --- | --- |
+| `num_queries` | number of queries to sample |
+| `num_contexts_per_query` | contexts drawn per query |
+| `min_prediction_times_per_subject` | minimum prior **prediction times** (distinct `(subject_id, time)` rows, not events) required before a prediction time is eligible. Default 50. Governs Stage 0 eligibility and the Stage 2 draw range. |
+| `QueryDistribution` | generative model of a query `(code, duration_days)`; owns both draws (see below) |
+| `max_workers` | optional cap on Stage 4 worker count; caps `resolve_workers()` downward only |
+| `path_to_data` | MEDS dataset root, with `path_to_data/data/{train,tuning,test}/{i}.parquet` |
+| `split` | split to process |
+| `training_tasks_dir` | final-output-only root (see *Artifact layout*) |
+| `training_task_artifacts_dir` | optional intermediate-artifact root (see *Artifact layout*) |
+| `seed` | top-level seed; all draws derive from it |
 
-> **Indexing-space invariant (read before Stages 0/2/4).** There is exactly **one** indexing space
-> for prediction times: a subject's **distinct `(subject_id, time, code)` event rows, sorted ascending
-> by `(subject_id, time)`** (subject first so each subject's rows are contiguous and its `time_index`-th
-> row is well-defined — a shard holds many subjects). "Distinct" means the same dedup the legacy
-> sampler applied: legacy `_read_event_shard` does `.unique()` over `(subject_id, time, code)` before
-> `sample_contexts` runs `cum_count`, so `num_events` counts **distinct** `(subject_id, time, code)`
-> tuples, not raw on-disk rows. In polars this is
-> `events.select(["subject_id", "time", "code"]).unique().sort(["subject_id", "time"])`. Stage 0 counts
-> these distinct rows (`num_events`), Stage 2 draws `time_index` within that count, and Stage 4 resolves
-> `time_index → prediction_time` against the very same deduped-and-sorted sequence — `prediction_time`
-> is the `time` of the `time_index`-th distinct row, **not** an index into unique timestamps. The two
-> spaces **must be identical**: counting distinct events in Stage 0 while resolving against raw or
-> unique-by-time rows in Stage 4 would let a drawn `time_index` exceed the count (out of range) or
-> denote a different amount of history than intended. The distinct-`(subject_id, time, code)` count is
-> the same *basis* the legacy `cum_count`-over-deduped-events sampler used; the eligibility *boundary*
-> (Stage 2's `low`) is defined for clean semantics and is not held to legacy parity (see Stage 2).
->
-> **Determinism does not need a per-row tiebreak.** Both quantities that must be reproducible are
-> robust to how equal-`time` rows are ordered. (1) The **count** `num_events` is the number of distinct
-> `(subject_id, time, code)` tuples — order-independent by construction, so it is identical every run
-> regardless of `.unique()`'s hash-order instability. (2) The resolved **`prediction_time`** is the
-> `time` at position `time_index` in the by-`time` sort; rows that tie on `time` (distinct only in
-> `code`) all carry the *same* timestamp, so the timestamp at any position is deterministic even though
-> *which* tied row sits there is not. A given `seed`/`time_index` therefore maps to a stable
-> `prediction_time`. (No explicit `_row_idx` / `maintain_order` tiebreak is required — and none would
-> help, since `.unique()` has already discarded on-disk row order.)
->
-> **Why this is leakage-safe even though timestamps repeat.** When the `time_index`-th distinct row
-> shares its timestamp with later rows, the loader (`time <= prediction_time`) pulls all of them in as
-> *model input*, so the realized context is `>= time_index` rows. That is exactly the legacy behavior.
-> No leakage results, because the label window is **strictly after** `prediction_time` (`+1µs` asof,
-> see Stage 4): a query-code occurrence at the same timestamp as the cutoff is input, never a positive
-> label. And because the loader pulls in *all* rows at the resolved `time`, the choice of which
-> equal-`time` row is "the" `time_index`-th one only shifts the realized context by tied rows that are
-> loaded anyway — it never changes the label window.
+**`QueryDistribution(query_codes, min_duration, max_duration, uniform|log-uniform)`** — owns both the
+code draw and the duration draw, so Stage 1 is just `query_dist.sample(num_queries, rng) -> list[QuerySpec]`.
+- `query_codes`: already-resolved `list[str]` code universe (one code per query). **Resolution stays
+  outside the dataclass** — the caller runs `read_query_codes()` (default
+  `$PROCESSED/metadata/codes.parquet`, an explicit Hydra list, or a YAML/parquet path; see
+  `read_query_codes` in `sample_tasks.py`) and passes the result in, e.g.
+  `QueryDistribution.from_config(cfg, query_codes=read_query_codes(...))`. The dataclass does no file I/O.
+- `min_duration`, `max_duration`: duration bounds in days.
+- `uniform|log-uniform`: duration sampling distribution.
+- `query_universe_size` is **derived** as `len(query_codes)` (no separate `num_codes` knob).
+
+**`max_workers`** — Hydra key, default `null`. When `null`, the Stage 4 pool defaults to cores-on-node
+(`resolve_workers()`); when set, caps that result downward only (`min(cores, max_workers)`). Set it when a
+run OOMs (see *Orchestration & parallelism*). Supersedes the old `num_workers` knob.
+
+**`training_tasks_dir`** — after a run it contains **nothing but** `{split}/{shard}.parquet`. The only
+transient files are the same-dir atomic-write temps in Stage 4, present only mid-write.
+
+**`training_task_artifacts_dir`** — Hydra key, default `null`. Root for all intermediates: Stage 0's
+`_prediction_time_counts.parquet` and `_prediction_times/`, and Stage 3's `_index/`. When `null` it defaults to a
+**sibling** of `training_tasks_dir` (`{parent}/{name}_artifacts`) so the two trees never nest.
+
+> `patient_universe_size` and per-subject `n_prediction_times` are computed-and-cached by Stage 0 from the
+> split's shards, not supplied. `n_prediction_times` is a **column of `_prediction_time_counts`** and `subject_idx`
+> is that table's **row position** (after the `subject_id`-sort), so Stage 2 gathers
+> `n_prediction_times[subject_idx]` by row index, not a dict lookup.
 
 ## Outputs
-- Output shape: `(num_queries * num_contexts_per_query) x 5`, written **partitioned by shard** as
+
+- Shape `(num_queries * num_contexts_per_query) x 5`, written **partitioned by shard** as
   `training_tasks_dir/{split}/{shard}.parquet`; the final dataset is the union of the shard files.
-- Columns: `["subject_id", "prediction_time", "code", "duration_days", "boolean_value"]`
-- `boolean_value` is nullable (`null` = censored); the output is aligned to `TaskQuerySchema`
-  via `TaskQuerySchema.align()` at the write boundary.
+- Columns: `["subject_id", "prediction_time", "code", "duration_days", "boolean_value"]`.
+- `boolean_value` is nullable (`null` = censored); output is aligned to `TaskQuerySchema` via
+  `TaskQuerySchema.align()` at the write boundary.
 
 ## Artifact layout
 
-Two roots, with a hard split between **final outputs** and **intermediate artifacts**:
+Two disjoint, never-nested roots (invariant 7):
 
 ```
 training_tasks_dir/                         # final outputs ONLY
@@ -130,231 +134,205 @@ training_tasks_dir/                         # final outputs ONLY
 
 training_task_artifacts_dir/                # all intermediates (default: sibling "<name>_artifacts")
 └── {split}/
-    ├── _subject_meta.parquet               # Stage 0 cache
+    ├── _prediction_time_counts.parquet     # Stage 0: subject_id, shard, n_prediction_times
+    ├── _prediction_times/
+    │   └── {shard}.parquet                  # Stage 0 map: subject_id, prediction_time_index, time
     └── _index/
-        └── {shard}.parquet                 # Stage 3 partitioned index (Stage 4 input)
+        └── {shard}.parquet                  # Stage 3 partitioned index (carries prediction_time)
 ```
 
-`training_tasks_dir/{split}/` therefore contains **only** `{shard}.parquet` files at rest — it is
-directly consumable (glob `training_tasks_dir/{split}/*.parquet`) with no `_`-prefixed entries to
-filter out. The two roots are kept **disjoint, never nested**, so cleaning up scratch is a single
-`rm -rf training_task_artifacts_dir` that cannot touch the dataset.
+`training_tasks_dir/{split}/` holds only `{shard}.parquet` at rest, so it is directly consumable (glob
+`*.parquet`) with no `_`-prefixed entries. Cleanup is a single `rm -rf training_task_artifacts_dir` that
+cannot touch the dataset.
 
-> **Stage 4 atomic-write temps are the one exception, and they don't violate "final-only."** The
-> `os.replace` atomicity used in Stage 4 requires the temp file to share a filesystem with its final
-> path, so the temp **must** live in `training_tasks_dir/{split}/` (a sibling of the target), not in
-> `training_task_artifacts_dir` (which may be a different mount). These temps are hidden
-> (`.{shard}.parquet.tmp.{pid}`), exist only *during* a write, and are renamed away on success or
-> swept on the next worker entry — so the directory holds only `{shard}.parquet` files between runs.
+> **Stage 4 atomic-write temps are the one exception.** `os.replace` requires the temp to share a
+> filesystem with its final path, so the temp lives in `training_tasks_dir/{split}/` (sibling of the
+> target), not in the artifacts root (possibly a different mount). Temps are hidden
+> (`.{shard}.parquet.tmp.{pid}`), exist only during a write, and are renamed away or swept on the next
+> worker entry.
 
-# Overview
+## Overview
 
-The pipeline has two phases:
+Two phases, handed off via the on-disk partitioned index:
 
-1. **Global driver (single process)** — Stages 0–3. Samples queries and patient contexts across the
-   whole split, zips them, and writes a **partitioned index** artifact. Cheap: never loads full
-   event payloads into memory, only the `subject_id` / `time` / `code` columns Stage 0 needs to dedup
-   and count.
-2. **Per-shard labeling workers (parallel)** — Stage 4. Each worker reads one shard's index
-   partition plus its event payload, resolves prediction times, labels, and writes the final
-   per-shard parquet.
+1. **Global driver (single process), Stages 0–3.** Samples queries and contexts across the split,
+   resolves each context's `prediction_time` against the Stage 0 map, zips, and writes the partitioned
+   index. Cheap: loads only `subject_id`/`time` columns, never full event payloads.
+2. **Per-shard labeling workers (parallel), Stage 4.** Each worker reads one shard's index partition
+   (which already carries the resolved `prediction_time`) plus its event payload, labels, and writes the
+   final per-shard parquet — no indexing work (invariant 3).
 
-The handoff between the two phases is the on-disk partitioned index (Stage 3 output), so the global
-sampling runs exactly once and the labeling fans out without re-sampling.
+Global sampling and index resolution run exactly once in the driver; labeling fans out without
+re-sampling or re-resolving.
 
 ## Stages
 
-### Stage 0 — Build (and cache) subject metadata
-- Input: `path_to_data`, `split`, `min_context_per_subject`
-- Output (cached at `training_task_artifacts_dir/{split}/_subject_meta.parquet`): one row per **eligible**
-  subject with columns `["subject_id", "shard", "num_events"]`, where `num_events` is the count of
-  **distinct `(subject_id, time, code)` event rows** for that subject and **eligible** means
-  `num_events >= min_context_per_subject + 1`. (The `+ 1`: a subject needs at least one event *beyond*
-  the `min_context_per_subject`-event prefix for any prediction row to have the required prior context —
-  see Stage 2's `time_index` range. A subject with exactly `min_context_per_subject` distinct events has
-  no eligible prediction time and is dropped here.)
-- Algorithm:
-    - Loop over shards `path_to_data/data/{split}/{i}.parquet`, reading `subject_id`, `time`, `code`
-      (all three are needed to dedup — counting raw rows would diverge from the legacy basis; see the
-      indexing-space invariant). For each shard dedup to distinct `(subject_id, time, code)` tuples,
-      compute the per-subject distinct-row count (`len` per `subject_id` after dedup), and record which
-      `shard` each `subject_id` belongs to.
-    - Concatenate across shards. **Fail fast on subjects split across shards:** a subject must live in
-      exactly one shard, since Stage 4 resolves `time_index → prediction_time` and computes
-      `max_time[subject_id]` from a *single* shard's events — a subject spanning shards would silently
-      truncate both. After concatenating, check that each `subject_id` maps to exactly one `shard`
-      (`group_by("subject_id").n_unique("shard")` — any count `> 1` is fatal) and **raise** listing the
-      offending `subject_id`s and their shards. This is a hard error, not a warning: there is no safe
-      default once a subject's events are partitioned.
-    - Filter to `num_events >= min_context_per_subject + 1` (one event beyond the context prefix, so
-      Stage 2's `[min_context_per_subject, num_events)` draw is non-empty).
-    - Sort by `subject_id` to give a **stable, deterministic global ordering**. The row position in
-      this sorted table is the `subject_idx` used by Stage 2.
-- `patient_universe_size` = number of rows in this table (count of eligible subjects).
-- Threshold unit is **distinct `(subject_id, time, code)` event count** — the same space Stage 4 indexes
-  into (see the indexing-space invariant above), not raw on-disk row count.
-- Caching: if the metadata file already exists for this `(split, min_context_per_subject)`, reuse it
-  so reruns don't re-scan every shard.
+### Stage 0 — Build (and cache) the prediction-time map + a derived subject-metadata summary
+
+- **Input:** `path_to_data`, `split`, `min_prediction_times_per_subject`.
+- **Outputs** (both cached under `training_task_artifacts_dir/{split}/`):
+  - `_prediction_times/{shard}.parquet` — **the canonical Stage 0 artifact.** One row per eligible
+    `(subject_id, distinct time)`: `["subject_id", "prediction_time_index", "time"]`. It holds the complete
+    `(subject_id, prediction_time_index) → time` mapping and is the single source of truth for
+    prediction-time indexing (invariant 3).
+  - `_prediction_time_counts.parquet` — a **cached subject-level summary derived from `_prediction_times/`**, one row
+    per eligible subject: `["subject_id", "shard", "n_prediction_times"]`. It carries no information not
+    already in `_prediction_times/`; it exists only to make Stage 2 sampling inexpensive (so Stage 2 can
+    gather per-subject `n_prediction_times` and `subject_idx` without scanning the full map).
+
+> `_prediction_times/` is the canonical Stage 0 artifact and the single source of truth for
+> prediction-time indexing. `_prediction_time_counts.parquet` is a cached subject-level summary derived from
+> `_prediction_times/`; it exists only to make Stage 2 sampling inexpensive. The two are **not** independent
+> sources of truth. By construction
+> ```
+> n_prediction_times(subject_id) = count of rows for that subject in _prediction_times/
+> ```
+> so any disagreement between `_prediction_time_counts.parquet` and `_prediction_times/` means `_prediction_time_counts.parquet`
+> is **stale or corrupt** and must be rebuilt from `_prediction_times/`.
+
+- **Eligibility:** `n_prediction_times >= min_prediction_times_per_subject + 1`. The `+1` guarantees at
+  least one prediction time beyond the prefix, so Stage 2's draw range is non-empty.
+- **Algorithm:**
+  1. Loop over shards `path_to_data/data/{split}/{i}.parquet`, reading only `subject_id`, `time`. Per
+     shard, dedup to distinct `(subject_id, time)`; record each `subject_id`'s `shard`.
+  2. Concatenate across shards, then enforce invariant 4:
+     `group_by("subject_id").n_unique("shard")` — any count `> 1` **raises**, listing the offending
+     `subject_id`s and their shards. Hard error, no warning.
+  3. Per subject, sort distinct timestamps ascending and assign a dense rank → `prediction_time_index`.
+     This is the canonical `_prediction_times/` map.
+  4. **Derive `_prediction_time_counts` from `_prediction_times/`:** per subject, take its `shard` and
+     `n_prediction_times` = the per-subject row count in `_prediction_times/`.
+  5. Filter both tables to the eligibility condition above, then sort `_prediction_time_counts` by `subject_id`. The
+     row position in this sorted table is `subject_idx`.
+- `patient_universe_size` = number of rows in `_prediction_time_counts` (equivalently, eligible subjects in
+  `_prediction_times/`).
+- **Caching:** if both artifacts exist for this `(split, min_prediction_times_per_subject)`, reuse them;
+  `_prediction_time_counts.parquet` is only valid as long as it agrees with `_prediction_times/` (see the row-count
+  identity above).
 
 ### Stage 1 — Sample `num_queries` queries
-- Input: `QueryDistribution` (carries the resolved `query_codes`, so
-  `query_universe_size = len(query_dist.query_codes)`, plus the duration params), `num_queries`,
-  `seed` (the query draws derive from `derive_seed(seed, "queries")` — see Determinism)
-- Output: `list[QuerySpec(code: str, duration_days: float)]`
-- Algorithm (`query_dist.sample(num_queries, rng)` owns the whole draw):
-    - Sample `num_queries` code indices uniformly over `[0, query_universe_size)` and map each index
-      back to its code string via `query_codes[idx]`.
-    - Sample `num_queries` `duration_days` from the configured distribution (`uniform` or
-      `log-uniform`) over `[min_duration, max_duration]`. **`duration_days` is a float** (no rounding
-      to whole days).
-    - Zip into a list of `QuerySpec`.
-- Note: reuses the draw logic from `sample_tasks()`, dropping the integer-rounding/clip step so the
-  durations stay float.
 
-### Stage 2 — Sample `(num_queries * num_contexts_per_query)` patient contexts
-- A patient context is a `(subject_idx, time_index)` pair (the actual `prediction_time` is resolved
-  later, in Stage 4 — see note).
-- Input: `patient_universe_size`, the Stage 0 `_subject_meta` table (columns
-  `["subject_id", "shard", "num_events"]`, row position = `subject_idx`),
-  `num_queries * num_contexts_per_query`, `min_context_per_subject`, `seed`
-- Algorithm (a **single** `rng = default_rng(derive_seed(seed, "contexts"))` stream, consumed in a
-  fixed order — all `subject_idx` first, then all `time_index` — so a given `seed` is reproducible):
-    - **Step A — subject indices.** Draw `N = num_queries * num_contexts_per_query` subject indices:
-      `subject_idx = rng.integers(0, patient_universe_size, size=N)` (**with replacement** — `N`
-      typically exceeds the eligible universe, and iid-ness matters more than coverage; exact
-      duplicate rows are allowed). Each `subject_idx` maps to a `subject_id` and its `shard` via the
-      Stage 0 table.
-    - **Step B — time indices (vectorized, array-bounded).** Draw all `N` `time_index` values in one
-      vectorized call with a **per-row upper bound**:
-      `time_index = rng.integers(low=min_context_per_subject, high=num_events[subject_idx])`, where
-      `num_events[subject_idx]` is the length-`N` array obtained by gathering the Stage 0 `num_events`
-      column at the drawn `subject_idx` (NumPy's `Generator.integers` accepts an array `high` and draws
-      one integer per row, in row order). This fixes RNG consumption to exactly one draw per context
-      row regardless of the per-subject bounds — do **not** loop per subject or group by subject (group
-      iteration order is not pinned) and do **not** scale floats (introduces rounding bias). `time_index`
-      is a **zero-based** index into the subject's distinct `(subject_id, time, code)` event rows (in
-      `(subject_id, time)`-sorted order), so it equals the number of distinct events **strictly before**
-      the prediction row. `low = min_context_per_subject` therefore enforces "at least
-      `min_context_per_subject` prior distinct events": e.g. with the default `50`, the smallest draw
-      `time_index = 50` selects the row at zero-based position 50 — the subject's **51st** distinct event,
-      with exactly **50** distinct events before it as context. Stage 0's
-      `num_events >= min_context_per_subject + 1` filter guarantees the half-open range
-      `[min_context_per_subject, num_events)` is non-empty for every eligible subject (worst case
-      `num_events == min_context_per_subject + 1` → the single candidate at position
-      `min_context_per_subject`), and because the upper bound is the same distinct-event count Stage 4
-      resolves against, every drawn `time_index` is guaranteed in-range there.
-- Output: a list/frame of length `N` with `(subject_id, shard, time_index)`.
-- `time_index` is zero-based throughout this design
+- **Input:** `QueryDistribution` (resolved `query_codes` + duration params), `num_queries`, RNG seeded by
+  `derive_seed(seed, "queries")`.
+- **Output:** `list[QuerySpec(code: str, duration_days: float)]`.
+- **Algorithm** (`query_dist.sample(num_queries, rng)` owns the whole draw):
+  - Draw `num_queries` code indices uniformly over `[0, query_universe_size)`; map via `query_codes[idx]`.
+  - Draw `num_queries` `duration_days` from the configured distribution over `[min_duration, max_duration]`.
+    **`duration_days` is a float** — no rounding to whole days.
+  - Zip into `QuerySpec`s.
 
-> **Why `time_index`, not `prediction_time`.** The actual timestamp requires that subject's sorted
-> event times, which only get loaded when the owning shard is read. We therefore defer
-> `time_index → prediction_time` resolution to the per-shard labeling worker (Stage 4), which loads
-> the shard anyway. The global driver never materializes prediction timestamps.
+### Stage 2 — Sample `N = num_queries * num_contexts_per_query` patient contexts
 
-### Stage 3 — Zip queries and contexts; write partitioned index
-- `np.repeat` the sampled queries `num_contexts_per_query` times and zip with the `N` contexts,
-  yielding `N` rows of `(subject_id, shard, time_index, code, duration_days)`.
-- Partition by `shard` and write one index file per shard at
-  `training_task_artifacts_dir/{split}/_index/{shard}.parquet`.
-- Output columns: `["subject_id", "shard", "time_index", "code", "duration_days"]`.
-- This partitioned index is the handoff artifact consumed by Stage 4.
+A patient context is a `(subject_idx, prediction_time_index)` pair; the timestamp is resolved in Stage 3.
+
+- **Input:** `patient_universe_size`, the Stage 0 `_prediction_time_counts` table (row position = `subject_idx`),
+  `N`, `min_prediction_times_per_subject`, RNG seeded by `derive_seed(seed, "contexts")`.
+- **Algorithm** — one RNG stream, fixed consumption order (all `subject_idx`, then all
+  `prediction_time_index`; invariant 5):
+  - **Step A — subject indices.** `subject_idx = rng.integers(0, patient_universe_size, size=N)`, **with
+    replacement** (`N` typically exceeds the eligible universe; iid-ness matters more than coverage,
+    duplicate rows allowed). Map each to `subject_id`/`shard` via the Stage 0 table.
+  - **Step B — prediction-time indices**, one vectorized array-bounded call:
+    ```
+    prediction_time_index = rng.integers(low  = min_prediction_times_per_subject,
+                                         high = n_prediction_times[subject_idx])
+    ```
+    where `n_prediction_times[subject_idx]` is the length-`N` array gathered from the Stage 0 column at the
+    drawn indices (`Generator.integers` accepts an array `high`, one draw per row in row order). This fixes
+    RNG consumption to exactly one draw per row.
+- **Draw range** `[min_prediction_times_per_subject, n_prediction_times)`:
+  - `low = min_prediction_times_per_subject` enforces "at least that many prior prediction times" — since
+    `prediction_time_index` is a zero-based rank (invariant 2), the smallest draw `50` selects the 51st
+    distinct timestamp, with exactly 50 before it.
+  - `high = n_prediction_times` is exclusive of the count, so the largest eligible draw is
+    `n_prediction_times - 1` — the subject's **last** prediction time is eligible.
+  - Stage 0's eligibility filter guarantees the range is non-empty.
+- **Output:** length-`N` frame of `(subject_id, shard, prediction_time_index)`.
+
+### Stage 3 — Resolve prediction times, zip, write partitioned index
+
+- `np.repeat` the sampled queries `num_contexts_per_query` times and zip with the `N` contexts →
+  `N` rows of `(subject_id, shard, prediction_time_index, code, duration_days)`.
+- **Resolve `prediction_time`:** group contexts by `shard`; for each shard read its
+  `_prediction_times/{shard}.parquet` and join on `(subject_id, prediction_time_index)`. Join **per
+  shard** (not one global join) so the driver holds only one shard's payload-free map at a time, keeping
+  memory flat. The join is total (same eligibility as Stage 2's bound); assert no nulls after as a guard.
+- Partition by `shard`, write `training_task_artifacts_dir/{split}/_index/{shard}.parquet`.
+- **Output columns:** `["subject_id", "prediction_time", "code", "duration_days"]` (shard is implied by
+  the partition; `prediction_time_index` is resolved away and not carried forward).
+- This index is the handoff artifact consumed by Stage 4.
 
 ### Stage 4 — Labeling (parallelized across workers)
-- Input (per worker): the index partition `training_task_artifacts_dir/{split}/_index/{shard}.parquet`
+
+- **Input** (per worker): the index partition `_index/{shard}.parquet` (already carries `prediction_time`)
   and the event payload `path_to_data/data/{split}/{shard}.parquet`.
-- Output: `training_tasks_dir/{split}/{shard}.parquet` with columns
+- **Output:** `training_tasks_dir/{split}/{shard}.parquet`, columns
   `["subject_id", "prediction_time", "code", "duration_days", "boolean_value"]`, aligned to
   `TaskQuerySchema`.
-- Per-worker steps:
-    1. Load the shard events and **dedup to distinct `(subject_id, time, code)` tuples, then sort
-       ascending by `(subject_id, time)`** — exactly the legacy `_read_event_shard` basis
-       (`events.select(["subject_id", "time", "code"]).unique().sort(["subject_id", "time"])`). Dedup on
-       `(subject_id, time, code)` (matching Stage 0), **not** down to unique timestamps — deduping to
-       unique `(subject_id, time)` would drop same-time / different-code rows and diverge from the
-       distinct-row count Stage 0 took as `num_events`. No per-row tiebreak on equal-`time` rows is
-       required: they share a timestamp, so the resolved `prediction_time` is the same whichever sits at
-       `time_index` (see the indexing-space invariant). Resolve each `time_index` to its
-       `prediction_time` (the `time` of the `time_index`-th distinct row for that subject). Because this
-       is the *same* deduped-event sequence whose length Stage 0 counted (indexing-space invariant),
-       `time_index` is always in range; assert `time_index < num_events` per row as a guard.
-    2. Compute `max_time[subject_id]` for the shard (one groupby) for the censoring check.
-    3. Label each row via the single `join_asof` strategy below.
-    4. Align to `TaskQuerySchema` and **atomically** write the shard output (see *Atomic writes &
-       skip-on-success* below): write to a temp file in the destination directory, then `os.replace`
-       it into place so a reader never sees a partial file and a killed worker never leaves a
-       truncated `{shard}.parquet`.
-- Parallelism: group by shard, one worker per shard. The shard is the unit of parallelism and each
-  shard is fully independent (reads its own index partition + event payload, writes its own output
-  file), so labeling is embarrassingly parallel. See **Orchestration & parallelism** below for how
-  this maps onto a research server vs. a SLURM cluster.
+- **Per-worker steps:**
+  1. Load the index partition and shard events. No indexing work (invariant 3) — workers are
+     timestamp-in, label-out.
+  2. Compute `max_time[subject_id]` for the shard (one groupby) for the censoring check.
+  3. Label each `(subject_id, prediction_time, code, duration_days)` row via the `join_asof` rule below.
+  4. Align to `TaskQuerySchema` and write atomically (see below).
+- **Parallelism:** group by shard, one fully-independent worker per shard (own index partition + payload,
+  own output file) — embarrassingly parallel. See *Orchestration & parallelism*.
 
-> **Atomic writes & skip-on-success (Stage 4 restartability).** Stage 4 has no global cache (unlike
-> Stage 0), so a crashed or timed-out run must be *resumable* without redoing finished shards and
-> without trusting half-written files. Two coupled rules:
->
-> 1. **Atomic write.** A worker writes to a sibling temp path
->    (`{out_dir}/.{shard}.parquet.tmp.{pid}`) and then `os.replace(tmp, final)` onto the final path.
->    `os.replace` is atomic on POSIX **within the same filesystem** (hence the temp file lives in
->    `out_dir`, not `/tmp`), so the final `{shard}.parquet` only ever exists complete. A worker killed
->    mid-write leaves only the temp file, never a truncated final file. Temp files are best-effort
->    cleaned on worker entry (glob-and-unlink stale `.{shard}.parquet.tmp.*`) so retries don't leak.
-> 2. **Skip on success.** Before labeling, a worker checks for an existing **valid** final output and
->    returns immediately if present. Existence alone is sufficient *only because* writes are atomic
->    (rule 1) — a present `{shard}.parquet` is guaranteed complete. The default validity check is "the
->    final path exists"; an optional stronger check re-opens the parquet footer
->    (`pl.scan_parquet(...).collect_schema()` / row-count) to reject a zero-row or unreadable file. A
->    `--overwrite` flag forces relabeling regardless. This makes the whole Stage 4 fan-out idempotent:
->    rerunning after a partial failure relabels only the shards that did not finish.
+#### Labeling rule
 
-> **Float-duration implementation note.** `polars.duration(days=...)` expects integer day
-> expressions, so a float `duration_days` window must be added as, e.g.,
-> `prediction_time + pl.duration(seconds = duration_days * 86_400)` (or nanoseconds) rather than
-> `pl.duration(days=duration_days)`. Keep microsecond datetime precision so the `+1µs` strict-after
-> shift below still works.
->
-> Float durations (no integer rounding/clip) are an **intentional divergence from legacy** — the old
-> sampler quantized to whole days, so a given `seed` will not reproduce legacy `duration_days` or the
-> resulting labels. This is accepted: only the *indexing space* (`time_index → prediction_time`) is
-> held to legacy parity, not the duration draw.
+For each `(subject_id, prediction_time)` row, examine the window `(prediction_time, prediction_time + duration_days]`
+(invariant 6: open lower bound via the `+1µs` asof shift, closed upper bound). Resolve occurrence first;
+censoring applies only when the event did **not** occur in the observed window:
 
-For each `(subject_id, prediction_time)` row, look at the window `(prediction_time, prediction_time + duration_days]` for that subject — **open on the lower bound** (strict `>`, via the `+1µs` asof shift) and **closed on the upper bound** (inclusive `<=`).
-> **Boundary alignment with the loader (no leakage, no lost event).** The occurs window is **strictly after** `prediction_time`, while `meds-torch-data` builds the model input from events **at or before** `prediction_time` (backward `join_asof`, `time <= prediction_time`). The two partition the timeline at the cutoff: the event exactly on `prediction_time` is *input*, and is never counted toward the label. So the model never sees a post-cutoff event that decides the label (no leakage), and the cutoff event is not dropped (it's input). Keeping the label's `+1µs` strict-after asof is what preserves this — relaxing it to `>=` would let an at-cutoff occurrence be both input *and* a positive label. **Occurrence is resolved first; censoring only applies when the event did *not* occur in the observed part of the window** — an event we actually saw fire is a positive even if follow-up is otherwise incomplete:
+| occurs in observed window | censored | `boolean_value` |
+| --- | --- | --- |
+| yes | — | True |
+| no | yes | null |
+| no | no | False |
 
-- **occurs** — an event with the query `code` falls strictly within the *observed* window `(prediction_time, min(prediction_time + duration_days, max_time[subject_id])]`. If so the label is `True`, regardless of whether the window extends past the end of the record.
-- **censored** — the event did *not* occur in the observed window **and** `prediction_time + duration_days > max_time[subject_id]`, i.e. the record ends before the window closes, so we never observe whether the event would have fired in the unobserved tail.
-- **does not occur** — the event did not occur and the full window is observed (`prediction_time + duration_days <= max_time[subject_id]`), so we are confident it is a true negative.
+- **occurs** — an event with the query `code` falls strictly within the *observed* window
+  `(prediction_time, min(prediction_time + duration_days, max_time[subject_id])]`. Label `True`, even if
+  the window extends past the end of record.
+- **censored** — not occurred **and** `prediction_time + duration_days > max_time[subject_id]` (the record
+  ends before the window closes; the unobserved tail is unknown). Label `null`.
+- **does not occur** — not occurred and the full window is observed
+  (`prediction_time + duration_days <= max_time[subject_id]`). Label `False`.
 
-These collapse into a single nullable `boolean_value` (the `TaskQuerySchema` label): `True`/`False` from occurs takes precedence, and `null` only when not-occurred *and* censored.
+**Float-duration implementation note.** `polars.duration(days=...)` expects integer day expressions, so a
+float `duration_days` window must be added as e.g.
+`prediction_time + pl.duration(seconds = duration_days * 86_400)` (or nanoseconds), not
+`pl.duration(days=duration_days)`. Keep microsecond datetime precision so the `+1µs` strict-after shift
+works.
 
-| occurs (in observed window) | censored | boolean_value |
-| --------------------------- | -------- | ------------- |
-| yes                         | —        | True          |
-| no                          | yes      | null          |
-| no                          | no       | False         |
+> **Atomic writes & skip-on-success (restartability, invariant 8).** Stage 4 has no global cache, so a
+> crashed run must resume without redoing finished shards or trusting half-written files:
+> 1. **Atomic write.** Write to a sibling temp (`{out_dir}/.{shard}.parquet.tmp.{pid}`), then
+>    `os.replace(tmp, final)`. `os.replace` is atomic on POSIX **within the same filesystem** (hence the
+>    temp lives in `out_dir`, not `/tmp`), so the final file only ever exists complete; a killed worker
+>    leaves only the temp. Stale temps are glob-and-unlinked on worker entry.
+> 2. **Skip on success.** Before labeling, return immediately if a valid final output exists. Existence
+>    alone suffices *because* writes are atomic (rule 1). Default check is "the final path exists"; an
+>    optional stronger check re-opens the parquet footer to reject a zero-row/unreadable file. `--overwrite`
+>    forces relabeling. The fan-out is thus idempotent: a rerun relabels only unfinished shards.
 
-# Orchestration & parallelism
+## Orchestration & parallelism
 
-**The entire pipeline is kicked off by a single console script, `EQ_generate_training_tasks`** (the
-existing `[project.scripts]` entry → `every_query.generate_tasks.sample_tasks:main`). It runs the whole
-pipeline — Stages 0–3, then Stage 4 — **in one process on one node**. The pipeline is designed to run on
-a single node (research server or a single-node SLURM job); multi-node distribution is intentionally out
-of scope.
+The whole pipeline runs from one console script, **`EQ_generate_training_tasks`** (the existing
+`[project.scripts]` entry → `every_query.generate_tasks.sample_tasks:main`), in one process on one node.
+Multi-node distribution is out of scope.
 
 ```bash
 EQ_generate_training_tasks <hydra overrides>   # Stages 0–3 inline, then ProcessPoolExecutor over shards
 ```
 
-Stages 0–3 run first and produce the partitioned index (Stage 3 output); Stage 4 then consumes it. This
-ordering is just sequential code in `main` — the in-process Stage 4 fan-out does not start until Stage 3
-has written the index. Stages 0–3 are cheap (only read `subject_id`/`time` columns) and idempotent
-(Stage 0 caches `_subject_meta.parquet`), so reruns skip the rescan.
+Stages 0–3 run first (sequential code in `main`) and produce the partitioned index; the in-process Stage 4
+fan-out starts only after Stage 3 has written it. Stages 0–3 are cheap and idempotent (Stage 0 caches both
+artifacts), so reruns skip the rescan.
 
-The single driver process fans the labeling out over shards with
-`concurrent.futures.ProcessPoolExecutor` (separate processes, so the CPU-bound polars labeling is not
-GIL-bound; a thread pool would serialize). Workers are passed **shard ids / paths**, never DataFrames —
-each worker does its own parquet I/O and writes its own `{split}/{shard}.parquet` atomically, so workers
-never contend (no shared output, no locks). The driver creates `out_dir` once **before** the pool
-starts so workers never race on directory creation.
+The driver fans labeling out with `concurrent.futures.ProcessPoolExecutor` (separate processes so the
+CPU-bound polars labeling is not GIL-bound). Workers are passed **shard ids / paths, never DataFrames** —
+each does its own parquet I/O and writes its own output atomically, so workers never contend. The driver
+creates `out_dir` once before the pool starts.
 
 ```python
 # index_dir = training_task_artifacts_dir/{split}/_index   (intermediate, Stage 3 output)
@@ -364,9 +342,9 @@ def label_one_shard(shard, index_dir, data_dir, out_dir, overwrite=False):
     if not overwrite and final.exists():
         return shard, "skipped"  # atomic writes ⇒ a present file is a complete file
 
-    idx    = pl.read_parquet(f"{index_dir}/{shard}.parquet")
+    idx    = pl.read_parquet(f"{index_dir}/{shard}.parquet")   # already carries prediction_time
     events = pl.read_parquet(f"{data_dir}/{shard}.parquet")
-    out    = do_labeling(idx, events)
+    out    = do_labeling(idx, events)                          # no index resolution; just label
 
     tmp = final.with_name(f".{shard}.parquet.tmp.{os.getpid()}")  # same dir ⇒ same filesystem
     out.write_parquet(tmp)
@@ -379,13 +357,7 @@ with ProcessPoolExecutor(max_workers=resolve_workers()) as ex:
         fut.result()  # re-raise so a failed shard aborts the run loudly
 ```
 
-Because the write is atomic and the worker skips any shard whose final file already exists, rerunning
-the command after a partial failure (crash, OOM, SLURM timeout) **relabels only the unfinished
-shards** — finished shards are skipped, and no half-written file is ever mistaken for a finished one.
-Pass `overwrite=True` to force a full relabel.
-
-Worker count is resolved from the environment so the same command works everywhere, then capped by
-an optional explicit override:
+Worker count is resolved from the environment, then optionally capped:
 
 ```python
 def resolve_workers(max_workers: int | None = None) -> int:
@@ -400,24 +372,10 @@ def resolve_workers(max_workers: int | None = None) -> int:
     return min(cores, max_workers) if max_workers else cores
 ```
 
-The pool is then `ProcessPoolExecutor(max_workers=resolve_workers(cfg.max_workers))`.
+The pool is `ProcessPoolExecutor(max_workers=resolve_workers(cfg.max_workers))`.
 
-> **Why a manual cap (and not a memory auto-clamp).** `resolve_workers()` sizes the pool by
-> **core count**, but each Stage 4 worker holds a full shard's event payload resident in polars (plus
-> `join_asof` intermediates), so on a high-core / low-RAM node the real binding constraint is memory,
-> not CPU — too many workers OOM-kill and surface as an opaque `BrokenProcessPool`. We do **not**
-> auto-derive the cap from `SLURM_MEM_PER_NODE / est_shard_bytes`: a shard's *peak* memory is several×
-> its parquet size and varies per shard, so the estimate is a fragile fudge factor. Instead, the
-> caller (who knows the `--mem` they requested) sets an explicit `--max-workers` Hydra override that
-> caps the core-count result. Default behavior is unchanged (all cores); when a run OOMs you re-run
-> with e.g. `max_workers=16`.
-
-> **Do not use `SLURM_NTASKS`/`srun` to size this pool.** `ProcessPoolExecutor` forks workers on the
-> driver's node only; `SLURM_NTASKS` counts tasks across the whole allocation. The correct knob is
-> cores-on-this-node (`SLURM_CPUS_PER_TASK`).
-
-SLURM submission is a **single node, single task** with many cpus — no array, no job dependency, no
-`srun` fan-out (keep `srun` for the DDP training scripts, not here):
+SLURM submission is a **single node, single task** with many cpus — no array, no job dependency, no `srun`
+fan-out (keep `srun` for the DDP training scripts, not here):
 
 ```bash
 #SBATCH --partition=cpu        # labeling is CPU-only (no GPU)
@@ -427,30 +385,70 @@ SLURM submission is a **single node, single task** with many cpus — no array, 
 EQ_generate_training_tasks <hydra overrides>   # whole pipeline; Stage 4 pool sized to 32
 ```
 
-On a research server the exact same single command runs; `resolve_workers()` falls back to
-`os.cpu_count()`.
+On a research server the same command runs; `resolve_workers()` falls back to `os.cpu_count()`.
 
-> **Why not Hydra `-m` for the Stage 4 fan-out.** Hydra multirun is for hyperparameter sweeps: each task
-> is an independent process that re-enters `main` from the top, which would re-run the global Stages 0–3
-> once per shard. Keep concerns separated — Hydra for config, the in-process `ProcessPoolExecutor` for
-> parallelism, sbatch for allocation.
+## Determinism
 
-# Determinism
-- All random draws derive from the top-level `seed` via `derive_seed` (as in the current design),
-  splitting the **query axis** and the **context axis** so they can be reproduced independently:
-  - queries: `derive_seed(seed, "queries")`
-  - contexts: `derive_seed(seed, "contexts")` — a **single** RNG stream covering both the `subject_idx`
-    and `time_index` draws, consumed in a **fixed order**: all `subject_idx` first (Step A), then all
-    `time_index` in one vectorized array-bounded call (Step B). This ordering is part of the
-    determinism contract — reordering the two draws, looping/grouping per subject, or splitting them
-    across sub-streams would change the output for a fixed `seed`.
-- The Stage 0 `subject_id`-sorted ordering is the stable basis for `subject_idx → subject_id`; it
-  must be regenerated identically (sorted, deduped) on every run so a given `seed` reproduces the
-  same contexts.
-- Labeling is a pure function of the index partition + shard events, so reruns produce identical
+- All draws derive from `seed` via `derive_seed`, splitting the **query axis** and **context axis** so
+  they reproduce independently:
+  - queries: `derive_seed(seed, "queries")`.
+  - contexts: `derive_seed(seed, "contexts")` — a single RNG stream covering both `subject_idx` and
+    `prediction_time_index`, consumed in fixed order (Step A then Step B). Reordering the draws,
+    looping/grouping per subject, or splitting across sub-streams would change the output for a fixed seed.
+- The Stage 0 `subject_id`-sorted ordering is the stable basis for `subject_idx → subject_id` and must be
+  regenerated identically (sorted, deduped) each run. The dense-rank map is deterministic (invariant 5).
+- Labeling is a pure function of the resolved index partition + shard events, so reruns produce identical
   labels.
 
-# Open / out of scope
+## Open / out of scope
+
 - This redesign targets the pre-training sampler (`sample_tasks.py`). Whether
-  `sample_evaluation_tasks.py` adopts the same global-sampling structure is **out of scope** here and
-  tracked separately.
+  `sample_evaluation_tasks.py` adopts the same structure is out of scope, tracked separately.
+
+## Design rationale / rejected alternatives
+
+**Why index space resolved once in the driver.** Mapping an index to a timestamp is the only error-prone
+step; running it exactly once, in one process (Stage 3), keeps Stage 4 workers trivial and removes any
+two-place agreement to maintain (invariant 3).
+
+**Why the eligibility `+1`.** A subject with exactly `min_prediction_times_per_subject` distinct times has
+no eligible prediction time (the Stage 2 range `[min, n_prediction_times)` would be empty), so it is
+dropped in Stage 0.
+
+**Why `prediction_time_index` in Stage 2, not `prediction_time`.** The timestamp lives in the Stage 0
+map; resolving in Stage 3 (still the driver) runs the join once over all `N` contexts before fan-out, so
+parallel workers never resolve indices.
+
+**Why vectorized array-bounded `rng.integers`.** A single call with an array `high` fixes RNG consumption
+to one draw per row regardless of per-subject bounds. Looping/grouping per subject is rejected (group
+order is not pinned); scaling floats to a per-row range is rejected (introduces rounding bias).
+
+**Why the last prediction time is eligible (`high = n_prediction_times`, exclusive of count).** Matches
+legacy "include the last prediction time" behavior. It diverges from the `max(time_index)` (last-excluded)
+bound sketched in PR #201's flowchart; the last index tends to label censored/negative, still informative.
+
+**Why a manual `--max-workers` cap, not a memory auto-clamp.** `resolve_workers()` sizes by core count,
+but each worker holds a full shard's payload plus `join_asof` intermediates, so on a high-core/low-RAM node
+memory binds first (OOM surfaces as an opaque `BrokenProcessPool`). Auto-deriving from
+`SLURM_MEM_PER_NODE / est_shard_bytes` is rejected: peak memory is several× parquet size and varies per
+shard, making the estimate a fragile fudge factor. The caller, who knows the requested `--mem`, sets an
+explicit cap; default is unchanged (all cores).
+
+**Why not `SLURM_NTASKS`/`srun` to size the pool.** `ProcessPoolExecutor` forks workers on the driver's
+node only; `SLURM_NTASKS` counts tasks across the whole allocation. The correct knob is cores-on-this-node
+(`SLURM_CPUS_PER_TASK`).
+
+**Why not Hydra `-m` for the Stage 4 fan-out.** Hydra multirun is for hyperparameter sweeps: each task
+re-enters `main` from the top, which would re-run global Stages 0–3 once per shard. Keep concerns
+separated — Hydra for config, in-process `ProcessPoolExecutor` for parallelism, sbatch for allocation.
+
+**Legacy divergences (intentional).**
+- *Threshold unit.* Legacy `min_context_per_subject` thresholded a minimum number of *events* (`cum_count`
+  over deduped `(subject_id, time, code)` rows); this design thresholds *prediction times* (distinct
+  `(subject_id, time)` rows). The same numeric default (50) selects a different, stricter population — a
+  subject with 50 events all on one day has a single prediction time.
+- *Prediction-time space (parity preserved).* The distinct `(subject_id, time)` set sorted by
+  `(subject_id, time)` matches what legacy `sample_contexts` used; only the eligibility threshold changed.
+- *Float durations.* Stage 1 keeps `duration_days` as a float (legacy quantized to whole days), so a given
+  `seed` will not reproduce legacy `duration_days` or labels. Accepted: only the prediction-time space is
+  held to legacy parity, not the duration draw.
