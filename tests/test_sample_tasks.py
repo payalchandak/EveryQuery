@@ -417,9 +417,7 @@ class TestSamplePatientContexts:
 
     def test_rejects_ineligible_subject(self):
         """A counts row violating Stage 0 eligibility (n <= min) raises (stale-table guard)."""
-        bad = pl.DataFrame(
-            {"subject_id": [1, 2], "shard": ["0", "0"], "n_prediction_times": [60, 50]}
-        )
+        bad = pl.DataFrame({"subject_id": [1, 2], "shard": ["0", "0"], "n_prediction_times": [60, 50]})
         with pytest.raises(ValueError, match="stale or corrupt"):
             sample_patient_contexts(bad, 100, 50, self._rng(0))
 
@@ -431,9 +429,7 @@ class TestSamplePatientContexts:
         """
         small = sample_patient_contexts(prediction_time_counts, 32, 50, self._rng(11))
         large = sample_patient_contexts(prediction_time_counts, 64, 50, self._rng(11))
-        assert small.select(["subject_id", "shard"]).equals(
-            large.head(32).select(["subject_id", "shard"])
-        )
+        assert small.select(["subject_id", "shard"]).equals(large.head(32).select(["subject_id", "shard"]))
 
 
 # ---------------------------------------------------------------------------
