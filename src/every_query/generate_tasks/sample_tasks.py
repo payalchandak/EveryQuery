@@ -29,8 +29,10 @@ Design decisions (see issue #33):
   the whole ``index_df`` against the events table, regardless of how many distinct codes are present.
 """
 
+import json
 import logging
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass
 from importlib.resources import files
@@ -620,6 +622,21 @@ def _atomic_write_parquet(df: pl.DataFrame, fp: Path) -> None:
         raise
 
 
+def _atomic_write_json(obj: object, fp: Path) -> None:
+    """Write ``obj`` as JSON to ``fp`` atomically via a unique sibling tmpfile + ``os.replace``.
+
+    Same sibling-temp + ``os.replace`` pattern as :func:`_atomic_write_parquet`, so a present file is
+    always complete — used for Stage 0's cache sidecar, which is the commit marker for a finished run.
+    """
+    tmp = _unique_tmp_path(fp)
+    try:
+        tmp.write_text(json.dumps(obj, indent=2, sort_keys=True))
+        os.replace(tmp, fp)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 # ---------------------------------------------------------------------------
 # End-to-end pipeline
 # ---------------------------------------------------------------------------
@@ -793,6 +810,7 @@ def resolve_training_task_paths() -> tuple[Path, Path, Path]:
 
 PREDICTION_TIME_COUNTS_NAME = "_prediction_time_counts.parquet"
 PREDICTION_TIMES_DIRNAME = "_prediction_times"
+PREDICTION_TIMES_META_NAME = "_prediction_times_meta.json"
 INDEX_DIRNAME = "_index"
 
 
@@ -839,6 +857,254 @@ def index_path(training_task_artifacts_dir: Path, split: str, shard: str) -> Pat
         PosixPath('/x/tasks_artifacts/train/_index/0.parquet')
     """
     return training_task_artifacts_dir / split / INDEX_DIRNAME / f"{shard}.parquet"
+
+
+def prediction_times_meta_path(training_task_artifacts_dir: Path, split: str) -> Path:
+    """Stage 0 cache sidecar: ``{artifacts}/{split}/_prediction_times_meta.json``.
+
+    The artifact paths above do not encode ``min_prediction_times_per_subject``, but Stage 0 bakes
+    that eligibility threshold into the persisted artifacts (it filters before writing).  This JSON
+    sidecar records the ``min`` that produced the on-disk artifacts so :func:`build_prediction_times`
+    can tell a reusable cache from a stale one (a ``min`` change ⇒ auto-rebuild).  It is written last,
+    so its presence is the commit marker for a complete Stage 0 run.
+
+    Examples:
+        >>> prediction_times_meta_path(Path("/x/tasks_artifacts"), "train")
+        PosixPath('/x/tasks_artifacts/train/_prediction_times_meta.json')
+    """
+    return training_task_artifacts_dir / split / PREDICTION_TIMES_META_NAME
+
+
+# ---------------------------------------------------------------------------
+# Redesign (issue #205): Stage 0 — build + cache the prediction-time map
+# ---------------------------------------------------------------------------
+#
+# Stage 0 scans a split's shards *once* and persists the canonical prediction-time indexing
+# artifacts that the rest of the driver (Stages 1-3) and the labeling fan-out (Stage 4) rely on:
+#
+#   _prediction_times/{shard}.parquet  -- canonical map: (subject_id, prediction_time_index) -> time
+#   _prediction_time_counts.parquet    -- derived subject summary (subject_id, shard, n_prediction_times)
+#   _prediction_times_meta.json        -- cache sidecar recording the min used (commit marker)
+#
+# The indexing space is distinct ``(subject_id, time)`` rows (invariant 1); the index is a gapless
+# zero-based dense rank per subject (invariant 2) so Stage 2's array-bounded draw is in-bounds.
+
+
+def _read_prediction_time_shard(file_path: str | Path, shard: str) -> pl.DataFrame:
+    """Read one shard's distinct ``(subject_id, time)`` rows, tagged with ``shard``.
+
+    Reads only ``subject_id``/``time`` (Stage 0 never needs event payloads).  Null-``time`` rows (e.g.
+    MEDS static measurements like demographics) are dropped: they are not valid prediction times for
+    the downstream ``+1µs`` strict-after asof rule, and — because ``sort(["subject_id", "time"])``
+    places nulls first — an unfiltered null would otherwise claim ``prediction_time_index = 0`` and
+    inflate ``n_prediction_times`` past the eligibility boundary.  ``time`` is cast to
+    ``pl.Datetime("us")`` for the same reason as :func:`_read_event_shard`: the label window uses a
+    ``+1µs`` strict-after shift downstream, and a coarser precision would silently round it to zero.
+    Dedups to distinct ``(subject_id, time)`` so the per-subject row count is a count of *prediction
+    times*, not events.
+    """
+    return (
+        pl.read_parquet(file_path, columns=["subject_id", "time"])
+        .filter(pl.col("time").is_not_null())
+        .with_columns(pl.col("time").cast(pl.Datetime("us")))
+        .unique()
+        .with_columns(pl.lit(shard).alias("shard"))
+    )
+
+
+def _split_shards(path_to_data: Path, split: str) -> list[str]:
+    """Discover shard names for a split: the parquet file stems under ``path_to_data/data/{split}``.
+
+    Sorted for deterministic iteration order.
+    """
+    split_dir = path_to_data / "data" / split
+    return sorted(p.stem for p in split_dir.glob("*.parquet"))
+
+
+def _prediction_time_cache_valid(
+    training_task_artifacts_dir: Path,
+    split: str,
+    min_prediction_times_per_subject: int,
+) -> bool:
+    """True iff the cached Stage 0 artifacts are reusable for this ``(split, min)``.
+
+    The sidecar is written last as the commit marker and is treated as *authoritative*: rather than
+    re-scanning the ``subject_id`` column across every ``_prediction_times/`` partition, validation
+    cross-checks the cheap counts parquet against the subject/row totals recorded in the sidecar.
+
+    Reuse requires *all* of:
+    - the sidecar exists, parses, and its recorded ``min`` matches the requested ``min``;
+    - the counts parquet exists and every map partition named in the sidecar exists;
+    - the counts parquet agrees with the sidecar totals: ``counts.height == meta["n_subjects"]`` and
+      ``sum(n_prediction_times) == meta["n_prediction_time_rows"]``.
+
+    Any mismatch means the sidecar is stale/corrupt relative to ``_prediction_times/`` and Stage 0
+    must rebuild.  Read-only: never writes or deletes.
+    """
+    meta_fp = prediction_times_meta_path(training_task_artifacts_dir, split)
+    counts_fp = prediction_time_counts_path(training_task_artifacts_dir, split)
+    if not meta_fp.exists() or not counts_fp.exists():
+        return False
+
+    try:
+        meta = json.loads(meta_fp.read_text())
+    except (json.JSONDecodeError, OSError):
+        return False
+    if meta.get("min_prediction_times_per_subject") != min_prediction_times_per_subject:
+        return False
+
+    shards = meta.get("shards")
+    if not isinstance(shards, list) or not all(
+        prediction_times_path(training_task_artifacts_dir, split, s).exists() for s in shards
+    ):
+        return False
+
+    counts = pl.read_parquet(counts_fp)
+    if counts.height != meta.get("n_subjects"):
+        return False
+    return int(counts["n_prediction_times"].sum()) == meta.get("n_prediction_time_rows")
+
+
+def _assert_no_subject_spans_shards(distinct: pl.DataFrame) -> None:
+    """Invariant 4: a subject lives in exactly one shard (Stage 4 derives ``max_time`` from a single
+    shard).  Raises ``ValueError`` naming the offenders ``{subject_id: shards}`` on violation.
+    """
+    spanning = (
+        distinct.group_by("subject_id")
+        .agg(pl.col("shard").n_unique().alias("n_shards"), pl.col("shard").unique().alias("shards"))
+        .filter(pl.col("n_shards") > 1)
+        .sort("subject_id")
+    )
+    if spanning.height == 0:
+        return
+    offenders = {row["subject_id"]: sorted(row["shards"]) for row in spanning.iter_rows(named=True)}
+    raise ValueError(
+        "Subjects span multiple shards (invariant 4 violation); each must live in exactly one "
+        f"shard. Offenders {{subject_id: shards}}: {offenders}"
+    )
+
+
+def build_prediction_times(
+    path_to_data: Path,
+    training_task_artifacts_dir: Path,
+    split: str,
+    min_prediction_times_per_subject: int,
+    overwrite: bool = False,
+) -> int:
+    """Stage 0: build (and cache) the canonical prediction-time map + derived subject summary.
+
+    Scans ``path_to_data/data/{split}/*.parquet`` once, deduping to distinct ``(subject_id, time)``
+    rows, assigns each subject a gapless zero-based ``prediction_time_index`` over its
+    ascending-sorted distinct times, filters to eligible subjects
+    (``n_prediction_times >= min_prediction_times_per_subject + 1`` — the ``+1`` keeps Stage 2's
+    ``[min, n)`` draw range non-empty), and writes:
+
+    - ``_prediction_times/{shard}.parquet`` -- canonical map ``(subject_id, prediction_time_index, time)``.
+    - ``_prediction_time_counts.parquet``   -- summary ``(subject_id, shard, n_prediction_times)``,
+      sorted by ``subject_id`` so its row position is the ``subject_idx`` Stage 2 gathers by.
+    - ``_prediction_times_meta.json``       -- cache sidecar (written last as the commit marker).
+
+    Enforces invariant 4 (a subject may not span shards) as a hard error.  Reuses a valid cache
+    unless ``overwrite`` is set; a change in ``min_prediction_times_per_subject`` invalidates the
+    cache automatically via the sidecar.
+
+    Returns:
+        ``patient_universe_size`` — the number of eligible subjects (rows in the counts summary).
+    """
+    if not overwrite and _prediction_time_cache_valid(
+        training_task_artifacts_dir, split, min_prediction_times_per_subject
+    ):
+        counts_fp = prediction_time_counts_path(training_task_artifacts_dir, split)
+        height = pl.read_parquet(counts_fp).height
+        logger.info("Stage 0: reusing cached prediction-time artifacts (%d subjects).", height)
+        return height
+
+    shards = _split_shards(path_to_data, split)
+    if not shards:
+        raise FileNotFoundError(
+            f"No shards found under {path_to_data / 'data' / split}; expected {{i}}.parquet files."
+        )
+
+    # distinct columns: (subject_id, time, shard) -- one row per distinct (subject_id, time).
+    distinct = pl.concat(
+        [
+            _read_prediction_time_shard(path_to_data / "data" / split / f"{shard}.parquet", shard)
+            for shard in shards
+        ]
+    )
+
+    _assert_no_subject_spans_shards(distinct)
+
+    # Gapless zero-based index over each subject's ascending distinct times.  No within-subject ties
+    # (step above deduped), so int_range is identical to a dense rank and cheaper (invariant 2).
+    # prediction_times columns: (subject_id, time, shard, prediction_time_index).
+    prediction_times = distinct.sort(["subject_id", "time"]).with_columns(
+        pl.int_range(pl.len()).over("subject_id").alias("prediction_time_index")
+    )
+
+    # counts columns: (subject_id, shard, n_prediction_times) -- one row per subject.
+    counts = prediction_times.group_by("subject_id").agg(
+        pl.col("shard").first(),
+        pl.len().alias("n_prediction_times"),
+    )
+
+    eligible = counts.filter(pl.col("n_prediction_times") >= min_prediction_times_per_subject + 1).sort(
+        "subject_id"
+    )
+
+    # keep only the prediction_times rows whose subject_id appears in eligible, dropping the rest
+    prediction_times = prediction_times.join(
+        eligible.select("subject_id"),
+        on="subject_id",
+        how="semi",
+    )
+
+    # Rebuild from scratch: drop any stale partitions so a shrunken shard set leaves no orphans.
+    map_dir = training_task_artifacts_dir / split / PREDICTION_TIMES_DIRNAME
+    if map_dir.exists():
+        shutil.rmtree(map_dir)
+
+    # Write one prediction_time index parquet per shard, mirroring the source shard layout so each output
+    # partition lines up with its input shard.
+    for shard, part in prediction_times.group_by("shard"):
+        shard_name = shard[0] if isinstance(shard, tuple) else shard
+        _atomic_write_parquet(
+            part.select(["subject_id", "prediction_time_index", "time"]).sort(
+                ["subject_id", "prediction_time_index"]
+            ),
+            prediction_times_path(training_task_artifacts_dir, split, str(shard_name)),
+        )
+
+    # INVARIANT: row position in this table defines subject_idx for Stage 2. `eligible` is sorted by
+    # subject_id above; preserve that ordering on any refactor -- reordering rows silently changes the
+    # subject_idx -> subject_id mapping (the sampling universe).
+    _atomic_write_parquet(
+        eligible.select(["subject_id", "shard", "n_prediction_times"]),
+        prediction_time_counts_path(training_task_artifacts_dir, split),
+    )
+
+    # Sidecar last = commit marker. Only shards that survived the eligibility filter have partitions.
+    # ``n_subjects``/``n_prediction_time_rows`` make the sidecar authoritative for cache validation,
+    # so reuse never re-scans the subject_id column across the map partitions.
+    written_shards = sorted(eligible["shard"].unique().to_list())
+    _atomic_write_json(
+        {
+            "min_prediction_times_per_subject": min_prediction_times_per_subject,
+            "split": split,
+            "shards": written_shards,
+            "n_subjects": eligible.height,
+            "n_prediction_time_rows": prediction_times.height,
+        },
+        prediction_times_meta_path(training_task_artifacts_dir, split),
+    )
+
+    logger.info(
+        "Stage 0: built prediction-time artifacts for split=%s (%d eligible subjects across %d shards).",
+        split,
+        eligible.height,
+        len(written_shards),
+    )
+    return eligible.height
 
 
 CONFIGS = str(files("every_query") / "generate_tasks" / "configs")
