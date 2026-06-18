@@ -1442,10 +1442,12 @@ class TestStage3:
         path_to_data = _write_split_shards(
             tmp_path,
             {
-                "0": pl.concat([
-                    _subject_events(1, 5, base=self.BASE),
-                    _subject_events(2, 4, base=self.BASE),
-                ]),
+                "0": pl.concat(
+                    [
+                        _subject_events(1, 5, base=self.BASE),
+                        _subject_events(2, 4, base=self.BASE),
+                    ]
+                ),
                 "1": _subject_events(3, 4, base=self.BASE),
             },
         )
@@ -1454,17 +1456,21 @@ class TestStage3:
         return path_to_data, artifacts_dir
 
     def _make_contexts(self, subject_ids, shards, indices):
-        return pl.DataFrame({
-            "subject_id": subject_ids,
-            "shard": shards,
-            "prediction_time_index": pl.Series(indices, dtype=pl.Int64),
-        })
+        return pl.DataFrame(
+            {
+                "subject_id": subject_ids,
+                "shard": shards,
+                "prediction_time_index": pl.Series(indices, dtype=pl.Int64),
+            }
+        )
 
     def test_basic_columns_and_row_count(self, stage0_env):
         _, artifacts_dir = stage0_env
         queries = [QuerySpec("ICD//A", 30.5), QuerySpec("ICD//B", 60.0)]
         contexts = self._make_contexts(
-            [1, 1, 1, 1], ["0", "0", "0", "0"], [2, 3, 2, 4],
+            [1, 1, 1, 1],
+            ["0", "0", "0", "0"],
+            [2, 3, 2, 4],
         )
         build_index(queries, contexts, artifacts_dir, "train", num_contexts_per_query=2)
 
@@ -1479,7 +1485,9 @@ class TestStage3:
         _, artifacts_dir = stage0_env
         queries = [QuerySpec("ICD//X", 10.0)]
         contexts = self._make_contexts(
-            [1, 3], ["0", "1"], [3, 3],
+            [1, 3],
+            ["0", "1"],
+            [3, 3],
         )
         build_index(queries, contexts, artifacts_dir, "train", num_contexts_per_query=2)
 
@@ -1493,11 +1501,7 @@ class TestStage3:
     def test_prediction_time_resolution_correctness(self, stage0_env):
         _, artifacts_dir = stage0_env
         pt_map = pl.read_parquet(prediction_times_path(artifacts_dir, "train", "0"))
-        s1_times = (
-            pt_map.filter(pl.col("subject_id") == 1)
-            .sort("prediction_time_index")["time"]
-            .to_list()
-        )
+        s1_times = pt_map.filter(pl.col("subject_id") == 1).sort("prediction_time_index")["time"].to_list()
 
         queries = [QuerySpec("ICD//A", 7.0)]
         contexts = self._make_contexts([1, 1], ["0", "0"], [2, 4])
@@ -1511,7 +1515,9 @@ class TestStage3:
         _, artifacts_dir = stage0_env
         queries = [QuerySpec("ICD//FIRST", 10.0), QuerySpec("ICD//SECOND", 20.0)]
         contexts = self._make_contexts(
-            [1, 1, 2, 2], ["0", "0", "0", "0"], [3, 4, 3, 3],
+            [1, 1, 2, 2],
+            ["0", "0", "0", "0"],
+            [3, 4, 3, 3],
         )
         build_index(queries, contexts, artifacts_dir, "train", num_contexts_per_query=2)
 
@@ -1538,11 +1544,13 @@ class TestStage3:
         queries = [QuerySpec("ICD//A", 5.0)]
         # ``prediction_time_index`` as UInt32 mismatches the Stage 0 map's Int64 — a silent
         # all-null join without the dtype guard.
-        contexts = pl.DataFrame({
-            "subject_id": [1],
-            "shard": ["0"],
-            "prediction_time_index": pl.Series([3], dtype=pl.UInt32),
-        })
+        contexts = pl.DataFrame(
+            {
+                "subject_id": [1],
+                "shard": ["0"],
+                "prediction_time_index": pl.Series([3], dtype=pl.UInt32),
+            }
+        )
         with pytest.raises(ValueError, match="dtype mismatch"):
             build_index(queries, contexts, artifacts_dir, "train", num_contexts_per_query=1)
 

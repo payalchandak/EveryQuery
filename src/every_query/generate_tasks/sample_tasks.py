@@ -1330,9 +1330,7 @@ def build_index(
     # rather than materializing every shard's frame up front.
     for shard_key, shard_group in combined.group_by("shard"):
         (shard_name,) = shard_key
-        pt_map = pl.read_parquet(
-            prediction_times_path(training_task_artifacts_dir, split, str(shard_name))
-        )
+        pt_map = pl.read_parquet(prediction_times_path(training_task_artifacts_dir, split, str(shard_name)))
 
         # Guard against silent all-null joins from join-key dtype drift between the Stage 2
         # contexts and the Stage 0 map (e.g. Int64 vs UInt32 ``subject_id``). A mismatch is an
