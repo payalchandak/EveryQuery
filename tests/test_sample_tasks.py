@@ -1201,3 +1201,24 @@ class TestStage0:
         monkeypatch.setattr(st, "_read_prediction_time_shard", _spy)
         build_prediction_times(path_to_data, artifacts_dir, "train", self.MIN, overwrite=True)
         assert calls["n"] == 1  # rebuilt despite a valid cache
+
+    def test_null_time_rows_are_not_prediction_times(self, tmp_path, artifacts_dir):
+        # Subject 1: 3 real distinct times + one null-time static row (e.g. MEDS demographics).
+        # The null must be dropped, not claim prediction_time_index=0 nor inflate n_prediction_times.
+        events = pl.concat(
+            [
+                _subject_events(1, 3, base=self.BASE),
+                pl.DataFrame({"subject_id": [1], "time": [None], "code": ["DEMO//SEX"]}),
+            ],
+            how="diagonal",
+        )
+        path_to_data = _write_split_shards(tmp_path, {"0": events})
+        build_prediction_times(path_to_data, artifacts_dir, "train", self.MIN)
+
+        pmap = pl.read_parquet(prediction_times_path(artifacts_dir, "train", "0"))
+        s1 = pmap.filter(pl.col("subject_id") == 1).sort("prediction_time_index")
+        assert s1["prediction_time_index"].to_list() == [0, 1, 2]
+        assert s1["time"].null_count() == 0
+
+        counts = pl.read_parquet(prediction_time_counts_path(artifacts_dir, "train"))
+        assert dict(zip(counts["subject_id"], counts["n_prediction_times"], strict=True)) == {1: 3}

@@ -753,7 +753,11 @@ def prediction_times_meta_path(training_task_artifacts_dir: Path, split: str) ->
 def _read_prediction_time_shard(file_path: str | Path, shard: str) -> pl.DataFrame:
     """Read one shard's distinct ``(subject_id, time)`` rows, tagged with ``shard``.
 
-    Reads only ``subject_id``/``time`` (Stage 0 never needs event payloads).  ``time`` is cast to
+    Reads only ``subject_id``/``time`` (Stage 0 never needs event payloads).  Null-``time`` rows (e.g.
+    MEDS static measurements like demographics) are dropped: they are not valid prediction times for
+    the downstream ``+1µs`` strict-after asof rule, and — because ``sort(["subject_id", "time"])``
+    places nulls first — an unfiltered null would otherwise claim ``prediction_time_index = 0`` and
+    inflate ``n_prediction_times`` past the eligibility boundary.  ``time`` is cast to
     ``pl.Datetime("us")`` for the same reason as :func:`_read_event_shard`: the label window uses a
     ``+1µs`` strict-after shift downstream, and a coarser precision would silently round it to zero.
     Dedups to distinct ``(subject_id, time)`` so the per-subject row count is a count of *prediction
@@ -761,6 +765,7 @@ def _read_prediction_time_shard(file_path: str | Path, shard: str) -> pl.DataFra
     """
     return (
         pl.read_parquet(file_path, columns=["subject_id", "time"])
+        .filter(pl.col("time").is_not_null())
         .with_columns(pl.col("time").cast(pl.Datetime("us")))
         .unique()
         .with_columns(pl.lit(shard).alias("shard"))
