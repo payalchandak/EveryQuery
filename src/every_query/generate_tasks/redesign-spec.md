@@ -358,24 +358,18 @@ def label_one_shard(shard, index_dir, data_dir, out_dir, overwrite=False):
     if not overwrite and final.exists():
         return shard, "skipped"  # atomic writes ⇒ a present file is a complete file
 
-    idx = pl.read_parquet(
-        f"{index_dir}/{shard}.parquet"
-    )  # already carries prediction_time
+    idx = pl.read_parquet(f"{index_dir}/{shard}.parquet")  # already carries prediction_time
     events = pl.read_parquet(f"{data_dir}/{shard}.parquet")
     out = do_labeling(idx, events)  # no index resolution; just label
 
-    tmp = final.with_name(
-        f".{shard}.parquet.tmp.{os.getpid()}"
-    )  # same dir ⇒ same filesystem
+    tmp = final.with_name(f".{shard}.parquet.tmp.{os.getpid()}")  # same dir ⇒ same filesystem
     out.write_parquet(tmp)
     os.replace(tmp, final)  # atomic rename into place
     return shard, "labeled"  # tiny ack; big data never crosses the process boundary
 
 
 with ProcessPoolExecutor(max_workers=resolve_workers()) as ex:
-    futs = {
-        ex.submit(label_one_shard, s, idx_dir, data_dir, out_dir): s for s in shards
-    }
+    futs = {ex.submit(label_one_shard, s, idx_dir, data_dir, out_dir): s for s in shards}
     for fut in as_completed(futs):
         fut.result()  # re-raise so a failed shard aborts the run loudly
 ```

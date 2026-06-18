@@ -935,6 +935,9 @@ def build_prediction_times(
             prediction_times_path(training_task_artifacts_dir, split, str(shard_name)),
         )
 
+    # INVARIANT: row position in this table defines subject_idx for Stage 2. `eligible` is sorted by
+    # subject_id above; preserve that ordering on any refactor -- reordering rows silently changes the
+    # subject_idx -> subject_id mapping (the sampling universe).
     _atomic_write_parquet(
         eligible.select(["subject_id", "shard", "n_prediction_times"]),
         prediction_time_counts_path(training_task_artifacts_dir, split),
