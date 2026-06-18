@@ -1316,6 +1316,142 @@ def build_prediction_times(
     return eligible.height
 
 
+# ---------------------------------------------------------------------------
+# Redesign (issue #208): Stage 3 — resolve prediction times and build index
+# ---------------------------------------------------------------------------
+#
+# Stage 3 is the single index-resolution point (spec invariant 3): it zips Stage 1 queries with
+# Stage 2 contexts, resolves ``prediction_time_index → prediction_time`` per shard via the Stage 0
+# ``_prediction_times/`` map, and writes the partitioned ``_index/{shard}.parquet`` files that
+# Stage 4 consumes directly.  Stage 4 never resolves indices — it receives timestamps.
+
+
+def build_index(
+    queries: list[QuerySpec],
+    contexts: pl.DataFrame,
+    training_task_artifacts_dir: Path,
+    split: str,
+    num_contexts_per_query: int,
+) -> None:
+    """Stage 3: zip queries with contexts, resolve prediction times, write partitioned index.
+
+    ``np.repeat`` s the Stage 1 queries ``num_contexts_per_query`` times and zips them with the
+    Stage 2 contexts (length ``len(queries) * num_contexts_per_query``).  For each shard, joins
+    against the Stage 0 ``_prediction_times/{shard}.parquet`` map on
+    ``(subject_id, prediction_time_index)`` to resolve the timestamp, then writes
+    ``_index/{shard}.parquet`` with columns
+    ``["subject_id", "prediction_time", "query", "duration_days"]``.
+
+    The join is **per shard** (not one global join) so the driver holds only one shard's
+    payload-free map at a time, keeping memory flat.  The join is total (same eligibility as
+    Stage 2's bound) — a null ``prediction_time`` after the join is a hard error.
+
+    Args:
+        queries: Stage 1 output — ``num_queries`` :class:`QuerySpec` instances.
+        contexts: Stage 2 output — ``(subject_id, shard, prediction_time_index)`` frame of
+            length ``len(queries) * num_contexts_per_query``.
+        training_task_artifacts_dir: Intermediate-artifacts root.
+        split: Dataset split name (e.g. ``"train"``).
+        num_contexts_per_query: Number of patient contexts per query (the ``M`` multiplier).
+
+    Raises:
+        ValueError: If ``contexts.height != len(queries) * num_contexts_per_query``, or if
+            any context fails to resolve a prediction time (null after join).
+    """
+    n_queries = len(queries)
+    expected = n_queries * num_contexts_per_query
+
+    if contexts.height != expected:
+        raise ValueError(
+            f"contexts.height ({contexts.height}) must equal "
+            f"len(queries) * num_contexts_per_query ({n_queries} * {num_contexts_per_query} = {expected})"
+        )
+
+    if n_queries == 0 or contexts.height == 0:
+        return
+
+    query_col = pl.Series(
+        TaskQuerySchema.query_name,
+        np.repeat([q.code for q in queries], num_contexts_per_query),
+        dtype=pl.Utf8,
+    )
+    duration_col = pl.Series(
+        TaskQuerySchema.duration_days_name,
+        np.repeat([q.duration_days for q in queries], num_contexts_per_query).astype(np.float32),
+        dtype=pl.Float32,
+    )
+    combined = contexts.with_columns(query_col, duration_col)
+
+    index_dir = training_task_artifacts_dir / split / INDEX_DIRNAME
+    if index_dir.exists():
+        shutil.rmtree(index_dir)
+
+    output_cols = [
+        TaskQuerySchema.subject_id_name,
+        TaskQuerySchema.prediction_time_name,
+        TaskQuerySchema.query_name,
+        TaskQuerySchema.duration_days_name,
+    ]
+
+    join_keys = ["subject_id", "prediction_time_index"]
+
+    n_shards = 0
+    # One ``read_parquet`` per shard is deliberate: the map is read exactly once and the driver
+    # holds only the current shard's payload-free map, keeping memory flat as shard count grows.
+    # Caching every shard's map would trade that guarantee away for no IO win within a single call.
+    # ``group_by`` (not ``partition_by``) for the same reason — it streams one group at a time
+    # rather than materializing every shard's frame up front.
+
+    # Sort to make order that shards are processed deterministic
+    combined = combined.sort("shard")
+    for shard_key, shard_group in combined.group_by("shard"):
+        (shard_name,) = shard_key
+        pt_map = pl.read_parquet(prediction_times_path(training_task_artifacts_dir, split, str(shard_name)))
+
+        # Guard against silent all-null joins from join-key dtype drift between the Stage 2
+        # contexts and the Stage 0 map (e.g. Int64 vs UInt32 ``subject_id``). A mismatch is an
+        # upstream bug, so fail loudly rather than papering over it with a cast.
+        for key in join_keys:
+            ctx_dtype, map_dtype = shard_group.schema[key], pt_map.schema[key]
+            if ctx_dtype != map_dtype:
+                raise ValueError(
+                    f"Join key {key!r} dtype mismatch: contexts has {ctx_dtype}, the "
+                    f"_prediction_times map has {map_dtype}. A mismatch silently produces null "
+                    "prediction_times; fix the dtype upstream."
+                )
+
+        joined = shard_group.join(
+            pt_map,
+            on=join_keys,
+            how="left",
+        ).rename({"time": TaskQuerySchema.prediction_time_name})
+
+        # Left-join-then-raise (rather than an inner join that silently drops rows) keeps the
+        # failure explicit and debuggable. The join is total by design — same eligibility bound
+        # as Stage 2 — so any null is a hard error, and a small sample helps pinpoint the cause.
+        null_rows = joined.filter(pl.col(TaskQuerySchema.prediction_time_name).is_null())
+        if null_rows.height > 0:
+            sample = null_rows.select(join_keys).head(5).to_dicts()
+            raise ValueError(
+                f"Shard {shard_name}: {null_rows.height} contexts have null prediction_time "
+                "after join. The _prediction_times map may be stale or contexts reference invalid "
+                f"(subject_id, prediction_time_index) pairs. Sample of offending rows: {sample}"
+            )
+
+        _atomic_write_parquet(
+            joined.select(output_cols),
+            index_path(training_task_artifacts_dir, split, str(shard_name)),
+        )
+        n_shards += 1
+
+    logger.info(
+        "Stage 3: wrote partitioned index for split=%s (%d rows across %d shards).",
+        split,
+        contexts.height,
+        n_shards,
+    )
+
+
 CONFIGS = str(files("every_query") / "generate_tasks" / "configs")
 
 
