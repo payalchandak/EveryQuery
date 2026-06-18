@@ -34,8 +34,8 @@ from every_query.generate_tasks.sample_tasks import (
     QueryDistribution,
     QuerySpec,
     TaskSpec,
-    build_index,
     _clean_stale_temps,
+    build_index,
     build_index_df,
     build_prediction_times,
     compute_max_time_per_subject,
@@ -1592,6 +1592,8 @@ class TestStage3:
 
         idx = pl.read_parquet(index_path(artifacts_dir, "train", "0"))
         assert idx.schema["duration_days"] == pl.Float32
+
+
 # ---------------------------------------------------------------------------
 # Stage 4: per-shard labeling worker
 # ---------------------------------------------------------------------------
