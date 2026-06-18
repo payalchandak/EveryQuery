@@ -1,39 +1,38 @@
-"""Sampling-first task label generator for pre-training.
+"""Sampling-first task label generator for pre-training (redesigned 5-stage pipeline).
 
-Architecture:
-    1. Sample N tasks from a task distribution (uniform over codes x log-uniform over durations).
-    2. Sample N x M patient contexts ``(subject_id, prediction_time)`` from the shard.
-    3. Evaluate each ``(task, context)`` pair to produce ``(boolean_value, occurs)`` labels.
+The whole pipeline runs from one console script — ``EQ_generate_training_tasks`` — in a single
+process on a single node (see ``redesign-spec.md`` and epic #202):
 
-The script runs on one MEDS shard at a time and is parameterized by ``(input_shard, task_shard, seed)``
-so that a ``hydra -m`` sweep covers the ``(task axis x patient axis)`` cartesian product with one output
-file per worker.
+    Stage 0  build + cache the canonical prediction-time map and subject counts (scan shards once)
+    Stage 1  sample ``num_queries`` queries ``(code, duration_days)``
+    Stage 2  sample ``N = num_queries * num_contexts_per_query`` patient contexts
+    Stage 3  resolve ``prediction_time_index -> prediction_time``, zip, write per-shard index
+    Stage 4  label each index shard independently and write the final dataset parquet
 
-The worker is a pure function of its inputs: all three stages execute in-memory inside a single
-``main()`` call and write only the final labeled parquet to disk.  Reruns with identical inputs
-produce identical labels — determinism comes from :func:`~every_query.utils.seeds.derive_seed`
-splitting the task and context axes, not from persisted intermediate state.  Set
-``overwrite=true`` to regenerate labels for a worker whose output file already exists.
+Stages 0-3 run sequentially in the driver (:func:`main`); Stage 4 fans out one worker per shard via
+``concurrent.futures.ProcessPoolExecutor`` (:func:`label_one_shard`).  Workers are passed shard ids,
+never DataFrames — each does its own parquet I/O and atomic output, so they never contend.
 
-Design decisions (see issue #33):
-- **Seeding**: tasks-seed depends only on ``(seed, task_shard)``, contexts-seed depends on
-  ``(seed, input_shard, task_shard)``. Fixing ``task_shard`` and varying ``input_shard`` evaluates the
-  *same* tasks on *different* patients; fixing ``input_shard`` and varying ``task_shard`` evaluates
-  *different* tasks on *different* patients; the full sweep covers the product.
-- **Task composition**: draw ``N`` tasks once and ``N x M`` contexts once, then zip them. Mathematically
-  equivalent to ``N`` independent per-task draws under iid sampling, with one seed per side.
-- **Censoring**: computed from ``max_time`` per subject (one groupby up-front per shard). Censored
-  rows get ``boolean_value=True`` and ``occurs=False`` regardless of whether the event actually
-  fired in the window.
-- **Single-pass evaluation**: one ``join_asof(strategy="forward", by=["subject_id","query"])`` across
-  the whole ``index_df`` against the events table, regardless of how many distinct codes are present.
+Determinism comes from :func:`~every_query.utils.seeds.derive_seed` splitting the query and context
+axes; labeling is a pure function of the resolved index partition plus shard events.  Atomic writes
+make Stage 4 restartable: a present ``{shard}.parquet`` is always complete and is skipped on rerun
+unless ``overwrite=true``.
 """
+
+import os
+
+# Pin polars to a single thread BEFORE importing polars (or anything that transitively imports it —
+# meds, every_query.data.schema).  Stage 4 workers inherit this env.  With 200+ shards, process-level
+# fan-out already saturates cores; intra-op polars threads on top would oversubscribe (N x cores).
+# ``setdefault`` so an operator who exports a different value (e.g. for debugging) is respected.  A
+# transitive ``import polars`` above this line would silently defeat the setting (see #210).
+os.environ.setdefault("POLARS_MAX_THREADS", "1")
 
 import json
 import logging
-import os
 import shutil
 import tempfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -301,6 +300,7 @@ def sample_patient_contexts(
 
     # Step A — subject indices (consumed first), with replacement.
     subject_idx = rng.integers(0, patient_universe_size, size=n)
+    # Make this easier to read
     subject_id = prediction_time_counts["subject_id"].gather(subject_idx)
     shard = prediction_time_counts["shard"].gather(subject_idx)
     n_prediction_times = prediction_time_counts["n_prediction_times"].gather(subject_idx).to_numpy()
@@ -968,6 +968,7 @@ def build_prediction_times(
         ]
     )
 
+    # Notes: Write this as a test possibly?
     _assert_no_subject_spans_shards(distinct)
 
     # Gapless zero-based index over each subject's ascending distinct times.  No within-subject ties
@@ -982,7 +983,7 @@ def build_prediction_times(
         pl.col("shard").first(),
         pl.len().alias("n_prediction_times"),
     )
-
+    # Note probably can switch to > and no plus 1
     eligible = counts.filter(pl.col("n_prediction_times") >= min_prediction_times_per_subject + 1).sort(
         "subject_id"
     )
@@ -1106,6 +1107,8 @@ def build_index(
         np.repeat([q.duration_days for q in queries], num_contexts_per_query).astype(np.float32),
         dtype=pl.Float32,
     )
+
+    # use hstack so its easier to read
     combined = contexts.with_columns(query_col, duration_col)
 
     index_dir = training_task_artifacts_dir / split / INDEX_DIRNAME
@@ -1178,27 +1181,57 @@ def build_index(
     )
 
 
+# ---------------------------------------------------------------------------
+# Redesign (issue #210): orchestration & parallelism
+# ---------------------------------------------------------------------------
+
+
+def resolve_workers(max_workers: int | None = None) -> int:
+    """Resolve the Stage 4 worker-pool size: cores-on-this-node, optionally capped downward.
+
+    Reads cores from ``$SLURM_CPUS_PER_TASK`` → ``$SLURM_CPUS_ON_NODE`` (the cores allocated to this
+    task/node) → ``os.cpu_count()`` (a research server with no SLURM).  ``$SLURM_NTASKS``/``srun`` are
+    deliberately *not* used: ``ProcessPoolExecutor`` forks workers on the driver's node only, so the
+    correct knob is cores-on-this-node, not whole-allocation task count (see ``redesign-spec.md``).
+
+    ``max_workers`` caps the result **downward only** (``min(cores, max_workers)``) — set it when a run
+    OOMs, since each worker holds a full shard payload plus ``join_asof`` intermediates and memory may
+    bind before cores do.  A ``max_workers`` larger than ``cores`` is ignored.
+
+    Examples:
+        >>> import os
+        >>> resolve_workers(2) <= 2
+        True
+        >>> resolve_workers() >= 1
+        True
+    """
+    for var in ("SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE"):
+        if var in os.environ:
+            cores = int(os.environ[var])
+            break
+    else:
+        cores = os.cpu_count() or 1
+    return min(cores, max_workers) if max_workers else cores
+
+
 CONFIGS = str(files("every_query") / "generate_tasks" / "configs")
 
 
-@hydra.main(version_base=None, config_path=CONFIGS, config_name="sample_training_tasks_config")
-def main(cfg: DictConfig) -> None:
-    """Hydra entry point.
+def run(cfg: DictConfig) -> None:
+    """Execute the 5-stage pipeline for a fully-resolved config (no Hydra/dotenv side effects).
 
-    Loads ``.env`` via python-dotenv before resolving paths, following the repo convention where
-    ``$INTERMEDIATE`` / ``$PROCESSED`` / ``$TASK_DIR`` live in a gitignored ``.env`` file rather
-    than being exported by the user.  Path fallbacks: ``cfg.data_dir`` falls back to
-    ``$INTERMEDIATE`` and ``cfg.out_dir`` to ``$TASK_DIR``.  Query codes are resolved by
-    :func:`read_query_codes`, which falls back to ``$PROCESSED`` when ``cfg.query_codes`` is null.
+    Split out from :func:`main` so it is callable directly (tests, programmatic drivers) without
+    triggering Hydra arg parsing or ``load_dotenv()``; :func:`main` is the thin Hydra entry point that
+    loads ``.env`` and delegates here.  Path roots come from env vars via
+    :func:`resolve_training_task_paths`: ``$INTERMEDIATE`` (MEDS data), ``$TRAINING_TASKS_DIR`` (final
+    outputs), and the sibling ``_artifacts`` intermediate root; query codes via :func:`read_query_codes`
+    (falls back to ``$PROCESSED`` when ``cfg.query_codes`` is null).
 
-    See :func:`run_worker` for the per-worker pipeline.
+    Stages 0-3 run sequentially in this driver process and produce the partitioned Stage 3 index;
+    Stage 4 then fans out one :func:`label_one_shard` worker per shard via a ``ProcessPoolExecutor``
+    sized by :func:`resolve_workers` (capped by ``cfg.max_workers``).  The query and context axes are
+    seeded independently via :func:`derive_seed` so they reproduce separately for a fixed ``cfg.seed``.
     """
-    # Late import so `load_dotenv()` doesn't run at module import time (which would be an
-    # unexpected side effect for programmatic callers / tests of the pure primitives).
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
     path_to_data, training_tasks_dir, training_task_artifacts_dir = resolve_training_task_paths()
 
     # Stage 0: precompute & cache subject prediction_time_indexes and number of prediction_times_per_subject
@@ -1210,11 +1243,14 @@ def main(cfg: DictConfig) -> None:
         overwrite=cfg.overwrite,
     )
 
-    rng = np.random.default_rng(42)
+    # Independent RNG streams per axis (invariant 5): the query and context draws reproduce separately
+    # for a fixed ``cfg.seed``.  Cross-process RNG-order determinism tests land in #211.
+    query_rng = np.random.default_rng(derive_seed(cfg.seed, "queries"))
+    context_rng = np.random.default_rng(derive_seed(cfg.seed, "contexts"))
 
-    # Stage 1: Sample num_queries QuerieSpecs
+    # Stage 1: Sample num_queries QuerySpecs
     query_dist = QueryDistribution.from_config(cfg)
-    sampled_queries = query_dist.sample(cfg.num_queries, rng)
+    sampled_queries = query_dist.sample(cfg.num_queries, query_rng)
 
     # Stage 2: Sample (num_queries*num_contexts_per_query) patient contexts
     total_rows = cfg.num_queries * cfg.num_contexts_per_query
@@ -1226,15 +1262,63 @@ def main(cfg: DictConfig) -> None:
         prediction_time_counts=prediction_time_counts_df,
         n=total_rows,
         min_prediction_times_per_subject=cfg.min_prediction_times_per_subject,
-        rng=rng,
+        rng=context_rng,
     )
 
-    # Stage 3: zip queries with contexts, resolve prediction time
-    # Writes index_df by shard
-    build_index(queries=sampled_queries, contexts=sampled_patient_contexts)
+    # Stage 3: zip queries with contexts, resolve prediction time, write the per-shard index.
+    build_index(
+        queries=sampled_queries,
+        contexts=sampled_patient_contexts,
+        training_task_artifacts_dir=training_task_artifacts_dir,
+        split=cfg.split,
+        num_contexts_per_query=cfg.num_contexts_per_query,
+    )
 
-    # Stage 4:
+    # Stage 4: fan one labeling worker out per shard.  Shards are exactly the Stage 3 index
+    # partitions; workers receive ids/paths (never DataFrames) and write their own atomic output.
+    index_dir = training_task_artifacts_dir / cfg.split / INDEX_DIRNAME
+    data_dir = path_to_data / "data" / cfg.split
+    out_dir = training_tasks_dir / cfg.split
+    out_dir.mkdir(parents=True, exist_ok=True)  # driver creates out_dir once, before the pool
+
+    shards = sorted(p.stem for p in index_dir.glob("*.parquet"))
+    n_workers = resolve_workers(cfg.max_workers)
+    logger.info("Stage 4: labeling %d shard(s) across %d worker(s).", len(shards), n_workers)
+
+    with ProcessPoolExecutor(max_workers=n_workers) as ex:
+        futs = {ex.submit(label_one_shard, s, index_dir, data_dir, out_dir, cfg.overwrite): s for s in shards}
+        for fut in as_completed(futs):
+            fut.result()  # re-raise so a failed shard aborts the run loudly
+
+    # The final dataset is the union of the shard parquets; its row count must equal the sampling
+    # budget N = num_queries * num_contexts_per_query (spec Stage 4).
+    written = int(pl.scan_parquet(out_dir / "*.parquet").select(pl.len()).collect().item())
+    if written != total_rows:
+        raise ValueError(
+            f"Stage 4 wrote {written} rows but expected {total_rows} "
+            f"(num_queries={cfg.num_queries} * num_contexts_per_query={cfg.num_contexts_per_query})."
+        )
+    logger.info("Pipeline complete: wrote %d labeled rows to %s.", written, out_dir)
+
+
+@hydra.main(version_base=None, config_path=CONFIGS, config_name="sample_training_tasks_config")
+def main(cfg: DictConfig) -> None:
+    """Hydra entry point (``EQ_generate_training_tasks``) — loads ``.env``, then runs :func:`run`.
+
+    Loads ``.env`` via python-dotenv first (the repo convention where machine paths live in a
+    gitignored ``.env`` rather than being exported by the user), then delegates the whole 5-stage
+    pipeline to :func:`run`.
+    """
+    # Late import so `load_dotenv()` doesn't run at module import time (which would be an
+    # unexpected side effect for programmatic callers / tests of the pure primitives).
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    run(cfg)
 
 
 if __name__ == "__main__":
     main()
+
+
+# Dont let the rng go to deterministic stage as a sanity check
