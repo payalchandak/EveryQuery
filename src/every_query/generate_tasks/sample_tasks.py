@@ -151,12 +151,14 @@ class QueryDistribution:
         return len(self.query_codes)
 
     @classmethod
-    def from_config(cls, cfg: DictConfig, query_codes: list[str]) -> "QueryDistribution":
+    def from_config(cls, cfg: DictConfig) -> "QueryDistribution":
         """Build from a Hydra config plus a caller-resolved ``query_codes`` list.
 
         Reads ``min_duration``, ``max_duration``, and ``duration_distribution`` from ``cfg``.  Code
         resolution via :func:`read_query_codes` stays outside this dataclass (no file I/O here).
         """
+        query_codes = read_query_codes(cfg.query_codes)
+
         return cls(
             query_codes=query_codes,
             min_duration=float(cfg.min_duration),
@@ -1455,7 +1457,7 @@ def build_index(
 CONFIGS = str(files("every_query") / "generate_tasks" / "configs")
 
 
-@hydra.main(version_base=None, config_path=CONFIGS, config_name="sample_tasks_config")
+@hydra.main(version_base=None, config_path=CONFIGS, config_name="sample_training_tasks_config")
 def main(cfg: DictConfig) -> None:
     """Hydra entry point.
 
@@ -1473,25 +1475,40 @@ def main(cfg: DictConfig) -> None:
 
     load_dotenv()
 
-    data_dir = _resolve_path(cfg.get("data_dir"), "INTERMEDIATE", "data_dir")
-    out_dir = _resolve_path(cfg.get("out_dir"), "TASK_DIR", "out_dir")
-    query_codes = read_query_codes(cfg.get("query_codes"))
+    path_to_data, training_tasks_dir, training_task_artifacts_dir = resolve_training_task_paths()
 
-    run_worker(
-        data_dir=data_dir,
-        out_dir=out_dir,
-        query_codes=query_codes,
-        split=str(cfg.split),
-        input_shard=str(cfg.input_shard),
-        task_shard=int(cfg.task_shard),
-        seed=int(cfg.seed),
-        n_tasks=int(cfg.n_tasks),
-        contexts_per_task=int(cfg.contexts_per_task),
-        duration_min=int(cfg.duration_min),
-        duration_max=int(cfg.duration_max),
-        min_context_per_subject=int(cfg.min_context_per_subject),
-        overwrite=bool(cfg.get("overwrite", False)),
+    # Stage 0: precompute & cache subject prediction_time_indexes and number of prediction_times_per_subject
+    build_prediction_times(
+        path_to_data=path_to_data,
+        training_task_artifacts_dir=training_task_artifacts_dir,
+        split=cfg.split,
+        min_prediction_times_per_subject=cfg.min_prediction_times_per_subject,
+        overwrite=cfg.overwrite,
     )
+
+    rng = np.random.default_rng(42)
+
+    # Stage 1: Sample num_queries QuerieSpecs
+    query_dist = QueryDistribution.from_config(cfg)
+    sampled_queries = query_dist.sample(cfg.num_queries, rng)
+
+    # Stage 2: Sample (num_queries*num_contexts_per_query) patient contexts
+    total_rows = cfg.num_queries * cfg.num_contexts_per_query
+    prediction_time_counts_df = pl.read_parquet(prediction_time_counts_path(training_task_artifacts_dir, cfg.split))
+
+    sampled_patient_contexts = sample_patient_contexts(
+        prediction_time_counts=prediction_time_counts_df,
+        n=total_rows,
+        min_prediction_times_per_subject=cfg.min_prediction_times_per_subject,
+        rng=rng,
+    )
+
+    # Stage 3: zip queries with contexts, resolve prediction time
+    # Writes index_df by shard
+    build_index(queries=sampled_queries,
+                contexts=sampled_patient_contexts)
+    
+    # Stage 4: 
 
 
 if __name__ == "__main__":
