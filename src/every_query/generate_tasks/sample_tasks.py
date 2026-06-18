@@ -1326,8 +1326,10 @@ def build_index(
     # One ``read_parquet`` per shard is deliberate: the map is read exactly once and the driver
     # holds only the current shard's payload-free map, keeping memory flat as shard count grows.
     # Caching every shard's map would trade that guarantee away for no IO win within a single call.
-    for shard_group in combined.partition_by("shard"):
-        shard_name = shard_group["shard"][0]
+    # ``group_by`` (not ``partition_by``) for the same reason — it streams one group at a time
+    # rather than materializing every shard's frame up front.
+    for shard_key, shard_group in combined.group_by("shard"):
+        (shard_name,) = shard_key
         pt_map = pl.read_parquet(
             prediction_times_path(training_task_artifacts_dir, split, str(shard_name))
         )
