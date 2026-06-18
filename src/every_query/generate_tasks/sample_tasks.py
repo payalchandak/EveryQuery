@@ -1243,6 +1243,116 @@ def build_prediction_times(
     return eligible.height
 
 
+# ---------------------------------------------------------------------------
+# Redesign (issue #208): Stage 3 — resolve prediction times and build index
+# ---------------------------------------------------------------------------
+#
+# Stage 3 is the single index-resolution point (spec invariant 3): it zips Stage 1 queries with
+# Stage 2 contexts, resolves ``prediction_time_index → prediction_time`` per shard via the Stage 0
+# ``_prediction_times/`` map, and writes the partitioned ``_index/{shard}.parquet`` files that
+# Stage 4 consumes directly.  Stage 4 never resolves indices — it receives timestamps.
+
+
+def build_index(
+    queries: list[QuerySpec],
+    contexts: pl.DataFrame,
+    training_task_artifacts_dir: Path,
+    split: str,
+    num_contexts_per_query: int,
+) -> None:
+    """Stage 3: zip queries with contexts, resolve prediction times, write partitioned index.
+
+    ``np.repeat`` s the Stage 1 queries ``num_contexts_per_query`` times and zips them with the
+    Stage 2 contexts (length ``len(queries) * num_contexts_per_query``).  For each shard, joins
+    against the Stage 0 ``_prediction_times/{shard}.parquet`` map on
+    ``(subject_id, prediction_time_index)`` to resolve the timestamp, then writes
+    ``_index/{shard}.parquet`` with columns
+    ``["subject_id", "prediction_time", "query", "duration_days"]``.
+
+    The join is **per shard** (not one global join) so the driver holds only one shard's
+    payload-free map at a time, keeping memory flat.  The join is total (same eligibility as
+    Stage 2's bound) — a null ``prediction_time`` after the join is a hard error.
+
+    Args:
+        queries: Stage 1 output — ``num_queries`` :class:`QuerySpec` instances.
+        contexts: Stage 2 output — ``(subject_id, shard, prediction_time_index)`` frame of
+            length ``len(queries) * num_contexts_per_query``.
+        training_task_artifacts_dir: Intermediate-artifacts root.
+        split: Dataset split name (e.g. ``"train"``).
+        num_contexts_per_query: Number of patient contexts per query (the ``M`` multiplier).
+
+    Raises:
+        ValueError: If ``contexts.height != len(queries) * num_contexts_per_query``, or if
+            any context fails to resolve a prediction time (null after join).
+    """
+    n_queries = len(queries)
+    expected = n_queries * num_contexts_per_query
+
+    if contexts.height != expected:
+        raise ValueError(
+            f"contexts.height ({contexts.height}) must equal "
+            f"len(queries) * num_contexts_per_query ({n_queries} * {num_contexts_per_query} = {expected})"
+        )
+
+    if n_queries == 0 or contexts.height == 0:
+        return
+
+    query_col = pl.Series(
+        TaskQuerySchema.query_name,
+        np.repeat([q.code for q in queries], num_contexts_per_query),
+        dtype=pl.Utf8,
+    )
+    duration_col = pl.Series(
+        TaskQuerySchema.duration_days_name,
+        np.repeat([q.duration_days for q in queries], num_contexts_per_query).astype(np.float32),
+        dtype=pl.Float32,
+    )
+    combined = contexts.with_columns(query_col, duration_col)
+
+    index_dir = training_task_artifacts_dir / split / INDEX_DIRNAME
+    if index_dir.exists():
+        shutil.rmtree(index_dir)
+
+    output_cols = [
+        TaskQuerySchema.subject_id_name,
+        TaskQuerySchema.prediction_time_name,
+        TaskQuerySchema.query_name,
+        TaskQuerySchema.duration_days_name,
+    ]
+
+    n_shards = 0
+    for (shard_name,), shard_group in combined.group_by("shard"):
+        pt_map = pl.read_parquet(
+            prediction_times_path(training_task_artifacts_dir, split, str(shard_name))
+        )
+        joined = shard_group.join(
+            pt_map,
+            on=["subject_id", "prediction_time_index"],
+            how="left",
+        ).rename({"time": TaskQuerySchema.prediction_time_name})
+
+        null_count = joined[TaskQuerySchema.prediction_time_name].null_count()
+        if null_count > 0:
+            raise ValueError(
+                f"Shard {shard_name}: {null_count} contexts have null prediction_time after join. "
+                "The _prediction_times map may be stale or contexts reference invalid "
+                "(subject_id, prediction_time_index) pairs."
+            )
+
+        _atomic_write_parquet(
+            joined.select(output_cols),
+            index_path(training_task_artifacts_dir, split, str(shard_name)),
+        )
+        n_shards += 1
+
+    logger.info(
+        "Stage 3: wrote partitioned index for split=%s (%d rows across %d shards).",
+        split,
+        contexts.height,
+        n_shards,
+    )
+
+
 CONFIGS = str(files("every_query") / "generate_tasks" / "configs")
 
 
