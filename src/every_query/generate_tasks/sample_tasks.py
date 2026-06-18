@@ -199,6 +199,142 @@ class QueryDistribution:
 
 
 # ---------------------------------------------------------------------------
+# Stage 2 (redesign): vectorized patient-context sampling
+# ---------------------------------------------------------------------------
+
+
+def sample_patient_contexts(
+    prediction_time_counts: pl.DataFrame,
+    n: int,
+    min_prediction_times_per_subject: int,
+    rng: np.random.Generator,
+) -> pl.DataFrame:
+    """Draw ``n`` patient contexts ``(subject_id, shard, prediction_time_index)`` (redesign Stage 2).
+
+    A patient context is a ``(subject_idx, prediction_time_index)`` pair; the timestamp itself is
+    resolved later (Stage 3).  Sampling is two vectorized RNG draws over the Stage 0
+    ``_prediction_time_counts`` table — whose **row position is ``subject_idx``** (the table is sorted
+    by ``subject_id``), so per-subject ``n_prediction_times`` is gathered by row index, not a dict
+    lookup.  ``patient_universe_size`` is *derived* as the table height, not passed in.
+
+    The caller owns the ``rng`` and its seed — for the redesign, seed the context axis via
+    ``np.random.default_rng(derive_seed(seed, "contexts"))``.  Draws happen in a fixed order — all
+    ``subject_idx`` (Step A), then all ``prediction_time_index`` (Step B) — so output is deterministic
+    for a fixed ``rng`` (spec invariant 5).
+
+    Args:
+        prediction_time_counts: Stage 0 summary, one row per eligible subject with columns
+            ``subject_id``, ``shard``, ``n_prediction_times``, sorted by ``subject_id`` so row
+            position equals ``subject_idx``.
+        n: Number of contexts to draw (``N = num_queries * num_contexts_per_query``).  Subjects are
+            drawn **with replacement** (``N`` typically exceeds the eligible universe; iid-ness matters
+            more than coverage, duplicate rows allowed).
+        min_prediction_times_per_subject: Minimum prior prediction times required.  Sets the draw
+            ``low``; since ``prediction_time_index`` is a zero-based rank, ``low`` selects the
+            ``(low + 1)``-th distinct timestamp with exactly ``low`` before it (spec invariant 2).
+        rng: Caller-owned NumPy generator.
+
+    Returns:
+        Length-``n`` ``DataFrame`` with columns ``(subject_id, shard, prediction_time_index)``;
+        ``subject_id``/``shard`` keep the table's dtypes and ``prediction_time_index`` is ``Int64``
+        (matches the Stage 0 ``_prediction_times`` map for the Stage 3 join).
+
+    Raises:
+        ValueError: If ``n < 0``, or ``n > 0`` while ``prediction_time_counts`` is empty, or a counts
+            row has ``n_prediction_times <= min_prediction_times_per_subject`` (a Stage 0 eligibility
+            violation ⇒ stale/corrupt counts table, which would make the Step B range empty).
+
+    Examples:
+        >>> import numpy as np
+        >>> import polars as pl
+        >>> from every_query.utils.seeds import derive_seed
+        >>> counts = pl.DataFrame(
+        ...     {
+        ...         "subject_id": [10, 20, 30],
+        ...         "shard": ["0", "0", "1"],
+        ...         "n_prediction_times": [60, 80, 120],
+        ...     }
+        ... )
+        >>> rng = np.random.default_rng(derive_seed(0, "contexts"))
+        >>> ctx = sample_patient_contexts(counts, n=100, min_prediction_times_per_subject=50, rng=rng)
+        >>> ctx.height
+        100
+        >>> ctx.columns
+        ['subject_id', 'shard', 'prediction_time_index']
+
+        Every draw lands in ``[min, n_prediction_times)`` for its subject:
+
+        >>> checked = ctx.join(counts, on="subject_id", how="left")
+        >>> bool(
+        ...     (checked["prediction_time_index"] >= 50).all()
+        ...     and (checked["prediction_time_index"] < checked["n_prediction_times"]).all()
+        ... )
+        True
+
+        Determinism — same seed yields identical output:
+
+        >>> a = sample_patient_contexts(counts, 32, 50, np.random.default_rng(derive_seed(7, "contexts")))
+        >>> b = sample_patient_contexts(counts, 32, 50, np.random.default_rng(derive_seed(7, "contexts")))
+        >>> a.equals(b)
+        True
+
+        ``n=0`` is valid and returns an empty, correctly-typed frame:
+
+        >>> sample_patient_contexts(counts, 0, 50, rng).height
+        0
+    """
+    if n < 0:
+        raise ValueError(f"n must be >= 0 (got {n})")
+
+    sid_dtype = prediction_time_counts.schema.get("subject_id", pl.Int64)
+    shard_dtype = prediction_time_counts.schema.get("shard", pl.Utf8)
+
+    if n == 0:
+        return pl.DataFrame(
+            schema={
+                "subject_id": sid_dtype,
+                "shard": shard_dtype,
+                "prediction_time_index": pl.Int64,
+            }
+        )
+
+    patient_universe_size = prediction_time_counts.height
+    if patient_universe_size == 0:
+        raise ValueError(
+            f"prediction_time_counts is empty but n={n} contexts were requested; Stage 0 should "
+            "produce a non-empty eligible subject universe"
+        )
+
+    # Step A — subject indices (consumed first), with replacement.
+    subject_idx = rng.integers(0, patient_universe_size, size=n)
+    subject_id = prediction_time_counts["subject_id"].gather(subject_idx)
+    shard = prediction_time_counts["shard"].gather(subject_idx)
+    n_prediction_times = prediction_time_counts["n_prediction_times"].gather(subject_idx).to_numpy()
+
+    # Stage 0 eligibility guarantees a non-empty Step B range; a violation means a stale/corrupt
+    # counts table, which would make `rng.integers(low, high)` illegal (low >= high) for some rows.
+    if not (n_prediction_times > min_prediction_times_per_subject).all():
+        raise ValueError(
+            "prediction_time_counts contains a subject with "
+            f"n_prediction_times <= min_prediction_times_per_subject ({min_prediction_times_per_subject}); "
+            "Stage 0 eligibility requires n_prediction_times >= min_prediction_times_per_subject + 1 — "
+            "the counts table is stale or corrupt and must be rebuilt from _prediction_times/"
+        )
+
+    # Step B — prediction-time indices (consumed second): one array-bounded draw, one per row in row
+    # order.  `high` exclusive ⇒ the subject's last prediction time (index n-1) is eligible.
+    prediction_time_index = rng.integers(low=min_prediction_times_per_subject, high=n_prediction_times)
+
+    return pl.DataFrame(
+        {
+            "subject_id": subject_id,
+            "shard": shard,
+            "prediction_time_index": pl.Series(prediction_time_index, dtype=pl.Int64),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # Pure primitives
 # ---------------------------------------------------------------------------
 
