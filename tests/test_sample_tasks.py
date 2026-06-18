@@ -34,6 +34,7 @@ from every_query.generate_tasks.sample_tasks import (
     QueryDistribution,
     QuerySpec,
     TaskSpec,
+    _clean_stale_temps,
     build_index_df,
     build_prediction_times,
     compute_max_time_per_subject,
@@ -41,6 +42,7 @@ from every_query.generate_tasks.sample_tasks import (
     evaluate_index_df,
     final_output_path,
     index_path,
+    label_one_shard,
     prediction_time_counts_path,
     prediction_times_meta_path,
     prediction_times_path,
@@ -1422,3 +1424,232 @@ class TestStage0:
 
         counts = pl.read_parquet(prediction_time_counts_path(artifacts_dir, "train"))
         assert dict(zip(counts["subject_id"], counts["n_prediction_times"], strict=True)) == {1: 3}
+
+
+# ---------------------------------------------------------------------------
+# Stage 4: per-shard labeling worker
+# ---------------------------------------------------------------------------
+
+
+def _make_shard_fixture(
+    tmp_path: Path,
+    events: pl.DataFrame,
+    index_df: pl.DataFrame,
+    shard: str = "0",
+) -> tuple[Path, Path, Path]:
+    """Write an events shard and an index partition to disk; return ``(index_dir, data_dir, out_dir)``."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    events.write_parquet(data_dir / f"{shard}.parquet")
+
+    index_dir = tmp_path / "_index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+    index_df.write_parquet(index_dir / f"{shard}.parquet")
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    return index_dir, data_dir, out_dir
+
+
+class TestLabelOneShard:
+    """Issue #209: Stage 4 per-shard labeling worker."""
+
+    BASE = datetime(2020, 1, 1, tzinfo=UTC)
+
+    def _events(self) -> pl.DataFrame:
+        """3 subjects, each with events at day 0, 5, 10, 15, 20."""
+        rows = [
+            {"subject_id": s, "time": self.BASE + timedelta(days=d), "code": "ICD//A01"}
+            for s in [1, 2, 3]
+            for d in [0, 5, 10, 15, 20]
+        ]
+        return pl.DataFrame(rows).with_columns(pl.col("time").cast(pl.Datetime("us")))
+
+    def _index(self, duration_days: float = 7.0) -> pl.DataFrame:
+        return pl.DataFrame(
+            {
+                "subject_id": [1, 2, 3],
+                "prediction_time": [
+                    self.BASE + timedelta(days=2),
+                    self.BASE + timedelta(days=2),
+                    self.BASE + timedelta(days=2),
+                ],
+                "query": ["ICD//A01", "ICD//A01", "ICD//A01"],
+                "duration_days": [duration_days, duration_days, duration_days],
+            }
+        ).with_columns(
+            pl.col("prediction_time").cast(pl.Datetime("us")),
+            pl.col("duration_days").cast(pl.Float32),
+        )
+
+    def test_basic_labeling(self, tmp_path):
+        events = self._events()
+        index_df = self._index(duration_days=7.0)
+        index_dir, data_dir, out_dir = _make_shard_fixture(tmp_path, events, index_df)
+
+        _shard, status = label_one_shard("0", index_dir, data_dir, out_dir)
+        assert status == "labeled"
+
+        result = pl.read_parquet(out_dir / "0.parquet")
+        assert result.height == 3
+        expected_cols = {"subject_id", "prediction_time", "query", "duration_days", "boolean_value"}
+        assert set(result.columns) == expected_cols
+        # prediction_time=day2, event at day5 is in (day2, day2+7=day9] → True for all
+        assert result["boolean_value"].to_list() == [True, True, True]
+
+    def test_skip_on_success(self, tmp_path):
+        events = self._events()
+        index_df = self._index()
+        index_dir, data_dir, out_dir = _make_shard_fixture(tmp_path, events, index_df)
+
+        sentinel = b"sentinel"
+        (out_dir / "0.parquet").write_bytes(sentinel)
+
+        _shard, status = label_one_shard("0", index_dir, data_dir, out_dir, overwrite=False)
+        assert status == "skipped"
+        assert (out_dir / "0.parquet").read_bytes() == sentinel
+
+    def test_overwrite(self, tmp_path):
+        events = self._events()
+        index_df = self._index()
+        index_dir, data_dir, out_dir = _make_shard_fixture(tmp_path, events, index_df)
+
+        (out_dir / "0.parquet").write_bytes(b"sentinel")
+
+        _shard, status = label_one_shard("0", index_dir, data_dir, out_dir, overwrite=True)
+        assert status == "labeled"
+        result = pl.read_parquet(out_dir / "0.parquet")
+        assert result.height == 3
+
+    def test_float_duration_labeling(self, tmp_path):
+        """Float duration_days must not be truncated to integer days."""
+        events = pl.DataFrame(
+            {
+                "subject_id": [1, 1, 1],
+                "time": [
+                    self.BASE,
+                    self.BASE + timedelta(days=1, hours=6),  # 1.25 days after base
+                    self.BASE + timedelta(days=100),
+                ],
+                "code": ["ICD//A01", "ICD//A01", "ICD//X99"],
+            }
+        ).with_columns(pl.col("time").cast(pl.Datetime("us")))
+
+        # prediction_time = base, duration = 1.5 days → window ends at day 1.5
+        # event at day 1.25 is in (base, base+1.5d] → True
+        index_true = pl.DataFrame(
+            {
+                "subject_id": [1],
+                "prediction_time": [self.BASE],
+                "query": ["ICD//A01"],
+                "duration_days": [1.5],
+            }
+        ).with_columns(
+            pl.col("prediction_time").cast(pl.Datetime("us")),
+            pl.col("duration_days").cast(pl.Float32),
+        )
+        index_dir, data_dir, out_dir = _make_shard_fixture(tmp_path, events, index_true)
+        label_one_shard("0", index_dir, data_dir, out_dir)
+        result = pl.read_parquet(out_dir / "0.parquet")
+        assert result["boolean_value"][0] is True
+
+        # duration = 1.0 days → window ends at day 1.0; event at day 1.25 is outside → False
+        out_dir2 = tmp_path / "out2"
+        out_dir2.mkdir()
+        index_false = index_true.with_columns(pl.lit(1.0).cast(pl.Float32).alias("duration_days"))
+        index_false.write_parquet(index_dir / "0.parquet")
+        label_one_shard("0", index_dir, data_dir, out_dir2)
+        result2 = pl.read_parquet(out_dir2 / "0.parquet")
+        assert result2["boolean_value"][0] is False
+
+    def test_censoring_logic(self, tmp_path):
+        """Three-valued label: True (event in window), False (no event, fully observed), null (censored)."""
+        events = pl.DataFrame(
+            {
+                "subject_id": [1, 1, 2, 2, 3, 3],
+                "time": [
+                    self.BASE,
+                    self.BASE + timedelta(days=5),  # event at day 5
+                    self.BASE,
+                    self.BASE + timedelta(days=10),  # max_time = day 10
+                    self.BASE,
+                    self.BASE + timedelta(days=10),  # max_time = day 10
+                ],
+                "code": ["ICD//X", "ICD//A01", "ICD//X", "ICD//X", "ICD//X", "ICD//X"],
+            }
+        ).with_columns(pl.col("time").cast(pl.Datetime("us")))
+
+        index_df = pl.DataFrame(
+            {
+                "subject_id": [1, 2, 3],
+                "prediction_time": [self.BASE, self.BASE, self.BASE],
+                "query": ["ICD//A01", "ICD//A01", "ICD//A01"],
+                # subject 1: window 7d, event at day 5 → True
+                # subject 2: window 7d, no ICD//A01 event, max_time=10 ≥ 0+7 → False
+                # subject 3: window 30d, no ICD//A01 event, max_time=10 < 0+30 → null (censored)
+                "duration_days": [7.0, 7.0, 30.0],
+            }
+        ).with_columns(
+            pl.col("prediction_time").cast(pl.Datetime("us")),
+            pl.col("duration_days").cast(pl.Float32),
+        )
+
+        index_dir, data_dir, out_dir = _make_shard_fixture(tmp_path, events, index_df)
+        label_one_shard("0", index_dir, data_dir, out_dir)
+
+        result = pl.read_parquet(out_dir / "0.parquet").sort("subject_id")
+        labels = result["boolean_value"].to_list()
+        assert labels[0] is True
+        assert labels[1] is False
+        assert labels[2] is None
+
+    def test_stale_temp_cleanup(self, tmp_path):
+        events = self._events()
+        index_df = self._index()
+        index_dir, data_dir, out_dir = _make_shard_fixture(tmp_path, events, index_df)
+
+        # Create orphan temp files
+        (out_dir / ".0.parquet.tmp.12345").write_bytes(b"stale")
+        (out_dir / ".0.parquet.tmp.67890").write_bytes(b"stale")
+        assert len(list(out_dir.glob(".0.parquet.tmp.*"))) == 2
+
+        label_one_shard("0", index_dir, data_dir, out_dir)
+        assert len(list(out_dir.glob(".0.parquet.tmp.*"))) == 0
+        assert (out_dir / "0.parquet").exists()
+
+    def test_empty_index_partition(self, tmp_path):
+        events = self._events()
+        empty_index = pl.DataFrame(
+            schema={
+                "subject_id": pl.Int64,
+                "prediction_time": pl.Datetime("us"),
+                "query": pl.Utf8,
+                "duration_days": pl.Float32,
+            }
+        )
+        index_dir, data_dir, out_dir = _make_shard_fixture(tmp_path, events, empty_index)
+
+        _shard, status = label_one_shard("0", index_dir, data_dir, out_dir)
+        assert status == "labeled"
+
+        result = pl.read_parquet(out_dir / "0.parquet")
+        assert result.height == 0
+        expected_cols = {"subject_id", "prediction_time", "query", "duration_days", "boolean_value"}
+        assert set(result.columns) == expected_cols
+
+
+class TestCleanStaleTemps:
+    def test_removes_matching_temps(self, tmp_path):
+        (tmp_path / ".0.parquet.tmp.111").write_bytes(b"x")
+        (tmp_path / ".0.parquet.tmp.222").write_bytes(b"x")
+        (tmp_path / ".1.parquet.tmp.333").write_bytes(b"x")  # different shard
+
+        removed = _clean_stale_temps(tmp_path, "0")
+        assert removed == 2
+        assert not (tmp_path / ".0.parquet.tmp.111").exists()
+        assert not (tmp_path / ".0.parquet.tmp.222").exists()
+        assert (tmp_path / ".1.parquet.tmp.333").exists()  # untouched
+
+    def test_no_temps_returns_zero(self, tmp_path):
+        assert _clean_stale_temps(tmp_path, "0") == 0
