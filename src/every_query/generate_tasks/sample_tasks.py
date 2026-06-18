@@ -1494,7 +1494,9 @@ def main(cfg: DictConfig) -> None:
 
     # Stage 2: Sample (num_queries*num_contexts_per_query) patient contexts
     total_rows = cfg.num_queries * cfg.num_contexts_per_query
-    prediction_time_counts_df = pl.read_parquet(prediction_time_counts_path(training_task_artifacts_dir, cfg.split))
+    prediction_time_counts_df = pl.read_parquet(
+        prediction_time_counts_path(training_task_artifacts_dir, cfg.split)
+    )
 
     sampled_patient_contexts = sample_patient_contexts(
         prediction_time_counts=prediction_time_counts_df,
@@ -1505,10 +1507,9 @@ def main(cfg: DictConfig) -> None:
 
     # Stage 3: zip queries with contexts, resolve prediction time
     # Writes index_df by shard
-    build_index(queries=sampled_queries,
-                contexts=sampled_patient_contexts)
-    
-    # Stage 4: 
+    build_index(queries=sampled_queries, contexts=sampled_patient_contexts)
+
+    # Stage 4:
 
 
 if __name__ == "__main__":
