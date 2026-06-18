@@ -1526,6 +1526,26 @@ class TestStage3:
         with pytest.raises(ValueError, match="null prediction_time"):
             build_index(queries, contexts, artifacts_dir, "train", num_contexts_per_query=1)
 
+    def test_null_error_includes_offending_sample(self, stage0_env):
+        _, artifacts_dir = stage0_env
+        queries = [QuerySpec("ICD//A", 5.0)]
+        contexts = self._make_contexts([1], ["0"], [999])
+        with pytest.raises(ValueError, match=r"Sample of offending rows.*999"):
+            build_index(queries, contexts, artifacts_dir, "train", num_contexts_per_query=1)
+
+    def test_join_key_dtype_mismatch_raises(self, stage0_env):
+        _, artifacts_dir = stage0_env
+        queries = [QuerySpec("ICD//A", 5.0)]
+        # ``prediction_time_index`` as UInt32 mismatches the Stage 0 map's Int64 — a silent
+        # all-null join without the dtype guard.
+        contexts = pl.DataFrame({
+            "subject_id": [1],
+            "shard": ["0"],
+            "prediction_time_index": pl.Series([3], dtype=pl.UInt32),
+        })
+        with pytest.raises(ValueError, match="dtype mismatch"):
+            build_index(queries, contexts, artifacts_dir, "train", num_contexts_per_query=1)
+
     def test_empty_queries(self, stage0_env):
         _, artifacts_dir = stage0_env
         contexts = pl.DataFrame(

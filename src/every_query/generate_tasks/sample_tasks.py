@@ -1320,23 +1320,46 @@ def build_index(
         TaskQuerySchema.duration_days_name,
     ]
 
+    join_keys = ["subject_id", "prediction_time_index"]
+
     n_shards = 0
-    for (shard_name,), shard_group in combined.group_by("shard"):
+    # One ``read_parquet`` per shard is deliberate: the map is read exactly once and the driver
+    # holds only the current shard's payload-free map, keeping memory flat as shard count grows.
+    # Caching every shard's map would trade that guarantee away for no IO win within a single call.
+    for shard_group in combined.partition_by("shard"):
+        shard_name = shard_group["shard"][0]
         pt_map = pl.read_parquet(
             prediction_times_path(training_task_artifacts_dir, split, str(shard_name))
         )
+
+        # Guard against silent all-null joins from join-key dtype drift between the Stage 2
+        # contexts and the Stage 0 map (e.g. Int64 vs UInt32 ``subject_id``). A mismatch is an
+        # upstream bug, so fail loudly rather than papering over it with a cast.
+        for key in join_keys:
+            ctx_dtype, map_dtype = shard_group.schema[key], pt_map.schema[key]
+            if ctx_dtype != map_dtype:
+                raise ValueError(
+                    f"Join key {key!r} dtype mismatch: contexts has {ctx_dtype}, the "
+                    f"_prediction_times map has {map_dtype}. A mismatch silently produces null "
+                    "prediction_times; fix the dtype upstream."
+                )
+
         joined = shard_group.join(
             pt_map,
-            on=["subject_id", "prediction_time_index"],
+            on=join_keys,
             how="left",
         ).rename({"time": TaskQuerySchema.prediction_time_name})
 
-        null_count = joined[TaskQuerySchema.prediction_time_name].null_count()
-        if null_count > 0:
+        # Left-join-then-raise (rather than an inner join that silently drops rows) keeps the
+        # failure explicit and debuggable. The join is total by design — same eligibility bound
+        # as Stage 2 — so any null is a hard error, and a small sample helps pinpoint the cause.
+        null_rows = joined.filter(pl.col(TaskQuerySchema.prediction_time_name).is_null())
+        if null_rows.height > 0:
+            sample = null_rows.select(join_keys).head(5).to_dicts()
             raise ValueError(
-                f"Shard {shard_name}: {null_count} contexts have null prediction_time after join. "
-                "The _prediction_times map may be stale or contexts reference invalid "
-                "(subject_id, prediction_time_index) pairs."
+                f"Shard {shard_name}: {null_rows.height} contexts have null prediction_time "
+                "after join. The _prediction_times map may be stale or contexts reference invalid "
+                f"(subject_id, prediction_time_index) pairs. Sample of offending rows: {sample}"
             )
 
         _atomic_write_parquet(
