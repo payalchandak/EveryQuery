@@ -551,12 +551,12 @@ def evaluate_index_df(
     Three-valued semantics (matches ``TaskQuerySchema`` + ``LabelSchema``'s nullable
     ``boolean_value``):
 
-        - ``boolean_value = null``: censored — ``(prediction_time + duration_days) >
-          max_time[subject_id]``; observation ended before we could see whether the event
-          fired.
-        - ``boolean_value = True``: not censored and an event with matching ``query`` code
-          fell strictly within ``(prediction_time, prediction_time + duration_days)``.
-        - ``boolean_value = False``: not censored and no such event fell within the window.
+        - ``boolean_value = True``: an event with matching ``query`` code fell strictly
+          within ``(prediction_time, prediction_time + duration_days]``, even if the window
+          extends past ``max_time[subject_id]``.
+        - ``boolean_value = null``: no matching event in the observed window **and**
+          ``(prediction_time + duration_days) > max_time[subject_id]`` (censored).
+        - ``boolean_value = False``: no matching event and the full window is observed.
 
     The ``>`` on event time is enforced by shifting the asof key by ``+1µs`` since datetimes are
     stored at microsecond precision, which turns ``strategy="forward"``'s ``>=`` into a strict ``>``.
@@ -627,14 +627,20 @@ def evaluate_index_df(
             n_unknown,
         )
 
-    duration_expr = pl.duration(days=pl.col(TaskQuerySchema.duration_days_name))
+    duration_expr = pl.duration(seconds=pl.col(TaskQuerySchema.duration_days_name) * 86_400)
     window_end = pl.col(TaskQuerySchema.prediction_time_name) + duration_expr
     # `(window_end > max_time).fill_null(True)` resolves the missing-subject case to censored.
     censored = (window_end > pl.col("max_time")).fill_null(True)
     event_in_window = pl.col(DataSchema.time_name).is_not_null() & (pl.col(DataSchema.time_name) < window_end)
 
-    # Collapsed nullable label: null when censored, else True/False from event_in_window.
-    boolean_value = pl.when(censored).then(pl.lit(None, dtype=pl.Boolean)).otherwise(event_in_window)
+    # Occurrence takes priority: True even if the window extends past max_time (spec §Stage 4).
+    boolean_value = (
+        pl.when(event_in_window)
+        .then(pl.lit(True))
+        .when(censored)
+        .then(pl.lit(None, dtype=pl.Boolean))
+        .otherwise(pl.lit(False))
+    )
 
     return joined.with_columns(boolean_value.alias(TaskQuerySchema.boolean_value_name)).select(out_cols)
 
@@ -1009,6 +1015,73 @@ def prediction_times_meta_path(training_task_artifacts_dir: Path, split: str) ->
         PosixPath('/x/tasks_artifacts/train/_prediction_times_meta.json')
     """
     return training_task_artifacts_dir / split / PREDICTION_TIMES_META_NAME
+
+
+# ---------------------------------------------------------------------------
+# Redesign (issue #209): Stage 4 — per-shard labeling worker
+# ---------------------------------------------------------------------------
+#
+# Stage 4 is the parallelizable labeling fan-out.  Each worker processes one shard
+# independently: it reads the Stage 3 index partition (which already carries a resolved
+# ``prediction_time`` — invariant 3) plus the shard's event payload, labels via
+# ``evaluate_index_df``, aligns to ``TaskQuerySchema``, and writes the final dataset
+# shard atomically.  Workers are fully independent (own index partition, own event file,
+# own output file) so the orchestrator (#210) fans them out with ProcessPoolExecutor.
+
+
+def _clean_stale_temps(out_dir: Path, shard: str) -> int:
+    """Remove orphaned atomic-write temp files for ``shard`` in ``out_dir``.
+
+    Crashed workers leave ``.{shard}.parquet.tmp.*`` files that are never renamed into
+    place.  Cleaning them on worker entry prevents accumulation across retries.
+
+    Returns the number of files removed.
+    """
+    removed = 0
+    for tmp in out_dir.glob(f".{shard}.parquet.tmp.*"):
+        tmp.unlink(missing_ok=True)
+        removed += 1
+    return removed
+
+
+def label_one_shard(
+    shard: str,
+    index_dir: Path,
+    data_dir: Path,
+    out_dir: Path,
+    overwrite: bool = False,
+) -> tuple[str, str]:
+    """Label one shard's index partition and write the final dataset parquet.
+
+    This is the Stage 4 worker function — called once per shard, either directly or via
+    a ``ProcessPoolExecutor`` in the orchestrator (#210).
+
+    Args:
+        shard: Shard name (e.g. ``"0"``).
+        index_dir: Directory containing Stage 3 index partitions (``_index/``).
+        data_dir: Directory containing the MEDS event shards (``data/{split}/``).
+        out_dir: Directory for final output (``training_tasks_dir/{split}/``).
+        overwrite: If ``True``, relabel even if the output already exists.
+
+    Returns:
+        ``(shard, status)`` where status is ``"skipped"`` or ``"labeled"``.
+    """
+    final = out_dir / f"{shard}.parquet"
+
+    if not overwrite and final.exists():
+        return shard, "skipped"
+
+    _clean_stale_temps(out_dir, shard)
+
+    index_df = pl.read_parquet(index_dir / f"{shard}.parquet")
+    events_df = _read_event_shard(data_dir / f"{shard}.parquet")
+    max_time = compute_max_time_per_subject(events_df)
+
+    labeled = evaluate_index_df(index_df, events_df, max_time)
+    aligned = TaskQuerySchema.align(labeled.to_arrow())
+
+    _atomic_write_parquet(pl.from_arrow(aligned), final)
+    return shard, "labeled"
 
 
 # ---------------------------------------------------------------------------
