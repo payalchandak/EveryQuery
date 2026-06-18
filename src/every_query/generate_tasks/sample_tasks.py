@@ -1328,7 +1328,7 @@ def build_index(
     # Caching every shard's map would trade that guarantee away for no IO win within a single call.
     # ``group_by`` (not ``partition_by``) for the same reason — it streams one group at a time
     # rather than materializing every shard's frame up front.
-    
+
     # Sort to make order that shards are processed deterministic
     combined = combined.sort("shard")
     for shard_key, shard_group in combined.group_by("shard"):
