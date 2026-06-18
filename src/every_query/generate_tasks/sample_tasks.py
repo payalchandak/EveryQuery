@@ -304,7 +304,7 @@ def sample_patient_contexts(
         )
 
     # Step A — subject indices (consumed first), with replacement.
-    subject_idx = pl.Series(rng.integers(0, patient_universe_size, size=n))
+    subject_idx = rng.integers(0, patient_universe_size, size=n)
     subject_id = prediction_time_counts["subject_id"].gather(subject_idx)
     shard = prediction_time_counts["shard"].gather(subject_idx)
     n_prediction_times = prediction_time_counts["n_prediction_times"].gather(subject_idx).to_numpy()
