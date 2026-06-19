@@ -127,15 +127,11 @@ directory for the MEDS-transforms stages; `$PROCESSED` holds cross-shard metadat
 ```bash
 EQ_generate_training_tasks \
 	split=train \
-	input_shard=0 \
-	task_shard=0 \
-	n_tasks=1024 \
-	contexts_per_task=1
+	num_queries=1024 \
+	num_contexts_per_query=1
 ```
 
-Sweep across shards with
-`python -m every_query.generate_tasks.sample_tasks -m input_shard=0,1,2,… task_shard=range(0,K)`.
-Each worker writes labeled task parquets under `$TASK_DIR/{split}/*.parquet` idempotently. Output columns conform to [`TaskQuerySchema`](src/every_query/data/schema.py) — `subject_id, prediction_time, query, duration_days, boolean_value` — where `boolean_value` is a nullable three-valued label (`null` = censored, `True` = event occurred in `[prediction_time, prediction_time + duration_days)`, `False` = observed-but-no-event).
+A single command runs the whole 5-stage sampler in one process — Stages 0–3 inline in the driver, then Stage 4 fans labeling out across shards via a `ProcessPoolExecutor` (optionally capped with `max_workers`). There is no `task_shard`/`input_shard` sweep. The final dataset lands at `$TRAINING_TASKS_DIR/{split}/{shard}.parquet` (intermediates go to the sibling `*_artifacts` dir; see [`generate_tasks/README.md`](src/every_query/generate_tasks/README.md)). Output columns conform to [`TaskQuerySchema`](src/every_query/data/schema.py) — `subject_id, prediction_time, query, duration_days, boolean_value` — where `boolean_value` is a nullable three-valued label (`null` = censored, `True` = the query code occurred in the observed window `(prediction_time, prediction_time + duration_days]` — strict-after lower bound, inclusive upper — `False` = the full window is observed with no occurrence). Censoring (`null`) applies when the window extends past the subject's last recorded time.
 
 `query_codes=` is optional for training. Leave it unset/null to sample query codes from
 `$PROCESSED/metadata/codes.parquet`, or set it to an inline list / YAML path to restrict which
@@ -185,11 +181,11 @@ EQ_generate_evaluation_tasks codes=/path/to/sampled_codes.yaml …
 ```bash
 EQ_train \
 	output_dir="$OUTPUT_DIR/outputs/\${run_id:}" \
-	datamodule.config.task_labels_dir="$TASK_DIR" \
+	datamodule.config.task_labels_dir="$TRAINING_TASKS_DIR" \
 	datamodule.config.tensorized_cohort_dir="$FINAL_DATA_DIR"
 ```
 
-`EQ_train` reads the long-format labels written by `EQ_generate_training_tasks` directly — the inline collation step that lived in `train.py` was removed in [#76](https://github.com/payalchandak/EveryQuery/pull/76).
+`datamodule.config.task_labels_dir` defaults to `${oc.env:TASK_DIR}`, so point it at `$TRAINING_TASKS_DIR` (where `EQ_generate_training_tasks` now writes) — or export `$TASK_DIR` to that location. `EQ_train` reads the long-format labels written by `EQ_generate_training_tasks` directly — the inline collation step that lived in `train.py` was removed in [#76](https://github.com/payalchandak/EveryQuery/pull/76).
 
 Seeding: `cfg.seed` (default `140799`) is passed through `lightning.seed_everything` *before* model + datamodule instantiation (fix landed in [#124](https://github.com/payalchandak/EveryQuery/pull/124)), so model weight initialization is byte-reproducible across Python versions and platforms for a given seed.
 
@@ -230,13 +226,14 @@ CLIs. Scope of this gate was tightened in [#127](https://github.com/payalchandak
 (they were only read by a dotenv fallback in the sampler, which already tolerates missing
 env vars when CLI config values are supplied).
 
-| Var              | Purpose                                                |
-| ---------------- | ------------------------------------------------------ |
-| `PROJECT_DIR`    | Repo root (for relative output paths in a few configs) |
-| `OUTPUT_DIR`     | Where training run dirs land                           |
-| `TASK_DIR`       | Where task parquets read / write                       |
-| `FINAL_DATA_DIR` | Tensorized cohort (output of `EQ_process_data`)        |
-| `WANDB_ENTITY`   | W&B entity for training telemetry                      |
+| Var                  | Purpose                                                                                                                                  |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `PROJECT_DIR`        | Repo root (for relative output paths in a few configs)                                                                                   |
+| `OUTPUT_DIR`         | Where training run dirs land                                                                                                             |
+| `TRAINING_TASKS_DIR` | Final training-task dataset (output of `EQ_generate_training_tasks`); intermediates go to the sibling `*_artifacts` dir                  |
+| `TASK_DIR`           | Evaluation-task parquets (`EQ_generate_evaluation_tasks` writes `$TASK_DIR/eval/...`); also the default `task_labels_dir` for `EQ_train` |
+| `FINAL_DATA_DIR`     | Tensorized cohort (output of `EQ_process_data`)                                                                                          |
+| `WANDB_ENTITY`       | W&B entity for training telemetry                                                                                                        |
 
 `.env.example` is the reference — copy to `.env` and edit. Python loads it via
 `python-dotenv`. Further phases of
