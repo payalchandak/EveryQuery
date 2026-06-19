@@ -23,20 +23,10 @@ Given a tensorized MEDS cohort, EveryQuery trains a ModernBERT-style encoder to 
 
 ## Install
 
-**For development** (recommended):
-
-```bash
-git clone git@github.com:payalchandak/EveryQuery.git
-cd EveryQuery
-uv sync --group dev
-cp .env.example .env # then edit paths for your machine
-```
-
 **As a dependency:**
 
 ```bash
-# not yet on PyPI — installable from git for now:
-pip install "git+https://github.com/payalchandak/EveryQuery.git@main"
+pip install EveryQuery
 ```
 
 ## Repository layout
