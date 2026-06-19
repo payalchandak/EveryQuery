@@ -32,6 +32,7 @@ import json
 import logging
 import shutil
 import tempfile
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from importlib.resources import files
@@ -1285,7 +1286,12 @@ def run(cfg: DictConfig) -> None:
     n_workers = resolve_workers(cfg.max_workers)
     logger.info("Stage 4: labeling %d shard(s) across %d worker(s).", len(shards), n_workers)
 
-    with ProcessPoolExecutor(max_workers=n_workers) as ex:
+    # Use the "spawn" start method, not the Linux default "fork": by Stage 4 the driver has already
+    # run polars (which starts a rayon threadpool), and forking a process while those threads hold
+    # locks leaves the child with inherited-but-locked mutexes -> the worker deadlocks in futex the
+    # moment label_one_shard touches polars (see #210).  spawn gives each worker a fresh interpreter.
+    mp_context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=n_workers, mp_context=mp_context) as ex:
         futs = {ex.submit(label_one_shard, s, index_dir, data_dir, out_dir, cfg.overwrite): s for s in shards}
         for fut in as_completed(futs):
             fut.result()  # re-raise so a failed shard aborts the run loudly
