@@ -2,13 +2,16 @@
 # `redesign-spec.md`).  This is the redesign's input surface (issue #203) and is wired in by the
 # later stage issues (#205-#210); the legacy per-worker config lives in `sample_tasks_config.yaml`.
 #
-# Path roots are NOT config keys: they are machine-specific and resolved inside `main()` from env
-# vars only (via `load_dotenv()`), matching the repo convention where `.env` holds machine paths.
-#   path_to_data        <- $INTERMEDIATE        (event shards under `{path_to_data}/data/{split}/*.parquet`)
-#   training_tasks_dir  <- $TRAINING_TASKS_DIR  (final dataset only: `{split}/{shard}.parquet`)
-# Both env vars are required; `main()` raises if either is unset.  The intermediate-artifacts root
-# has no env var: it is always the sibling `{parent}/{name}_artifacts` of training_tasks_dir, so the
-# two trees never nest (invariant 7).
+# Path roots are machine-specific.  Each resolves with precedence `CLI override > env var > raise`
+# (via `_resolve_path` in `resolve_training_task_paths`), matching `EQ_process_data` and the sibling
+# `sample_evaluation_tasks.py`.  Leave the keys null to use the `.env`/env-var fallback (the cluster
+# convention where `.env` holds machine paths, loaded by `main()` via `load_dotenv()`), or pass them
+# on the CLI (`data_dir=... out_dir=...`) for ad-hoc/test runs:
+#   path_to_data (data_dir)       <- $INTERMEDIATE        (event shards under `{path_to_data}/data/{split}/*.parquet`)
+#   training_tasks_dir (out_dir)  <- $TRAINING_TASKS_DIR  (final dataset only: `{split}/{shard}.parquet`)
+# One of override/env is required per root; resolution raises if neither is set.  The intermediate-
+# artifacts root has no key/env var of its own: it is always the sibling `{parent}/{name}_artifacts`
+# of training_tasks_dir, so the two trees never nest (invariant 7).
 
 # Sampling budget.
 num_queries: 1024
@@ -33,7 +36,9 @@ min_duration: 1
 max_duration: 731
 duration_distribution: log-uniform # uniform | log-uniform
 
-# Paths are resolved in `main()` from env vars only (see header) — not config keys.
+# Path roots (see header): optional CLI overrides; null => fall back to $INTERMEDIATE / $TRAINING_TASKS_DIR.
+data_dir: null
+out_dir: null
 
 split: train
 seed: 1

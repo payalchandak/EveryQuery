@@ -630,28 +630,36 @@ def default_artifacts_dir(training_tasks_dir: Path) -> Path:
     return training_tasks_dir.parent / f"{training_tasks_dir.name}_artifacts"
 
 
-def resolve_training_task_paths() -> tuple[Path, Path, Path]:
-    """Resolve the redesigned sampler's three path roots from env vars only.
+def resolve_training_task_paths(cfg: DictConfig | None = None) -> tuple[Path, Path, Path]:
+    """Resolve the redesigned sampler's three path roots (``override > env var > raise``).
 
-    These roots are intentionally *not* config keys: they are machine-specific and live in ``.env``
-    (loaded by ``main`` via ``load_dotenv()``), so there is no CLI/config override to reason about.
+    The two input roots are machine-specific.  Each takes an optional Hydra override
+    (``cfg.data_dir`` / ``cfg.out_dir``) and falls back to its env var when the override is null —
+    the same ``override > env > raise`` contract that ``EQ_process_data`` and the sibling
+    :mod:`sample_evaluation_tasks` use, so ``.env`` keeps working for cluster runs while CLI/test
+    callers can point the sampler at an arbitrary directory.
 
-    - ``path_to_data`` — MEDS dataset root; read from ``$INTERMEDIATE``.
-    - ``training_tasks_dir`` — final-output-only root; read from ``$TRAINING_TASKS_DIR`` (the user
-      exports this before invoking).
-    - ``training_task_artifacts_dir`` — intermediate-artifacts root.  Has no env var of its own: it
-      is always :func:`default_artifacts_dir` (the ``{name}_artifacts`` sibling of
+    - ``path_to_data`` — MEDS dataset root; ``cfg.data_dir`` else ``$INTERMEDIATE``.
+    - ``training_tasks_dir`` — final-output-only root; ``cfg.out_dir`` else ``$TRAINING_TASKS_DIR``.
+    - ``training_task_artifacts_dir`` — intermediate-artifacts root.  Has no key/env var of its own:
+      it is always :func:`default_artifacts_dir` (the ``{name}_artifacts`` sibling of
       ``training_tasks_dir``), which keeps the two output trees disjoint and never-nested by
       construction (spec invariant 7).
 
-    Both required roots go through :func:`_resolve_path`, which raises a clear message when the env
-    var is unset.
+    Both required roots go through :func:`_resolve_path`, which raises a clear message when neither
+    the override nor the env var is set.
+
+    Args:
+        cfg: Resolved sampler config; ``cfg.data_dir`` / ``cfg.out_dir`` (when non-null) override the
+            env vars.  ``None`` (the default) resolves from env vars only.
 
     Returns:
         ``(path_to_data, training_tasks_dir, training_task_artifacts_dir)`` as ``Path``s.
     """
-    path_to_data = _resolve_path(None, "INTERMEDIATE", "path_to_data")
-    training_tasks_dir = _resolve_path(None, "TRAINING_TASKS_DIR", "training_tasks_dir")
+    data_dir_override = cfg.get("data_dir") if cfg is not None else None
+    out_dir_override = cfg.get("out_dir") if cfg is not None else None
+    path_to_data = _resolve_path(data_dir_override, "INTERMEDIATE", "data_dir")
+    training_tasks_dir = _resolve_path(out_dir_override, "TRAINING_TASKS_DIR", "out_dir")
     training_task_artifacts_dir = default_artifacts_dir(training_tasks_dir)
 
     return path_to_data, training_tasks_dir, training_task_artifacts_dir
@@ -1226,9 +1234,9 @@ def run(cfg: DictConfig) -> None:
 
     Split out from :func:`main` so it is callable directly (tests, programmatic drivers) without
     triggering Hydra arg parsing or ``load_dotenv()``; :func:`main` is the thin Hydra entry point that
-    loads ``.env`` and delegates here.  Path roots come from env vars via
-    :func:`resolve_training_task_paths`: ``$INTERMEDIATE`` (MEDS data), ``$TRAINING_TASKS_DIR`` (final
-    outputs), and the sibling ``_artifacts`` intermediate root; query codes via :func:`read_query_codes`
+    loads ``.env`` and delegates here.  Path roots come from :func:`resolve_training_task_paths`
+    (``cfg.data_dir`` / ``cfg.out_dir`` override, else ``$INTERMEDIATE`` / ``$TRAINING_TASKS_DIR``),
+    plus the sibling ``_artifacts`` intermediate root; query codes via :func:`read_query_codes`
     (falls back to ``$PROCESSED`` when ``cfg.query_codes`` is null).
 
     Stages 0-3 run sequentially in this driver process and produce the partitioned Stage 3 index;
@@ -1236,7 +1244,7 @@ def run(cfg: DictConfig) -> None:
     sized by :func:`resolve_workers` (capped by ``cfg.max_workers``).  The query and context axes are
     seeded independently via :func:`derive_seed` so they reproduce separately for a fixed ``cfg.seed``.
     """
-    path_to_data, training_tasks_dir, training_task_artifacts_dir = resolve_training_task_paths()
+    path_to_data, training_tasks_dir, training_task_artifacts_dir = resolve_training_task_paths(cfg)
 
     # Stage 0: precompute & cache subject prediction_time_indexes and number of prediction_times_per_subject
     build_prediction_times(

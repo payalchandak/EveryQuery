@@ -761,14 +761,35 @@ class TestResolveTrainingTaskPaths:
         assert arts == Path("/env/tasks_artifacts")
 
     def test_missing_path_to_data_raises(self, monkeypatch):
+        monkeypatch.delenv("INTERMEDIATE", raising=False)
         monkeypatch.setenv("TRAINING_TASKS_DIR", "/env/tasks")
-        with pytest.raises(ValueError, match="path_to_data"):
+        with pytest.raises(ValueError, match="data_dir"):
             resolve_training_task_paths()
 
     def test_missing_training_tasks_dir_raises(self, monkeypatch):
         monkeypatch.setenv("INTERMEDIATE", "/env/data")
-        with pytest.raises(ValueError, match="training_tasks_dir"):
+        monkeypatch.delenv("TRAINING_TASKS_DIR", raising=False)
+        with pytest.raises(ValueError, match="out_dir"):
             resolve_training_task_paths()
+
+    def test_cfg_overrides_take_precedence_over_env(self, monkeypatch):
+        # override > env: cfg.data_dir / cfg.out_dir win even when the env vars are set.
+        monkeypatch.setenv("INTERMEDIATE", "/env/data")
+        monkeypatch.setenv("TRAINING_TASKS_DIR", "/env/tasks")
+        cfg = OmegaConf.create({"data_dir": "/cli/data", "out_dir": "/cli/tasks"})
+        data, tasks, arts = resolve_training_task_paths(cfg)
+        assert data == Path("/cli/data")
+        assert tasks == Path("/cli/tasks")
+        assert arts == Path("/cli/tasks_artifacts")
+
+    def test_null_cfg_overrides_fall_back_to_env(self, monkeypatch):
+        # null override => env fallback (the cluster/.env contract is preserved).
+        monkeypatch.setenv("INTERMEDIATE", "/env/data")
+        monkeypatch.setenv("TRAINING_TASKS_DIR", "/env/tasks")
+        cfg = OmegaConf.create({"data_dir": None, "out_dir": None})
+        data, tasks, _ = resolve_training_task_paths(cfg)
+        assert data == Path("/env/data")
+        assert tasks == Path("/env/tasks")
 
 
 class TestRedesignConfigFile:
@@ -789,11 +810,15 @@ class TestRedesignConfigFile:
         assert cfg.max_workers is None
         assert cfg.duration_distribution == "log-uniform"
 
-    def test_path_roots_are_not_config_keys(self):
+    def test_path_roots_are_optional_config_keys(self):
         cfg = self._load()
-        # Path roots are env-only (see resolve_training_task_paths); they must not be config keys.
-        for path_key in ("path_to_data", "training_tasks_dir", "training_task_artifacts_dir"):
-            assert path_key not in cfg
+        # The two input roots are optional CLI overrides defaulting to null (override > env > raise;
+        # see resolve_training_task_paths).
+        assert "data_dir" in cfg and cfg.data_dir is None
+        assert "out_dir" in cfg and cfg.out_dir is None
+        # The internal artifacts root is still derived (sibling of out_dir), never a config key.
+        for derived_key in ("path_to_data", "training_tasks_dir", "training_task_artifacts_dir"):
+            assert derived_key not in cfg
 
     def test_legacy_keys_are_gone(self):
         cfg = self._load()
