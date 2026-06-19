@@ -84,27 +84,24 @@ The legacy four-stage evaluator (`every_query.evaluate.eval`, with `gen_index_ti
 
 ### Current (on `dev`)
 
-```
-    MEDS cohort  ──►  EQ_process_data  ──►  tensorized cohort ($FINAL_DATA_DIR)
-                                                          │
-                                                          ├─────────────────────────────┐
-                                                          ▼                             ▼
-                                            EQ_generate_training_tasks       EQ_generate_evaluation_tasks
-                                            (scattered, random tasks)        (dense grid: codes × durations)
-                                                          │                             │
-                                                          │ TaskQuerySchema parquets    │
-                                                          ▼                             │
-                                                     EQ_train ──► best_model.ckpt       │
-                                                                           │            │
-                                                                           ▼            │
-                                                                      EQ_predict ◄──────┘
-                                                                           │
-                                                                           │ PredictionSchema parquet
-                                                                           ▼
-                                                                     EQ_evaluate
-                                                                           │
-                                                                           ▼
-                                                               per-(query, duration_days) metrics parquet
+```mermaid
+flowchart TD
+    meds[MEDS cohort] --> process[EQ_process_data]
+    process --> intermediate[("MEDS event shards<br/>($INTERMEDIATE)")]
+    process --> cohort[("tensorized cohort<br/>($FINAL_DATA_DIR)")]
+
+    intermediate --> train_tasks[EQ_generate_training_tasks<br/><i>scattered, random tasks</i>]
+    intermediate --> eval_tasks[EQ_generate_evaluation_tasks<br/><i>dense grid: codes × durations</i>]
+
+    train_tasks -- TaskQuerySchema parquets --> train[EQ_train]
+    cohort -- tensorized cohort --> train
+    train --> ckpt[/best_model.ckpt/]
+
+    ckpt --> predict[EQ_predict]
+    eval_tasks -- TaskQuerySchema parquets --> predict
+
+    predict -- PredictionSchema parquet --> evaluate[EQ_evaluate]
+    evaluate --> metrics[("per-(query, duration_days)<br/>metrics parquet")]
 ```
 
 Both task-generation endpoints emit `TaskQuerySchema`-conformant parquets. Training uses the scattered shape (one random `(query, duration_days)` per row); evaluation uses the dense shape (every held-out `(subject, time)` × every `(query × duration)` the user wants metrics for) so `EQ_predict` + `EQ_evaluate` cover a full grid without having to run inference twice.
@@ -172,7 +169,33 @@ EQ_generate_evaluation_tasks \
 	out_dir=$TASK_DIR
 ```
 
-Samples `K` prediction times per subject, cross-joins with the full `(codes × durations)` grid, labels via the same primitive as training. Output lands under `$TASK_DIR/eval/{split}/*.parquet` (separate `eval/` subdir so it doesn't collide with the training-task output).
+Samples `1` prediction times per subject by default, cross-joins with the full `(codes × durations)` grid, labels via the same primitive as training. Output lands under `$TASK_DIR/eval/{split}/*.parquet` (separate `eval/` subdir so it doesn't collide with the training-task output).
+
+The endpoint writes one parquet per `(split, input_shard)` worker, so to label a whole split use Hydra multirun (`-m`) to sweep `input_shard` — there's no auto-discovery, so enumerate the range explicitly. Count the shards for your split first (`N` = this number):
+
+```bash
+ls "$INTERMEDIATE"/data/held_out/*.parquet | wc -l
+```
+
+Then sweep `input_shard=range(0,N)`:
+
+```bash
+# Sequential (basic launcher) — one shard after another in a single process:
+EQ_generate_evaluation_tasks -m \
+	input_shard=range(0,16) \
+	split=held_out \
+	prediction_times_per_subject=5 \
+	'codes=[HR, TEMP]' \
+	'durations=[1, 7, 30, 90, 365]'
+
+# Parallel on SLURM (submitit launcher — already a dependency):
+EQ_generate_evaluation_tasks -m \
+	hydra/launcher=submitit_slurm \
+	input_shard=range(0,16) \
+	split=held_out …
+```
+
+A comma list (`input_shard=0,1,2`) works too; `range(0,16)` is just shorthand for `0..15`. The prediction-time sampler is deterministic in `(seed, input_shard, split)`, so a swept run and the equivalent per-shard runs produce identical output.
 
 As with training, `data_dir` / `codes_dir` / `out_dir` are optional CLI overrides — omit them to fall back to `$INTERMEDIATE`, `$PROCESSED`, and `$TASK_DIR` from your `.env`. `codes_dir` (the `{codes_dir}/metadata/codes.parquet` query universe) is ignored when `codes=` is passed explicitly.
 
