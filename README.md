@@ -84,27 +84,24 @@ The legacy four-stage evaluator (`every_query.evaluate.eval`, with `gen_index_ti
 
 ### Current (on `dev`)
 
-```
-    MEDS cohort  ──►  EQ_process_data  ──►  tensorized cohort ($FINAL_DATA_DIR)
-                                                          │
-                                                          ├─────────────────────────────┐
-                                                          ▼                             ▼
-                                            EQ_generate_training_tasks       EQ_generate_evaluation_tasks
-                                            (scattered, random tasks)        (dense grid: codes × durations)
-                                                          │                             │
-                                                          │ TaskQuerySchema parquets    │
-                                                          ▼                             │
-                                                     EQ_train ──► best_model.ckpt       │
-                                                                           │            │
-                                                                           ▼            │
-                                                                      EQ_predict ◄──────┘
-                                                                           │
-                                                                           │ PredictionSchema parquet
-                                                                           ▼
-                                                                     EQ_evaluate
-                                                                           │
-                                                                           ▼
-                                                               per-(query, duration_days) metrics parquet
+```mermaid
+flowchart TD
+    meds[MEDS cohort] --> process[EQ_process_data]
+    process --> intermediate[("MEDS event shards<br/>($INTERMEDIATE)")]
+    process --> cohort[("tensorized cohort<br/>($FINAL_DATA_DIR)")]
+
+    intermediate --> train_tasks[EQ_generate_training_tasks<br/><i>scattered, random tasks</i>]
+    intermediate --> eval_tasks[EQ_generate_evaluation_tasks<br/><i>dense grid: codes × durations</i>]
+
+    train_tasks -- TaskQuerySchema parquets --> train[EQ_train]
+    cohort -- tensorized cohort --> train
+    train --> ckpt[/best_model.ckpt/]
+
+    ckpt --> predict[EQ_predict]
+    eval_tasks -- TaskQuerySchema parquets --> predict
+
+    predict -- PredictionSchema parquet --> evaluate[EQ_evaluate]
+    evaluate --> metrics[("per-(query, duration_days)<br/>metrics parquet")]
 ```
 
 Both task-generation endpoints emit `TaskQuerySchema`-conformant parquets. Training uses the scattered shape (one random `(query, duration_days)` per row); evaluation uses the dense shape (every held-out `(subject, time)` × every `(query × duration)` the user wants metrics for) so `EQ_predict` + `EQ_evaluate` cover a full grid without having to run inference twice.
@@ -127,15 +124,20 @@ directory for the MEDS-transforms stages; `$PROCESSED` holds cross-shard metadat
 ```bash
 EQ_generate_training_tasks \
 	split=train \
-	input_shard=0 \
-	task_shard=0 \
-	n_tasks=1024 \
-	contexts_per_task=1
+	num_queries=4000000 \
+	num_contexts_per_query=1 \
+	max_workers=1 \
+	data_dir="$INTERMEDIATE" \
+	out_dir="$TRAINING_TASKS_DIR"
 ```
 
-Sweep across shards with
-`python -m every_query.generate_tasks.sample_tasks -m input_shard=0,1,2,… task_shard=range(0,K)`.
-Each worker writes labeled task parquets under `$TASK_DIR/{split}/*.parquet` idempotently. Output columns conform to [`TaskQuerySchema`](src/every_query/data/schema.py) — `subject_id, prediction_time, query, duration_days, boolean_value` — where `boolean_value` is a nullable three-valued label (`null` = censored, `True` = event occurred in `[prediction_time, prediction_time + duration_days)`, `False` = observed-but-no-event).
+`data_dir` is the MEDS dataset root (event shards read from `{data_dir}/data/{split}/*.parquet`) and `out_dir` is the final-dataset root. Both are optional CLI overrides — omit them to fall back to `$INTERMEDIATE` and `$TRAINING_TASKS_DIR` from your `.env`.
+
+One command runs the whole 5-stage sampler in a single process (Stages 0–3 inline, then Stage 4 labels shards in parallel). The dataset lands at `$TRAINING_TASKS_DIR/{split}/{shard}.parquet`, with intermediates in the sibling `*_artifacts` dir (see [`generate_tasks/README.md`](src/every_query/generate_tasks/README.md)). Columns conform to [`TaskQuerySchema`](src/every_query/data/schema.py) — `subject_id, prediction_time, query, duration_days, boolean_value` — where `boolean_value` is three-valued: `True` (query code occurs in `(prediction_time, prediction_time + duration_days]`), `False` (window fully observed, no occurrence), or `null` (censored — window extends past the subject's last recorded time).
+
+> `max_workers` sets how many shards are labeled in parallel, so raising it raises peak RAM. If Stage 4 OOMs, set `max_workers=1`.
+
+> **Note:** The total number of training samples generated will be `num_queries * num_contexts_per_query`
 
 `query_codes=` is optional for training. Leave it unset/null to sample query codes from
 `$PROCESSED/metadata/codes.parquet`, or set it to an inline list / YAML path to restrict which
@@ -161,10 +163,41 @@ EQ_generate_evaluation_tasks \
 	input_shard=0 \
 	prediction_times_per_subject=5 \
 	'codes=[HR, TEMP]' \
-	'durations=[1, 7, 30, 90, 365]'
+	'durations=[1, 7, 30, 90, 365]' \
+	data_dir="$INTERMEDIATE" \
+	codes_dir=/path/to/processed \
+	out_dir=$TASK_DIR
 ```
 
-Samples `K` prediction times per subject, cross-joins with the full `(codes × durations)` grid, labels via the same primitive as training. Output lands under `$TASK_DIR/eval/{split}/*.parquet` (separate `eval/` subdir so it doesn't collide with the training-task output).
+Samples `1` prediction times per subject by default, cross-joins with the full `(codes × durations)` grid, labels via the same primitive as training. Output lands under `$TASK_DIR/eval/{split}/*.parquet` (separate `eval/` subdir so it doesn't collide with the training-task output).
+
+The endpoint writes one parquet per `(split, input_shard)` worker, so to label a whole split use Hydra multirun (`-m`) to sweep `input_shard` — there's no auto-discovery, so enumerate the range explicitly. Count the shards for your split first (`N` = this number):
+
+```bash
+ls "$INTERMEDIATE"/data/held_out/*.parquet | wc -l
+```
+
+Then sweep `input_shard=range(0,N)`:
+
+```bash
+# Sequential (basic launcher) — one shard after another in a single process:
+EQ_generate_evaluation_tasks -m \
+	input_shard=range(0,16) \
+	split=held_out \
+	prediction_times_per_subject=5 \
+	'codes=[HR, TEMP]' \
+	'durations=[1, 7, 30, 90, 365]'
+
+# Parallel on SLURM (submitit launcher — already a dependency):
+EQ_generate_evaluation_tasks -m \
+	hydra/launcher=submitit_slurm \
+	input_shard=range(0,16) \
+	split=held_out …
+```
+
+A comma list (`input_shard=0,1,2`) works too; `range(0,16)` is just shorthand for `0..15`. The prediction-time sampler is deterministic in `(seed, input_shard, split)`, so a swept run and the equivalent per-shard runs produce identical output.
+
+As with training, `data_dir` / `codes_dir` / `out_dir` are optional CLI overrides — omit them to fall back to `$INTERMEDIATE`, `$PROCESSED`, and `$TASK_DIR` from your `.env`. `codes_dir` (the `{codes_dir}/metadata/codes.parquet` query universe) is ignored when `codes=` is passed explicitly.
 
 `codes=` accepts an inline list (as above), a metadata root / `codes.parquet` path, or — for reproducible pre-sampled code universes kept out of git — a path to a YAML file. The YAML is either a bare list or a mapping with a `codes:` key:
 
@@ -185,11 +218,11 @@ EQ_generate_evaluation_tasks codes=/path/to/sampled_codes.yaml …
 ```bash
 EQ_train \
 	output_dir="$OUTPUT_DIR/outputs/\${run_id:}" \
-	datamodule.config.task_labels_dir="$TASK_DIR" \
+	datamodule.config.task_labels_dir="$TRAINING_TASKS_DIR" \
 	datamodule.config.tensorized_cohort_dir="$FINAL_DATA_DIR"
 ```
 
-`EQ_train` reads the long-format labels written by `EQ_generate_training_tasks` directly — the inline collation step that lived in `train.py` was removed in [#76](https://github.com/payalchandak/EveryQuery/pull/76).
+`datamodule.config.task_labels_dir` defaults to `${oc.env:TASK_DIR}`, so point it at `$TRAINING_TASKS_DIR` (where `EQ_generate_training_tasks` now writes) — or export `$TASK_DIR` to that location. `EQ_train` reads the long-format labels written by `EQ_generate_training_tasks` directly — the inline collation step that lived in `train.py` was removed in [#76](https://github.com/payalchandak/EveryQuery/pull/76).
 
 Seeding: `cfg.seed` (default `140799`) is passed through `lightning.seed_everything` *before* model + datamodule instantiation (fix landed in [#124](https://github.com/payalchandak/EveryQuery/pull/124)), so model weight initialization is byte-reproducible across Python versions and platforms for a given seed.
 
@@ -230,13 +263,14 @@ CLIs. Scope of this gate was tightened in [#127](https://github.com/payalchandak
 (they were only read by a dotenv fallback in the sampler, which already tolerates missing
 env vars when CLI config values are supplied).
 
-| Var              | Purpose                                                |
-| ---------------- | ------------------------------------------------------ |
-| `PROJECT_DIR`    | Repo root (for relative output paths in a few configs) |
-| `OUTPUT_DIR`     | Where training run dirs land                           |
-| `TASK_DIR`       | Where task parquets read / write                       |
-| `FINAL_DATA_DIR` | Tensorized cohort (output of `EQ_process_data`)        |
-| `WANDB_ENTITY`   | W&B entity for training telemetry                      |
+| Var                  | Purpose                                                                                                                                  |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `PROJECT_DIR`        | Repo root (for relative output paths in a few configs)                                                                                   |
+| `OUTPUT_DIR`         | Where training run dirs land                                                                                                             |
+| `TRAINING_TASKS_DIR` | Final training-task dataset (output of `EQ_generate_training_tasks`); intermediates go to the sibling `*_artifacts` dir                  |
+| `TASK_DIR`           | Evaluation-task parquets (`EQ_generate_evaluation_tasks` writes `$TASK_DIR/eval/...`); also the default `task_labels_dir` for `EQ_train` |
+| `FINAL_DATA_DIR`     | Tensorized cohort (output of `EQ_process_data`)                                                                                          |
+| `WANDB_ENTITY`       | W&B entity for training telemetry                                                                                                        |
 
 `.env.example` is the reference — copy to `.env` and edit. Python loads it via
 `python-dotenv`. Further phases of
