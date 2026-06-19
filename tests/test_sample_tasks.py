@@ -1622,9 +1622,7 @@ class TestCrossProcessDeterminism:
             }
         )
 
-    def test_serial_and_parallel_outputs_are_identical(
-        self, monkeypatch, tmp_path, synthetic_query_codes
-    ):
+    def test_serial_and_parallel_outputs_are_identical(self, monkeypatch, tmp_path, synthetic_query_codes):
         data_dir = _two_shard_cohort(tmp_path, synthetic_query_codes)
         monkeypatch.setenv("INTERMEDIATE", str(data_dir))
 
