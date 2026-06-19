@@ -166,10 +166,15 @@ EQ_generate_evaluation_tasks \
 	input_shard=0 \
 	prediction_times_per_subject=5 \
 	'codes=[HR, TEMP]' \
-	'durations=[1, 7, 30, 90, 365]'
+	'durations=[1, 7, 30, 90, 365]' \
+	data_dir=/path/to/intermediate \
+	codes_dir=/path/to/processed \
+	out_dir=/path/to/tasks
 ```
 
 Samples `K` prediction times per subject, cross-joins with the full `(codes × durations)` grid, labels via the same primitive as training. Output lands under `$TASK_DIR/eval/{split}/*.parquet` (separate `eval/` subdir so it doesn't collide with the training-task output).
+
+As with training, `data_dir` / `codes_dir` / `out_dir` are optional CLI overrides — omit them to fall back to `$INTERMEDIATE`, `$PROCESSED`, and `$TASK_DIR` from your `.env`. `codes_dir` (the `{codes_dir}/metadata/codes.parquet` query universe) is ignored when `codes=` is passed explicitly.
 
 `codes=` accepts an inline list (as above), a metadata root / `codes.parquet` path, or — for reproducible pre-sampled code universes kept out of git — a path to a YAML file. The YAML is either a bare list or a mapping with a `codes:` key:
 
