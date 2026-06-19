@@ -401,6 +401,50 @@ class TestEvaluateIndexDfEdgeCases:
         result_zero = evaluate_index_df(index_df_zero, events, max_time_df)
         assert result_zero["boolean_value"].to_list() == [False]
 
+    def test_event_exactly_at_window_end_is_included(self):
+        """An event at exactly ``prediction_time + duration_days`` counts as an occurrence.
+
+        The upper window bound is **inclusive** (``<=``), matching upstream
+        ``MEDS_trajectory_evaluation`` (``tte <= evaluation_window_end``).  This test hardcodes
+        the expected label rather than re-deriving it, so it pins the inclusive boundary
+        independent of the implementation's own comparison (issue #223).
+
+        - subject 1: only matching event lands exactly on ``window_end`` → ``True``.
+        - subject 2: only matching event lands 1µs **past** ``window_end`` → ``False``
+          (uncensored, so the bound — not censoring — is what excludes it).
+        """
+        # window_end for prediction_time 2020-01-01 + 10 days == 2020-01-11 00:00:00 exactly.
+        window_end = datetime(2020, 1, 11)
+        events = (
+            pl.DataFrame(
+                {
+                    "subject_id": [1, 1, 2, 2],
+                    "time": [
+                        window_end,  # subj 1: exactly on the boundary → included
+                        datetime(2021, 1, 1),  # pushes max_time well past window_end (uncensored)
+                        window_end + timedelta(microseconds=1),  # subj 2: just past boundary → excluded
+                        datetime(2021, 1, 1),  # uncensored
+                    ],
+                    "code": ["A", "A", "A", "A"],
+                }
+            )
+            .with_columns(pl.col("time").cast(pl.Datetime("us")))
+            .sort(["subject_id", "time"])
+        )
+
+        index_df = pl.DataFrame(
+            {
+                "subject_id": [1, 2],
+                "prediction_time": [datetime(2020, 1, 1), datetime(2020, 1, 1)],
+                "query": ["A", "A"],
+                "duration_days": [10, 10],
+            }
+        ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
+
+        result = evaluate_index_df(index_df, events, compute_max_time_per_subject(events))
+        labels = {row["subject_id"]: row["boolean_value"] for row in result.iter_rows(named=True)}
+        assert labels == {1: True, 2: False}
+
     def test_unknown_subject_is_treated_as_censored(self, caplog):
         """An index_df row referencing a subject absent from events_df resolves to censored (``boolean_value =
         null``) under the collapsed schema, and emits a warning."""

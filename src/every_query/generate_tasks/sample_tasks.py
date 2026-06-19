@@ -436,7 +436,9 @@ def evaluate_index_df(
     window_end = pl.col(TaskQuerySchema.prediction_time_name) + duration_expr
     # `(window_end > max_time).fill_null(True)` resolves the missing-subject case to censored.
     censored = (window_end > pl.col("max_time")).fill_null(True)
-    event_in_window = pl.col(DataSchema.time_name).is_not_null() & (pl.col(DataSchema.time_name) < window_end)
+    event_in_window = pl.col(DataSchema.time_name).is_not_null() & (
+        pl.col(DataSchema.time_name) <= window_end
+    )
 
     # Occurrence takes priority: True even if the window extends past max_time (spec §Stage 4).
     boolean_value = (
