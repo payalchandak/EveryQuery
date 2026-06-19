@@ -130,8 +130,8 @@ EQ_generate_training_tasks \
 	num_queries=4000000 \
 	num_contexts_per_query=1 \
 	max_workers=1 \
-	data_dir=/path/to/intermediate \
-	out_dir=/path/to/training_tasks
+	data_dir="$INTERMEDIATE" \
+	out_dir="$TRAINING_TASKS_DIR"
 ```
 
 `data_dir` is the MEDS dataset root (event shards read from `{data_dir}/data/{split}/*.parquet`) and `out_dir` is the final-dataset root. Both are optional CLI overrides — omit them to fall back to `$INTERMEDIATE` and `$TRAINING_TASKS_DIR` from your `.env`.
@@ -167,9 +167,9 @@ EQ_generate_evaluation_tasks \
 	prediction_times_per_subject=5 \
 	'codes=[HR, TEMP]' \
 	'durations=[1, 7, 30, 90, 365]' \
-	data_dir=/path/to/intermediate \
+	data_dir="$INTERMEDIATE" \
 	codes_dir=/path/to/processed \
-	out_dir=/path/to/tasks
+	out_dir=$TASK_DIR
 ```
 
 Samples `K` prediction times per subject, cross-joins with the full `(codes × durations)` grid, labels via the same primitive as training. Output lands under `$TASK_DIR/eval/{split}/*.parquet` (separate `eval/` subdir so it doesn't collide with the training-task output).
