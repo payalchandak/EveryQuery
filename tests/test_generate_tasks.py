@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 # Shared CLI overrides matching the foundation fixture.  Duplicated (not factored into a helper)
 # because the fixture's values live in conftest.py and the per-test-run invocations need to diverge
-# from them on specific fields (n_tasks, out_dir) — a helper abstraction would hide the differences
+# from them on specific fields (num_queries, out_dir) — a helper abstraction would hide the differences
 # we are explicitly testing for.
 _DURATION_MIN = 1
 _DURATION_MAX = 30
@@ -52,7 +52,7 @@ def _read_train_labels(tasks_dir: Path) -> pl.DataFrame:
     df = pl.concat([pl.read_parquet(fp) for fp in fps], how="vertical")
     assert df.height > 0, (
         f"train labeled parquets under {tasks_dir / 'train'} exist but contain 0 rows; "
-        f"the demo fixture has n_tasks>0 and should always emit at least one label"
+        f"the demo fixture has num_queries>0 and should always emit at least one label"
     )
     return df
 
@@ -76,8 +76,9 @@ def test_labels_match_ground_truth(
         window_end    = prediction_time + duration_days
         censored      = window_end > max_time[subject]
         event_fires   = exists event(subject, code=query, time in (prediction_time, window_end))
-        boolean_value = censored
-        occurs        = (not censored) AND event_fires
+        boolean_value = True  if event_fires        # occurrence takes priority (spec §Stage 4)
+                        else None if censored        # unobserved tail → censored
+                        else False                   # full window observed, no event
 
     Recomputing row-by-row catches semantics-level bugs that a schema/shape assertion can't:
     off-by-one on the window endpoint (``<`` vs ``<=``), censoring using the wrong ``max_time``,
@@ -121,10 +122,12 @@ def test_labels_match_ground_truth(
         # ~20-row fixture output, and the cost is bounded by CPU + parquet I/O, not test
         # complexity.  Favours readability + ground-truth correctness over vectorisation.
         #
-        # Collapsed nullable boolean_value per TaskQuerySchema:
-        #   null  → censored (window_end > max_time OR subject absent from events_df)
-        #   True  → event occurred in (prediction_time, window_end)
-        #   False → no event in window and not censored
+        # Collapsed nullable boolean_value per TaskQuerySchema (occurrence takes priority over
+        # censoring — spec §Stage 4 / evaluate_index_df line "Occurrence takes priority"):
+        #   True  → event occurred in (prediction_time, window_end), even if the window's tail
+        #           extends past max_time (an observed event is a definitive positive)
+        #   null  → no event in window AND censored (window_end > max_time OR subject absent)
+        #   False → no event in window and the full window is observed
         for row in labels.iter_rows(named=True):
             subj = row["subject_id"]
             window_end = row["prediction_time"] + timedelta(days=row["duration_days"])
@@ -142,7 +145,14 @@ def test_labels_match_ground_truth(
                 & (pl.col("time") < window_end)
             ).is_empty()
 
-            expected_boolean = None if expected_censored else event_fires
+            # Occurrence takes priority: an event observed in-window is True even when the
+            # window's tail is censored; null only when there is no event AND the tail is censored.
+            if event_fires:
+                expected_boolean = True
+            elif expected_censored:
+                expected_boolean = None
+            else:
+                expected_boolean = False
 
             ctx = (
                 f"split={split}, subject_id={subj}, query={row['query']!r}, "
@@ -174,13 +184,11 @@ def test_reproducible_with_same_seed(
             f"data_dir={intermediate!s}",
             f"out_dir={rerun_out!s}",
             "split=train",
-            "input_shard=0",
-            "task_shard=0",
-            "n_tasks=8",
-            "contexts_per_task=2",
-            f"duration_min={_DURATION_MIN}",
-            f"duration_max={_DURATION_MAX}",
-            f"min_context_per_subject={_MIN_CONTEXT_PER_SUBJECT}",
+            "num_queries=8",
+            "num_contexts_per_query=2",
+            f"min_duration={_DURATION_MIN}",
+            f"max_duration={_DURATION_MAX}",
+            f"min_prediction_times_per_subject={_MIN_CONTEXT_PER_SUBJECT}",
             "seed=1",
         ],
         env={"PROCESSED": str(eq_preprocessed_dataset)},
@@ -220,9 +228,9 @@ def test_n_tasks_knob_is_honored(
     eq_sampled_tasks_dir: Path,
     tmp_path_factory,
 ) -> None:
-    """Differential: raising ``n_tasks`` produces more index rows (``n_tasks * contexts_per_task``).
+    """Differential: raising ``num_queries`` produces more rows (``num_queries * num_contexts_per_query``).
 
-    Catches silent flag-drop — a shape-only test would pass even if ``n_tasks`` were ignored.
+    Catches silent flag-drop — a shape-only test would pass even if ``num_queries`` were ignored.
     """
     intermediate = eq_preprocessed_dataset.parent / "intermediate"
     big_out = tmp_path_factory.mktemp("eq_tasks_big")
@@ -232,14 +240,12 @@ def test_n_tasks_knob_is_honored(
             f"data_dir={intermediate!s}",
             f"out_dir={big_out!s}",
             "split=train",
-            "input_shard=0",
-            "task_shard=0",
-            "n_tasks=16",  # 2x the fixture's n_tasks=8
-            "contexts_per_task=2",
-            f"duration_min={_DURATION_MIN}",
-            f"duration_max={_DURATION_MAX}",
-            f"min_context_per_subject={_MIN_CONTEXT_PER_SUBJECT}",
-            "seed=1",  # same seed as the fixture; only n_tasks differs
+            "num_queries=16",  # 2x the fixture's num_queries=8
+            "num_contexts_per_query=2",
+            f"min_duration={_DURATION_MIN}",
+            f"max_duration={_DURATION_MAX}",
+            f"min_prediction_times_per_subject={_MIN_CONTEXT_PER_SUBJECT}",
+            "seed=1",  # same seed as the fixture; only num_queries differs
         ],
         env={"PROCESSED": str(eq_preprocessed_dataset)},
         timeout=120.0,
@@ -248,15 +254,15 @@ def test_n_tasks_knob_is_honored(
     small_df = _read_train_labels(eq_sampled_tasks_dir)
     big_df = _read_train_labels(big_out)
 
-    # `evaluate_index_df` uses a *left* `join_asof`, so labeled.height == index_df.height
-    # exactly — there's no row drop in the labeling stage.  Doubling `n_tasks` with
-    # `contexts_per_task` held fixed should therefore exactly double the output row count.
-    # A weaker tolerance-based check (e.g. >= 1.5x) would miss a bug that silently caps
-    # `n_tasks` somewhere between small and big (e.g. at 12) — exact-2x catches that.
+    # Stage 4 labels every index row (left `join_asof`), so the output row count is exactly
+    # `num_queries * num_contexts_per_query`.  Doubling `num_queries` with `num_contexts_per_query`
+    # held fixed should therefore exactly double the output row count.  A weaker tolerance-based
+    # check (e.g. >= 1.5x) would miss a bug that silently caps `num_queries` somewhere between small
+    # and big (e.g. at 12) — exact-2x catches that.
     assert big_df.height == 2 * small_df.height, (
-        f"n_tasks=16 produced {big_df.height} rows vs. {small_df.height} at n_tasks=8; "
-        f"expected exactly {2 * small_df.height} when only n_tasks doubles and "
-        f"contexts_per_task is held fixed.  This points at the `n_tasks` flag being "
-        f"ignored, silently capped, or `sample_contexts` dropping rows that should have "
+        f"num_queries=16 produced {big_df.height} rows vs. {small_df.height} at num_queries=8; "
+        f"expected exactly {2 * small_df.height} when only num_queries doubles and "
+        f"num_contexts_per_query is held fixed.  This points at the `num_queries` flag being "
+        f"ignored, silently capped, or context sampling dropping rows that should have "
         f"made it through."
     )
