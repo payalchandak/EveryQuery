@@ -30,9 +30,9 @@ os.environ.setdefault("POLARS_MAX_THREADS", "1")
 
 import json
 import logging
+import multiprocessing
 import shutil
 import tempfile
-import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from importlib.resources import files
