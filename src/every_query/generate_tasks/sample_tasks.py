@@ -299,12 +299,13 @@ def sample_patient_contexts(
             "produce a non-empty eligible subject universe"
         )
 
-    # Step A — subject indices (consumed first), with replacement.
+    # Step A — subject indices (consumed first), with replacement.  One row-gather over the table
+    # (same indices for every column) instead of three per-column gathers.
     subject_idx = rng.integers(0, patient_universe_size, size=n)
-    # Make this easier to read
-    subject_id = prediction_time_counts["subject_id"].gather(subject_idx)
-    shard = prediction_time_counts["shard"].gather(subject_idx)
-    n_prediction_times = prediction_time_counts["n_prediction_times"].gather(subject_idx).to_numpy()
+    sampled = prediction_time_counts[subject_idx]
+    subject_id = sampled["subject_id"]
+    shard = sampled["shard"]
+    n_prediction_times = sampled["n_prediction_times"].to_numpy()
 
     # Stage 0 eligibility guarantees a non-empty Step B range; a violation means a stale/corrupt
     # counts table, which would make `rng.integers(low, high)` illegal (low >= high) for some rows.
@@ -969,7 +970,6 @@ def build_prediction_times(
         ]
     )
 
-    # Notes: Write this as a test possibly?
     _assert_no_subject_spans_shards(distinct)
 
     # Gapless zero-based index over each subject's ascending distinct times.  No within-subject ties
@@ -984,7 +984,6 @@ def build_prediction_times(
         pl.col("shard").first(),
         pl.len().alias("n_prediction_times"),
     )
-    # Note probably can switch to > and no plus 1
     eligible = counts.filter(pl.col("n_prediction_times") >= min_prediction_times_per_subject + 1).sort(
         "subject_id"
     )
@@ -1109,7 +1108,6 @@ def build_index(
         dtype=pl.Float32,
     )
 
-    # use hstack so its easier to read
     combined = contexts.with_columns(query_col, duration_col)
 
     index_dir = training_task_artifacts_dir / split / INDEX_DIRNAME
@@ -1206,11 +1204,16 @@ def resolve_workers(max_workers: int | None = None) -> int:
         >>> resolve_workers() >= 1
         True
     """
+    cores = None
     for var in ("SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE"):
-        if var in os.environ:
+        # A set-but-unparseable value (e.g. SLURM_CPUS_PER_TASK="") is treated as unset and falls
+        # through to the next source rather than raising ValueError mid-run.
+        try:
             cores = int(os.environ[var])
             break
-    else:
+        except (KeyError, ValueError):
+            continue
+    if cores is None:
         cores = os.cpu_count() or 1
     return min(cores, max_workers) if max_workers else cores
 
@@ -1283,6 +1286,18 @@ def run(cfg: DictConfig) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)  # driver creates out_dir once, before the pool
 
     shards = sorted(p.stem for p in index_dir.glob("*.parquet"))
+
+    # Prune stale outputs from a previous run with a different shard set: unlike index_dir (rebuilt
+    # via rmtree in build_index), out_dir persists across runs, so a leftover {shard}.parquet would
+    # pollute the {split}/*.parquet union AND get miscounted by the row-count guard below.  Drop any
+    # output whose shard isn't in this run's set so the final split dir holds exactly these shards
+    # (mirrors Stage 0/3 dropping stale partitions).  Current shards are kept so overwrite=False can
+    # still skip already-labeled ones.
+    current_shards = set(shards)
+    for stale in out_dir.glob("*.parquet"):
+        if stale.stem not in current_shards:
+            stale.unlink()
+
     n_workers = resolve_workers(cfg.max_workers)
     logger.info("Stage 4: labeling %d shard(s) across %d worker(s).", len(shards), n_workers)
 
@@ -1325,6 +1340,3 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     main()
-
-
-# Dont let the rng go to deterministic stage as a sanity check
