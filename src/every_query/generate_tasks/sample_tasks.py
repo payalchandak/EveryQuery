@@ -1,39 +1,39 @@
-"""Sampling-first task label generator for pre-training.
+"""Sampling-first task label generator for pre-training (redesigned 5-stage pipeline).
 
-Architecture:
-    1. Sample N tasks from a task distribution (uniform over codes x log-uniform over durations).
-    2. Sample N x M patient contexts ``(subject_id, prediction_time)`` from the shard.
-    3. Evaluate each ``(task, context)`` pair to produce ``(boolean_value, occurs)`` labels.
+The whole pipeline runs from one console script — ``EQ_generate_training_tasks`` — in a single
+process on a single node (see ``redesign-spec.md`` and epic #202):
 
-The script runs on one MEDS shard at a time and is parameterized by ``(input_shard, task_shard, seed)``
-so that a ``hydra -m`` sweep covers the ``(task axis x patient axis)`` cartesian product with one output
-file per worker.
+    Stage 0  build + cache the canonical prediction-time map and subject counts (scan shards once)
+    Stage 1  sample ``num_queries`` queries ``(code, duration_days)``
+    Stage 2  sample ``N = num_queries * num_contexts_per_query`` patient contexts
+    Stage 3  resolve ``prediction_time_index -> prediction_time``, zip, write per-shard index
+    Stage 4  label each index shard independently and write the final dataset parquet
 
-The worker is a pure function of its inputs: all three stages execute in-memory inside a single
-``main()`` call and write only the final labeled parquet to disk.  Reruns with identical inputs
-produce identical labels — determinism comes from :func:`~every_query.utils.seeds.derive_seed`
-splitting the task and context axes, not from persisted intermediate state.  Set
-``overwrite=true`` to regenerate labels for a worker whose output file already exists.
+Stages 0-3 run sequentially in the driver (:func:`main`); Stage 4 fans out one worker per shard via
+``concurrent.futures.ProcessPoolExecutor`` (:func:`label_one_shard`).  Workers are passed shard ids,
+never DataFrames — each does its own parquet I/O and atomic output, so they never contend.
 
-Design decisions (see issue #33):
-- **Seeding**: tasks-seed depends only on ``(seed, task_shard)``, contexts-seed depends on
-  ``(seed, input_shard, task_shard)``. Fixing ``task_shard`` and varying ``input_shard`` evaluates the
-  *same* tasks on *different* patients; fixing ``input_shard`` and varying ``task_shard`` evaluates
-  *different* tasks on *different* patients; the full sweep covers the product.
-- **Task composition**: draw ``N`` tasks once and ``N x M`` contexts once, then zip them. Mathematically
-  equivalent to ``N`` independent per-task draws under iid sampling, with one seed per side.
-- **Censoring**: computed from ``max_time`` per subject (one groupby up-front per shard). Censored
-  rows get ``boolean_value=True`` and ``occurs=False`` regardless of whether the event actually
-  fired in the window.
-- **Single-pass evaluation**: one ``join_asof(strategy="forward", by=["subject_id","query"])`` across
-  the whole ``index_df`` against the events table, regardless of how many distinct codes are present.
+Determinism comes from :func:`~every_query.utils.seeds.derive_seed` splitting the query and context
+axes; labeling is a pure function of the resolved index partition plus shard events.  Atomic writes
+make Stage 4 restartable: a present ``{shard}.parquet`` is always complete and is skipped on rerun
+unless ``overwrite=true``.
 """
+
+import os
+
+# Pin polars to a single thread BEFORE importing polars (or anything that transitively imports it —
+# meds, every_query.data.schema).  Stage 4 workers inherit this env.  With 200+ shards, process-level
+# fan-out already saturates cores; intra-op polars threads on top would oversubscribe (N x cores).
+# ``setdefault`` so an operator who exports a different value (e.g. for debugging) is respected.  A
+# transitive ``import polars`` above this line would silently defeat the setting (see #210).
+os.environ.setdefault("POLARS_MAX_THREADS", "1")
 
 import json
 import logging
-import os
+import multiprocessing
 import shutil
 import tempfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -48,14 +48,6 @@ from every_query.data.schema import TaskQuerySchema, empty_task_query_df
 from every_query.utils.seeds import derive_seed
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class TaskSpec:
-    """A single pre-training task: one query code and one prediction-window duration (in days)."""
-
-    code: str
-    duration_days: int
 
 
 @dataclass(frozen=True)
@@ -151,12 +143,14 @@ class QueryDistribution:
         return len(self.query_codes)
 
     @classmethod
-    def from_config(cls, cfg: DictConfig, query_codes: list[str]) -> "QueryDistribution":
+    def from_config(cls, cfg: DictConfig) -> "QueryDistribution":
         """Build from a Hydra config plus a caller-resolved ``query_codes`` list.
 
         Reads ``min_duration``, ``max_duration``, and ``duration_distribution`` from ``cfg``.  Code
         resolution via :func:`read_query_codes` stays outside this dataclass (no file I/O here).
         """
+        query_codes = read_query_codes(cfg.query_codes)
+
         return cls(
             query_codes=query_codes,
             min_duration=float(cfg.min_duration),
@@ -305,11 +299,13 @@ def sample_patient_contexts(
             "produce a non-empty eligible subject universe"
         )
 
-    # Step A — subject indices (consumed first), with replacement.
+    # Step A — subject indices (consumed first), with replacement.  One row-gather over the table
+    # (same indices for every column) instead of three per-column gathers.
     subject_idx = rng.integers(0, patient_universe_size, size=n)
-    subject_id = prediction_time_counts["subject_id"].gather(subject_idx)
-    shard = prediction_time_counts["shard"].gather(subject_idx)
-    n_prediction_times = prediction_time_counts["n_prediction_times"].gather(subject_idx).to_numpy()
+    sampled = prediction_time_counts[subject_idx]
+    subject_id = sampled["subject_id"]
+    shard = sampled["shard"]
+    n_prediction_times = sampled["n_prediction_times"].to_numpy()
 
     # Stage 0 eligibility guarantees a non-empty Step B range; a violation means a stale/corrupt
     # counts table, which would make `rng.integers(low, high)` illegal (low >= high) for some rows.
@@ -337,197 +333,6 @@ def sample_patient_contexts(
 # ---------------------------------------------------------------------------
 # Pure primitives
 # ---------------------------------------------------------------------------
-
-
-def sample_tasks(
-    n: int,
-    query_codes: list[str],
-    duration_low: int,
-    duration_high: int,
-    seed: int,
-) -> list[TaskSpec]:
-    """Draw ``n`` iid ``TaskSpec`` s from a uniform x log-uniform distribution.
-
-    The task distribution is:
-        - ``code``: uniform over ``query_codes``
-        - ``duration_days``: ``round(exp(Uniform(log(low), log(high))))``, clipped to ``[low, high]``
-
-    Log-uniform preferentially samples shorter durations.
-
-    Examples:
-        >>> tasks = sample_tasks(
-        ...     n=5, query_codes=["A", "B", "C"],
-        ...     duration_low=1, duration_high=365, seed=0,
-        ... )
-        >>> len(tasks)
-        5
-        >>> all(t.code in {"A", "B", "C"} for t in tasks)
-        True
-        >>> all(1 <= t.duration_days <= 365 for t in tasks)
-        True
-
-        Determinism — same seed yields identical output:
-
-        >>> sample_tasks(3, ["A", "B"], 1, 365, seed=42) == sample_tasks(3, ["A", "B"], 1, 365, seed=42)
-        True
-
-        Different seeds yield different draws (with overwhelming probability at n=10):
-
-        >>> sample_tasks(10, ["A", "B"], 1, 365, seed=1) != sample_tasks(10, ["A", "B"], 1, 365, seed=2)
-        True
-
-        ``n=0`` is valid and returns an empty list:
-
-        >>> sample_tasks(0, ["A"], 1, 365, seed=0)
-        []
-
-    Raises:
-        ValueError: If ``n < 0``, ``query_codes`` is empty, or the duration range is invalid.
-    """
-    if n < 0:
-        raise ValueError(f"n must be >= 0 (got {n})")
-    if not query_codes:
-        raise ValueError("query_codes must be non-empty")
-    # Durations are quantized in days; non-integer bounds would silently bias the rounding step.
-    if not isinstance(duration_low, int) or not isinstance(duration_high, int):
-        raise TypeError(
-            f"duration_low and duration_high must be ints (got {type(duration_low).__name__}, "
-            f"{type(duration_high).__name__})"
-        )
-    if duration_low < 1:
-        raise ValueError(f"duration_low must be >= 1 (got {duration_low}); log-uniform needs positive bounds")
-    if duration_high < duration_low:
-        raise ValueError(f"duration_high ({duration_high}) must be >= duration_low ({duration_low})")
-
-    if n == 0:
-        return []
-
-    rng = np.random.default_rng(seed)
-    code_indices = rng.integers(0, len(query_codes), size=n)
-    log_low, log_high = np.log(duration_low), np.log(duration_high)
-    raw_durations = np.exp(rng.uniform(log_low, log_high, size=n))
-    durations = np.clip(np.round(raw_durations).astype(int), duration_low, duration_high)
-
-    return [
-        TaskSpec(code=query_codes[int(code_indices[i])], duration_days=int(durations[i])) for i in range(n)
-    ]
-
-
-def sample_contexts(
-    events_df: pl.DataFrame,
-    n: int,
-    min_context_per_subject: int,
-    seed: int,
-) -> pl.DataFrame:
-    """Sample ``n`` ``(subject_id, prediction_time)`` contexts iid from the shard with replacement.
-
-    A candidate prediction time is any event time at which the subject has already accumulated at
-    least ``min_context_per_subject`` prior events.
-    Sampling is with replacement so the caller can request ``n > n_candidates`` — natural for PT where
-    context iid-ness matters more than strict coverage.
-
-    Args:
-        events_df: A shard of events with columns ``subject_id``, ``time``, ``code`` (sorted by
-            ``(subject_id, time)``).
-        n: Number of contexts to draw.
-        min_context_per_subject: Minimum number of prior events a subject must have accumulated
-            before a given event time can be used as a prediction time.
-        seed: PRNG seed.
-
-    Returns:
-        ``DataFrame`` with columns ``(subject_id, prediction_time)`` and exactly ``n`` rows, or zero
-        rows if no candidates exist.
-    """
-    if n < 0:
-        raise ValueError(f"n must be >= 0 (got {n})")
-
-    candidates = (
-        events_df.with_columns(pl.col("time").cum_count().over("subject_id").alias("_ccs"))
-        .filter(pl.col("_ccs") >= min_context_per_subject)
-        .select(["subject_id", "time"])
-        .unique()
-        .rename({"time": "prediction_time"})
-        # Sort explicitly: polars' `.unique()` is hash-based and order-unstable across
-        # repeated calls, which would make `.sample(seed=...)` non-deterministic because
-        # the sampler operates on row positions.
-        .sort(["subject_id", "prediction_time"])
-    )
-
-    if n == 0 or candidates.height == 0:
-        return candidates.head(0)
-
-    return candidates.sample(n=n, with_replacement=True, seed=seed)
-
-
-def build_index_df(
-    tasks: list[TaskSpec],
-    contexts: pl.DataFrame,
-) -> pl.DataFrame:
-    """Zip sampled tasks with sampled contexts to produce the unlabeled index DataFrame.
-
-    ``contexts`` must have length ``len(tasks) * M`` for some integer ``M >= 0``.  Contexts are split
-    into per-task chunks of size ``M`` and each chunk is labeled with its task's ``code`` and
-    ``duration_days`` fields.  Mathematically equivalent under iid sampling to drawing ``M`` contexts
-    independently per task.
-
-    Returns:
-        ``DataFrame`` with columns ``(task_id, subject_id, prediction_time, query, duration_days)``.
-    """
-    n_tasks = len(tasks)
-
-    # ``task_id`` is intermediate-only (ignored by ``evaluate_index_df``) so it's not on
-    # TaskQuerySchema; everything else comes from the schema's exported ``_name`` attrs.
-    task_id_col = "task_id"
-    index_cols = [
-        task_id_col,
-        TaskQuerySchema.subject_id_name,
-        TaskQuerySchema.prediction_time_name,
-        TaskQuerySchema.query_name,
-        TaskQuerySchema.duration_days_name,
-    ]
-
-    def _empty(pt_dtype: pl.DataType, sid_dtype: pl.DataType) -> pl.DataFrame:
-        return pl.DataFrame(
-            schema={
-                task_id_col: pl.Int64,
-                TaskQuerySchema.subject_id_name: sid_dtype,
-                TaskQuerySchema.prediction_time_name: pt_dtype,
-                TaskQuerySchema.query_name: pl.Utf8,
-                # ``Float32`` matches ``TaskQuerySchema.duration_days`` (``pa.float32``);
-                # emitting Float32 directly means downstream ``TaskQuerySchema.align()``
-                # calls don't need to coerce types at the write boundary.
-                TaskQuerySchema.duration_days_name: pl.Float32,
-            }
-        )
-
-    pt_dtype = contexts.schema.get(TaskQuerySchema.prediction_time_name, pl.Datetime("us"))
-    sid_dtype = contexts.schema.get(TaskQuerySchema.subject_id_name, pl.Int64)
-
-    if n_tasks == 0 or contexts.height == 0:
-        return _empty(pt_dtype, sid_dtype)
-
-    if contexts.height % n_tasks != 0:
-        raise ValueError(f"contexts.height ({contexts.height}) must be divisible by len(tasks) ({n_tasks})")
-    contexts_per_task = contexts.height // n_tasks
-
-    task_ids = pl.Series(
-        task_id_col,
-        np.repeat(np.arange(n_tasks, dtype=np.int64), contexts_per_task),
-    )
-    query_col = pl.Series(
-        TaskQuerySchema.query_name,
-        np.repeat([t.code for t in tasks], contexts_per_task),
-        dtype=pl.Utf8,
-    )
-    # Float32 matches TaskQuerySchema's duration_days type so the final labeled output
-    # aligns to the schema without a type-coercion step at the write boundary.
-    duration_col = pl.Series(
-        TaskQuerySchema.duration_days_name,
-        np.repeat([t.duration_days for t in tasks], contexts_per_task).astype(np.float32),
-        dtype=pl.Float32,
-    )
-
-    return contexts.with_columns(task_ids, query_col, duration_col).select(index_cols)
 
 
 def compute_max_time_per_subject(events_df: pl.DataFrame) -> pl.DataFrame:
@@ -782,83 +587,6 @@ def _atomic_write_json(obj: object, fp: Path) -> None:
 # ---------------------------------------------------------------------------
 # End-to-end pipeline
 # ---------------------------------------------------------------------------
-
-
-def _labels_fp(out_dir: Path, split: str, input_shard: str, task_shard: int) -> Path:
-    """Resolve the labeled-parquet output path for one worker."""
-    worker_id = f"{input_shard}__{task_shard:04d}"
-    return out_dir / split / f"{worker_id}.parquet"
-
-
-def run_worker(
-    data_dir: Path,
-    out_dir: Path,
-    query_codes: list[str],
-    split: str,
-    input_shard: str,
-    task_shard: int,
-    seed: int,
-    n_tasks: int,
-    contexts_per_task: int,
-    duration_min: int,
-    duration_max: int,
-    min_context_per_subject: int,
-    overwrite: bool = False,
-) -> Path | None:
-    """Run the three-stage sampling pipeline for one worker in-memory.
-
-    The worker is a pure function of ``(data_dir, query_codes, config, seed, split, input_shard,
-    task_shard)`` — no per-stage checkpoints on disk, no meta sidecar, no cache-validation
-    protocol.  Determinism comes from :func:`derive_seed` separating the task and context
-    axes; a rerun with identical inputs produces identical labels.
-
-    Returns:
-        The path of the labeled parquet, or ``None`` if labels already existed at that path
-        and ``overwrite=False``.
-    """
-    labels_fp = _labels_fp(out_dir, split, input_shard, task_shard)
-
-    if labels_fp.exists() and not overwrite:
-        logger.info("Labels already exist at %s, skipping.", labels_fp)
-        return None
-
-    tasks_seed = derive_seed(seed, "tasks", task_shard)
-    tasks = sample_tasks(
-        n=n_tasks,
-        query_codes=query_codes,
-        duration_low=duration_min,
-        duration_high=duration_max,
-        seed=tasks_seed,
-    )
-
-    shard_path = data_dir / "data" / split / f"{input_shard}.parquet"
-    events_df = _read_event_shard(shard_path)
-    logger.info("Loaded %d events from %s", events_df.height, shard_path)
-
-    contexts_seed = derive_seed(seed, "contexts", input_shard, task_shard)
-    contexts = sample_contexts(
-        events_df=events_df,
-        n=len(tasks) * contexts_per_task,
-        min_context_per_subject=min_context_per_subject,
-        seed=contexts_seed,
-    )
-    index_df = build_index_df(tasks, contexts)
-
-    max_time_df = compute_max_time_per_subject(events_df)
-    labeled = evaluate_index_df(index_df, events_df, max_time_df)
-    # Downstream MEDS dataloader does not use task_id; it is intentionally absent from the
-    # published schema.
-    #
-    # Align the output against TaskQuerySchema at the write boundary.  ``align`` is
-    # preferred over ``validate`` here because it (a) reorders columns into the schema's
-    # canonical order and (b) casts mistyped columns to the declared dtypes — so even if
-    # an upstream edit silently changes one type (e.g., reverting ``build_index_df`` to
-    # emit ``Int64`` durations), the on-disk parquet still conforms.  Missing or extra
-    # columns remain hard errors (``align`` re-raises on those).
-    aligned = TaskQuerySchema.align(labeled.to_arrow())
-    _atomic_write_parquet(pl.from_arrow(aligned), labels_fp)
-    logger.info("Wrote %d labeled rows to %s", labeled.height, labels_fp)
-    return labels_fp
 
 
 def _resolve_path(cfg_value: str | None, env_var: str, name: str) -> Path:
@@ -1256,7 +984,6 @@ def build_prediction_times(
         pl.col("shard").first(),
         pl.len().alias("n_prediction_times"),
     )
-
     eligible = counts.filter(pl.col("n_prediction_times") >= min_prediction_times_per_subject + 1).sort(
         "subject_id"
     )
@@ -1380,6 +1107,7 @@ def build_index(
         np.repeat([q.duration_days for q in queries], num_contexts_per_query).astype(np.float32),
         dtype=pl.Float32,
     )
+
     combined = contexts.with_columns(query_col, duration_col)
 
     index_dir = training_task_artifacts_dir / split / INDEX_DIRNAME
@@ -1452,46 +1180,162 @@ def build_index(
     )
 
 
+# ---------------------------------------------------------------------------
+# Redesign (issue #210): orchestration & parallelism
+# ---------------------------------------------------------------------------
+
+
+def resolve_workers(max_workers: int | None = None) -> int:
+    """Resolve the Stage 4 worker-pool size: cores-on-this-node, optionally capped downward.
+
+    Reads cores from ``$SLURM_CPUS_PER_TASK`` → ``$SLURM_CPUS_ON_NODE`` (the cores allocated to this
+    task/node) → ``os.cpu_count()`` (a research server with no SLURM).  ``$SLURM_NTASKS``/``srun`` are
+    deliberately *not* used: ``ProcessPoolExecutor`` forks workers on the driver's node only, so the
+    correct knob is cores-on-this-node, not whole-allocation task count (see ``redesign-spec.md``).
+
+    ``max_workers`` caps the result **downward only** (``min(cores, max_workers)``) — set it when a run
+    OOMs, since each worker holds a full shard payload plus ``join_asof`` intermediates and memory may
+    bind before cores do.  A ``max_workers`` larger than ``cores`` is ignored.
+
+    Examples:
+        >>> import os
+        >>> resolve_workers(2) <= 2
+        True
+        >>> resolve_workers() >= 1
+        True
+    """
+    cores = None
+    for var in ("SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE"):
+        # A set-but-unparseable value (e.g. SLURM_CPUS_PER_TASK="") is treated as unset and falls
+        # through to the next source rather than raising ValueError mid-run.
+        try:
+            cores = int(os.environ[var])
+            break
+        except (KeyError, ValueError):
+            continue
+    if cores is None:
+        cores = os.cpu_count() or 1
+    return min(cores, max_workers) if max_workers else cores
+
+
 CONFIGS = str(files("every_query") / "generate_tasks" / "configs")
 
 
-@hydra.main(version_base=None, config_path=CONFIGS, config_name="sample_tasks_config")
+def run(cfg: DictConfig) -> None:
+    """Execute the 5-stage pipeline for a fully-resolved config (no Hydra/dotenv side effects).
+
+    Split out from :func:`main` so it is callable directly (tests, programmatic drivers) without
+    triggering Hydra arg parsing or ``load_dotenv()``; :func:`main` is the thin Hydra entry point that
+    loads ``.env`` and delegates here.  Path roots come from env vars via
+    :func:`resolve_training_task_paths`: ``$INTERMEDIATE`` (MEDS data), ``$TRAINING_TASKS_DIR`` (final
+    outputs), and the sibling ``_artifacts`` intermediate root; query codes via :func:`read_query_codes`
+    (falls back to ``$PROCESSED`` when ``cfg.query_codes`` is null).
+
+    Stages 0-3 run sequentially in this driver process and produce the partitioned Stage 3 index;
+    Stage 4 then fans out one :func:`label_one_shard` worker per shard via a ``ProcessPoolExecutor``
+    sized by :func:`resolve_workers` (capped by ``cfg.max_workers``).  The query and context axes are
+    seeded independently via :func:`derive_seed` so they reproduce separately for a fixed ``cfg.seed``.
+    """
+    path_to_data, training_tasks_dir, training_task_artifacts_dir = resolve_training_task_paths()
+
+    # Stage 0: precompute & cache subject prediction_time_indexes and number of prediction_times_per_subject
+    build_prediction_times(
+        path_to_data=path_to_data,
+        training_task_artifacts_dir=training_task_artifacts_dir,
+        split=cfg.split,
+        min_prediction_times_per_subject=cfg.min_prediction_times_per_subject,
+        overwrite=cfg.overwrite,
+    )
+
+    # Independent RNG streams per axis (invariant 5): the query and context draws reproduce separately
+    # for a fixed ``cfg.seed``.  Cross-process RNG-order determinism tests land in #211.
+    query_rng = np.random.default_rng(derive_seed(cfg.seed, "queries"))
+    context_rng = np.random.default_rng(derive_seed(cfg.seed, "contexts"))
+
+    # Stage 1: Sample num_queries QuerySpecs
+    query_dist = QueryDistribution.from_config(cfg)
+    sampled_queries = query_dist.sample(cfg.num_queries, query_rng)
+
+    # Stage 2: Sample (num_queries*num_contexts_per_query) patient contexts
+    total_rows = cfg.num_queries * cfg.num_contexts_per_query
+    prediction_time_counts_df = pl.read_parquet(
+        prediction_time_counts_path(training_task_artifacts_dir, cfg.split)
+    )
+
+    sampled_patient_contexts = sample_patient_contexts(
+        prediction_time_counts=prediction_time_counts_df,
+        n=total_rows,
+        min_prediction_times_per_subject=cfg.min_prediction_times_per_subject,
+        rng=context_rng,
+    )
+
+    # Stage 3: zip queries with contexts, resolve prediction time, write the per-shard index.
+    build_index(
+        queries=sampled_queries,
+        contexts=sampled_patient_contexts,
+        training_task_artifacts_dir=training_task_artifacts_dir,
+        split=cfg.split,
+        num_contexts_per_query=cfg.num_contexts_per_query,
+    )
+
+    # Stage 4: fan one labeling worker out per shard.  Shards are exactly the Stage 3 index
+    # partitions; workers receive ids/paths (never DataFrames) and write their own atomic output.
+    index_dir = training_task_artifacts_dir / cfg.split / INDEX_DIRNAME
+    data_dir = path_to_data / "data" / cfg.split
+    out_dir = training_tasks_dir / cfg.split
+    out_dir.mkdir(parents=True, exist_ok=True)  # driver creates out_dir once, before the pool
+
+    shards = sorted(p.stem for p in index_dir.glob("*.parquet"))
+
+    # Prune stale outputs from a previous run with a different shard set: unlike index_dir (rebuilt
+    # via rmtree in build_index), out_dir persists across runs, so a leftover {shard}.parquet would
+    # pollute the {split}/*.parquet union AND get miscounted by the row-count guard below.  Drop any
+    # output whose shard isn't in this run's set so the final split dir holds exactly these shards
+    # (mirrors Stage 0/3 dropping stale partitions).  Current shards are kept so overwrite=False can
+    # still skip already-labeled ones.
+    current_shards = set(shards)
+    for stale in out_dir.glob("*.parquet"):
+        if stale.stem not in current_shards:
+            stale.unlink()
+
+    n_workers = resolve_workers(cfg.max_workers)
+    logger.info("Stage 4: labeling %d shard(s) across %d worker(s).", len(shards), n_workers)
+
+    # Use the "spawn" start method, not the Linux default "fork": by Stage 4 the driver has already
+    # run polars (which starts a rayon threadpool), and forking a process while those threads hold
+    # locks leaves the child with inherited-but-locked mutexes -> the worker deadlocks in futex the
+    # moment label_one_shard touches polars (see #210).  spawn gives each worker a fresh interpreter.
+    mp_context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=n_workers, mp_context=mp_context) as ex:
+        futs = {ex.submit(label_one_shard, s, index_dir, data_dir, out_dir, cfg.overwrite): s for s in shards}
+        for fut in as_completed(futs):
+            fut.result()  # re-raise so a failed shard aborts the run loudly
+
+    # The final dataset is the union of the shard parquets; its row count must equal the sampling
+    # budget N = num_queries * num_contexts_per_query (spec Stage 4).
+    written = int(pl.scan_parquet(out_dir / "*.parquet").select(pl.len()).collect().item())
+    if written != total_rows:
+        raise ValueError(
+            f"Stage 4 wrote {written} rows but expected {total_rows} "
+            f"(num_queries={cfg.num_queries} * num_contexts_per_query={cfg.num_contexts_per_query})."
+        )
+    logger.info("Pipeline complete: wrote %d labeled rows to %s.", written, out_dir)
+
+
+@hydra.main(version_base=None, config_path=CONFIGS, config_name="sample_training_tasks_config")
 def main(cfg: DictConfig) -> None:
-    """Hydra entry point.
+    """Hydra entry point (``EQ_generate_training_tasks``) — loads ``.env``, then runs :func:`run`.
 
-    Loads ``.env`` via python-dotenv before resolving paths, following the repo convention where
-    ``$INTERMEDIATE`` / ``$PROCESSED`` / ``$TASK_DIR`` live in a gitignored ``.env`` file rather
-    than being exported by the user.  Path fallbacks: ``cfg.data_dir`` falls back to
-    ``$INTERMEDIATE`` and ``cfg.out_dir`` to ``$TASK_DIR``.  Query codes are resolved by
-    :func:`read_query_codes`, which falls back to ``$PROCESSED`` when ``cfg.query_codes`` is null.
-
-    See :func:`run_worker` for the per-worker pipeline.
+    Loads ``.env`` via python-dotenv first (the repo convention where machine paths live in a
+    gitignored ``.env`` rather than being exported by the user), then delegates the whole 5-stage
+    pipeline to :func:`run`.
     """
     # Late import so `load_dotenv()` doesn't run at module import time (which would be an
     # unexpected side effect for programmatic callers / tests of the pure primitives).
     from dotenv import load_dotenv
 
     load_dotenv()
-
-    data_dir = _resolve_path(cfg.get("data_dir"), "INTERMEDIATE", "data_dir")
-    out_dir = _resolve_path(cfg.get("out_dir"), "TASK_DIR", "out_dir")
-    query_codes = read_query_codes(cfg.get("query_codes"))
-
-    run_worker(
-        data_dir=data_dir,
-        out_dir=out_dir,
-        query_codes=query_codes,
-        split=str(cfg.split),
-        input_shard=str(cfg.input_shard),
-        task_shard=int(cfg.task_shard),
-        seed=int(cfg.seed),
-        n_tasks=int(cfg.n_tasks),
-        contexts_per_task=int(cfg.contexts_per_task),
-        duration_min=int(cfg.duration_min),
-        duration_max=int(cfg.duration_max),
-        min_context_per_subject=int(cfg.min_context_per_subject),
-        overwrite=bool(cfg.get("overwrite", False)),
-    )
+    run(cfg)
 
 
 if __name__ == "__main__":
