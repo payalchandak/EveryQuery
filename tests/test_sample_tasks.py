@@ -1550,3 +1550,193 @@ class TestMainOrchestration:
         # leaving the output byte-for-byte identical.
         st.run(cfg)
         assert shard_fp.read_bytes() == first_bytes
+
+
+def _union_final_output(tasks_dir: Path, split: str = "train") -> pl.DataFrame:
+    """Read every Stage 4 shard parquet under ``{tasks_dir}/{split}`` into one sorted frame.
+
+    Sorting on all columns makes the union order-insensitive so two runs that differ only in how rows were
+    partitioned across worker processes compare value-equal.
+    """
+    shard_files = sorted((tasks_dir / split).glob("*.parquet"))
+    assert shard_files, f"no shard outputs under {tasks_dir / split}"
+    union = pl.concat([pl.read_parquet(f) for f in shard_files])
+    return union.sort(by=union.columns)
+
+
+def _two_shard_cohort(tmp_path: Path, query_codes: list[str], *, split: str = "train") -> Path:
+    """Write a two-shard MEDS cohort (subjects do NOT span shards — invariant 4) and return its root.
+
+    Mirrors ``_write_fake_cohort``'s ``$INTERMEDIATE`` layout but splits subjects across two shard
+    parquets so Stage 4's ProcessPoolExecutor actually fans out (a single shard collapses N workers
+    to 1).  Shard "0" holds subjects 1 & 2, shard "1" holds subject 3; each subject gets enough
+    distinct prediction times to clear ``min_prediction_times_per_subject`` and cycles through
+    ``query_codes`` so labels are non-trivial.
+    """
+    base = datetime(2020, 1, 1)
+
+    def _subject(subj: int, n: int) -> pl.DataFrame:
+        return pl.DataFrame(
+            [
+                {
+                    "subject_id": subj,
+                    "time": base + timedelta(days=i * 10 + subj),
+                    "code": query_codes[i % len(query_codes)],
+                }
+                for i in range(n)
+            ]
+        )
+
+    data_dir = tmp_path / "intermediate"
+    split_dir = data_dir / "data" / split
+    split_dir.mkdir(parents=True, exist_ok=True)
+    pl.concat([_subject(1, 30), _subject(2, 30)]).write_parquet(split_dir / "0.parquet")
+    _subject(3, 30).write_parquet(split_dir / "1.parquet")
+    return data_dir
+
+
+class TestCrossProcessDeterminism:
+    """Issue #211: the parallel Stage 4 fan-out must produce the same labeled dataset as the serial path.
+
+    Every other ``run()`` test pins ``max_workers=1``, so the spawn-based ``ProcessPoolExecutor`` added in
+    4d39a24 (polars-fork deadlock fix) is never compared against the single-worker path.  This runs the
+    *same* config (same seed, same two-shard cohort) once serially and once across >=2 workers, then
+    asserts the unioned outputs are value-identical — guarding against any worker-count-dependent drift
+    in RNG order, shard assignment, or asof labeling.
+    """
+
+    def _cfg(self, query_codes, *, max_workers):
+        return OmegaConf.create(
+            {
+                "num_queries": 8,
+                "num_contexts_per_query": 3,
+                "min_prediction_times_per_subject": 5,
+                "max_workers": max_workers,
+                "query_codes": list(query_codes),
+                "min_duration": 1,
+                "max_duration": 365,
+                "duration_distribution": "log-uniform",
+                "split": "train",
+                "seed": 1,
+                "overwrite": False,
+            }
+        )
+
+    def test_serial_and_parallel_outputs_are_identical(self, monkeypatch, tmp_path, synthetic_query_codes):
+        data_dir = _two_shard_cohort(tmp_path, synthetic_query_codes)
+        monkeypatch.setenv("INTERMEDIATE", str(data_dir))
+
+        # Two disjoint output roots: TRAINING_TASKS_DIR drives both the final root and (via
+        # default_artifacts_dir's sibling rule) the intermediate root, so the runs never share state.
+        serial_dir = tmp_path / "tasks_serial"
+        parallel_dir = tmp_path / "tasks_parallel"
+
+        monkeypatch.setenv("TRAINING_TASKS_DIR", str(serial_dir))
+        st.run(self._cfg(synthetic_query_codes, max_workers=1))
+
+        monkeypatch.setenv("TRAINING_TASKS_DIR", str(parallel_dir))
+        st.run(self._cfg(synthetic_query_codes, max_workers=2))
+
+        serial = _union_final_output(serial_dir)
+        parallel = _union_final_output(parallel_dir)
+        # Both runs must spread their rows across the two shards (otherwise the >=2-worker run never
+        # actually fanned out and the comparison is vacuous).
+        assert len(sorted((parallel_dir / "train").glob("*.parquet"))) == 2
+        assert serial.equals(parallel)
+
+
+# Pinned expected rows for TestSnapshot (seed=1, num_queries=3, num_contexts_per_query=2 over the
+# two-shard fixture).  ``prediction_time`` is an ISO string parsed to Datetime(us) in the test.
+EXPECTED_SNAPSHOT_ROWS: list[dict] = [
+    {
+        "subject_id": 1,
+        "prediction_time": "2020-02-21T00:00:00",
+        "query": "ICD//B02",
+        "duration_days": 1.145217776298523,
+        "boolean_value": False,
+    },
+    {
+        "subject_id": 1,
+        "prediction_time": "2020-05-11T00:00:00",
+        "query": "ICD//A01",
+        "duration_days": 38.73188018798828,
+        "boolean_value": True,
+    },
+    {
+        "subject_id": 1,
+        "prediction_time": "2020-06-30T00:00:00",
+        "query": "MED//D04",
+        "duration_days": 1.6647769212722778,
+        "boolean_value": False,
+    },
+    {
+        "subject_id": 2,
+        "prediction_time": "2020-03-03T00:00:00",
+        "query": "MED//D04",
+        "duration_days": 1.6647769212722778,
+        "boolean_value": False,
+    },
+    {
+        "subject_id": 2,
+        "prediction_time": "2020-06-11T00:00:00",
+        "query": "ICD//A01",
+        "duration_days": 38.73188018798828,
+        "boolean_value": False,
+    },
+    {
+        "subject_id": 3,
+        "prediction_time": "2020-05-23T00:00:00",
+        "query": "ICD//B02",
+        "duration_days": 1.145217776298523,
+        "boolean_value": False,
+    },
+]
+
+
+class TestSnapshot:
+    """Issue #211: pin actual output *values*, not just shape.
+
+    Existing end-to-end tests assert row count / columns / schema but never the cell values, so a silent RNG-
+    order or asof-window regression that preserves row count would slip through.  This snapshots the full
+    sampled-and-labeled output of a tiny fixed-seed run against an inline expected frame; any change to query
+    draws, context draws, prediction-time resolution, or asof labeling flips a value and trips it.
+    """
+
+    def test_output_matches_inline_snapshot(self, monkeypatch, tmp_path, synthetic_query_codes):
+        data_dir = _two_shard_cohort(tmp_path, synthetic_query_codes)
+        tasks_dir = tmp_path / "training_tasks"
+        monkeypatch.setenv("INTERMEDIATE", str(data_dir))
+        monkeypatch.setenv("TRAINING_TASKS_DIR", str(tasks_dir))
+
+        cfg = OmegaConf.create(
+            {
+                "num_queries": 3,
+                "num_contexts_per_query": 2,
+                "min_prediction_times_per_subject": 5,
+                "max_workers": 1,
+                "query_codes": list(synthetic_query_codes),
+                "min_duration": 1,
+                "max_duration": 365,
+                "duration_distribution": "log-uniform",
+                "split": "train",
+                "seed": 1,
+                "overwrite": False,
+            }
+        )
+        st.run(cfg)
+
+        got = _union_final_output(tasks_dir).select(
+            ["subject_id", "prediction_time", "query", "duration_days", "boolean_value"]
+        )
+
+        expected = pl.DataFrame(EXPECTED_SNAPSHOT_ROWS).select(got.columns)
+        expected = expected.with_columns(
+            pl.col("prediction_time").str.to_datetime(time_unit="us"),
+            pl.col("duration_days").cast(pl.Float32),
+        )
+        expected = expected.sort(by=expected.columns)
+
+        assert got.equals(expected), (
+            "Stage 4 output drifted from the pinned snapshot. If this change is intentional, "
+            f"update EXPECTED_SNAPSHOT_ROWS to:\n{got.to_dicts()}"
+        )
