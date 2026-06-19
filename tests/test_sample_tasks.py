@@ -1555,8 +1555,8 @@ class TestMainOrchestration:
 def _union_final_output(tasks_dir: Path, split: str = "train") -> pl.DataFrame:
     """Read every Stage 4 shard parquet under ``{tasks_dir}/{split}`` into one sorted frame.
 
-    Sorting on all columns makes the union order-insensitive so two runs that differ only in how
-    rows were partitioned across worker processes compare value-equal.
+    Sorting on all columns makes the union order-insensitive so two runs that differ only in how rows were
+    partitioned across worker processes compare value-equal.
     """
     shard_files = sorted((tasks_dir / split).glob("*.parquet"))
     assert shard_files, f"no shard outputs under {tasks_dir / split}"
@@ -1696,10 +1696,10 @@ EXPECTED_SNAPSHOT_ROWS: list[dict] = [
 class TestSnapshot:
     """Issue #211: pin actual output *values*, not just shape.
 
-    Existing end-to-end tests assert row count / columns / schema but never the cell values, so a silent
-    RNG-order or asof-window regression that preserves row count would slip through.  This snapshots the
-    full sampled-and-labeled output of a tiny fixed-seed run against an inline expected frame; any change
-    to query draws, context draws, prediction-time resolution, or asof labeling flips a value and trips it.
+    Existing end-to-end tests assert row count / columns / schema but never the cell values, so a silent RNG-
+    order or asof-window regression that preserves row count would slip through.  This snapshots the full
+    sampled-and-labeled output of a tiny fixed-seed run against an inline expected frame; any change to query
+    draws, context draws, prediction-time resolution, or asof labeling flips a value and trips it.
     """
 
     def test_output_matches_inline_snapshot(self, monkeypatch, tmp_path, synthetic_query_codes):
