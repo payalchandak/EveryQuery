@@ -75,7 +75,7 @@ def test_labels_match_ground_truth(
 
         window_end    = prediction_time + duration_days
         censored      = window_end > max_time[subject]
-        event_fires   = exists event(subject, code=query, time in (prediction_time, window_end))
+        event_fires   = exists event(subject, code=query, time in (prediction_time, window_end])
         boolean_value = True  if event_fires        # occurrence takes priority (spec §Stage 4)
                         else None if censored        # unobserved tail → censored
                         else False                   # full window observed, no event
@@ -124,7 +124,7 @@ def test_labels_match_ground_truth(
         #
         # Collapsed nullable boolean_value per TaskQuerySchema (occurrence takes priority over
         # censoring — spec §Stage 4 / evaluate_index_df line "Occurrence takes priority"):
-        #   True  → event occurred in (prediction_time, window_end), even if the window's tail
+        #   True  → event occurred in (prediction_time, window_end], even if the window's tail
         #           extends past max_time (an observed event is a definitive positive)
         #   null  → no event in window AND censored (window_end > max_time OR subject absent)
         #   False → no event in window and the full window is observed
@@ -136,13 +136,14 @@ def test_labels_match_ground_truth(
             expected_censored = max_time is None or window_end > max_time
 
             # Ground-truth event_fires: any event of the matching code in
-            # (prediction_time, prediction_time + duration_days).  Sampler uses strict-> via a
-            # 1µs-shifted join_asof key, so we mirror with a strict > comparison here.
+            # (prediction_time, prediction_time + duration_days].  Sampler uses strict-> via a
+            # 1µs-shifted join_asof key, so we mirror with a strict > lower bound and an
+            # inclusive <= upper bound here.
             subj_events = events.filter(pl.col("subject_id") == subj)
             event_fires = not subj_events.filter(
                 (pl.col("code") == row["query"])
                 & (pl.col("time") > row["prediction_time"])
-                & (pl.col("time") < window_end)
+                & (pl.col("time") <= window_end)
             ).is_empty()
 
             # Occurrence takes priority: an event observed in-window is True even when the

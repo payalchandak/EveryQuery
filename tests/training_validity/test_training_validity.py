@@ -162,7 +162,7 @@ def _compute_labels(events: pl.DataFrame, subject_ids: list[int]) -> pl.DataFram
             event_fires = not subj_events.filter(
                 (pl.col("code") == _TARGET_CODE)
                 & (pl.col("time") > window_start)
-                & (pl.col("time") < window_end)
+                & (pl.col("time") <= window_end)
             ).is_empty()
             # Collapsed nullable boolean_value per TaskQuerySchema:
             #   null  → censored
