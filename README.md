@@ -1,7 +1,11 @@
 # EveryQuery
 
-[![tests](https://github.com/payalchandak/EveryQuery/actions/workflows/tests.yaml/badge.svg?branch=dev)](https://github.com/payalchandak/EveryQuery/actions/workflows/tests.yaml)
-[![codecov](https://codecov.io/gh/payalchandak/EveryQuery/branch/dev/graph/badge.svg)](https://codecov.io/gh/payalchandak/EveryQuery)
+[![tests](https://github.com/payalchandak/EveryQuery/actions/workflows/tests.yaml/badge.svg?branch=main)](https://github.com/payalchandak/EveryQuery/actions/workflows/tests.yaml)
+[![codecov](https://codecov.io/gh/payalchandak/EveryQuery/branch/main/graph/badge.svg)](https://codecov.io/gh/payalchandak/EveryQuery)
+[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org)
+[![PyTorch Lightning](https://img.shields.io/badge/PyTorch_Lightning-792ee5?logo=lightning&logoColor=white)](https://lightning.ai)
+[![Config: Hydra](https://img.shields.io/badge/config-hydra-89b8cd)](https://hydra.cc)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A framework for training and evaluating foundation models over structured EHR data, built on
 the [MEDS](https://github.com/Medical-Event-Data-Standard) ecosystem —
