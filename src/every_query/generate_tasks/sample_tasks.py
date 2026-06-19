@@ -54,8 +54,8 @@ logger = logging.getLogger(__name__)
 class QuerySpec:
     """A single sampled query: one code and one float prediction-window duration (in days).
 
-    The redesign's Stage 1 output (see ``redesign-spec.md``).  Unlike the legacy :class:`TaskSpec`,
-    ``duration_days`` is a **float** — durations are not rounded to whole days.
+    The Stage 1 output (see ``redesign-spec.md``).  ``duration_days`` is a **float** — durations are
+    not rounded to whole days.
     """
 
     code: str
@@ -603,19 +603,18 @@ def _resolve_path(cfg_value: str | None, env_var: str, name: str) -> Path:
     if env_value:
         return Path(env_value)
     raise ValueError(
-        f"{name} must be set: pass {name}=... on the CLI, set it in sample_tasks_config.yaml, "
+        f"{name} must be set: pass {name}=... on the CLI, set it in sample_training_tasks_config.yaml, "
         f"or export ${env_var} (or define it in .env — sample_tasks calls load_dotenv())."
     )
 
 
 # ---------------------------------------------------------------------------
-# Redesign (issue #203): config & path resolution for the 5-stage sampler
+# Config & path resolution for the 5-stage sampler (issue #203)
 # ---------------------------------------------------------------------------
 #
-# These helpers establish the redesign's input surface (see ``redesign-spec.md``); the legacy
-# pipeline above is untouched and the eventual ``main`` cutover lands with the stage issues
-# (#205-#210).  Kept as pure path functions (no file I/O, no dir creation) so they are unit-testable
-# without a Hydra run — same rationale as ``_resolve_path``.
+# These helpers establish the sampler's input surface (see ``redesign-spec.md``).  Kept as pure path
+# functions (no file I/O, no dir creation) so they are unit-testable without a Hydra run — same
+# rationale as ``_resolve_path``.
 
 
 def default_artifacts_dir(training_tasks_dir: Path) -> Path:
@@ -682,7 +681,7 @@ def resolve_training_task_paths(cfg: DictConfig | None = None) -> tuple[Path, Pa
 # The two roots are disjoint and never nested (guaranteed by ``default_artifacts_dir``'s sibling
 # rule), so cleanup is a single ``rm -rf`` of the artifacts root that *cannot* touch the dataset —
 # no bespoke cleanup helper needed.  These are pure path functions (no I/O, no mkdir) — the writing
-# stages create parents at write time via the atomic helpers, same as the legacy pipeline.
+# stages create parents at write time via the atomic helpers.
 #
 # The intermediate entry names are ``_``-prefixed and centralized here so (a) Stages 0/3 and any
 # consumer resolve identical paths with no string drift and (b) the "final root holds nothing but

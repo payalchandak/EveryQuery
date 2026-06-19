@@ -1,6 +1,6 @@
 # Hydra config for the evaluation-task label generator.
 #
-# Sibling to `sample_tasks_config.yaml` (pretraining-shape, scattered tasks).  Where
+# Sibling to the training-task generator (pretraining-shape, scattered tasks).  Where
 # `sample_tasks` draws random (code, duration) per row, this endpoint samples K
 # prediction times per subject and cross-joins them with the full (codes x durations)
 # grid — the dense shape `EQ_evaluate` needs to compute per-(query, duration_days)
@@ -31,7 +31,8 @@ seed: 1
 prediction_times_per_subject: 1
 
 # Minimum prior events a subject must have accumulated before a prediction time is
-# valid.  Same semantics as `sample_tasks_config.yaml`.
+# valid.  (Event-based; the redesigned training sampler instead gates on
+# `min_prediction_times_per_subject`.)
 min_context_per_subject: 50
 
 # Codes to evaluate.  Either an explicit list (`codes: [HR, TEMP]`), or leave as
