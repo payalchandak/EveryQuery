@@ -127,11 +127,16 @@ directory for the MEDS-transforms stages; `$PROCESSED` holds cross-shard metadat
 ```bash
 EQ_generate_training_tasks \
 	split=train \
-	num_queries=1024 \
-	num_contexts_per_query=1
+	num_queries=4000000 \
+	num_contexts_per_query=1 \
+	max_workers=1
 ```
 
-A single command runs the whole 5-stage sampler in one process — Stages 0–3 inline in the driver, then Stage 4 fans labeling out across shards via a `ProcessPoolExecutor` (optionally capped with `max_workers`). There is no `task_shard`/`input_shard` sweep. The final dataset lands at `$TRAINING_TASKS_DIR/{split}/{shard}.parquet` (intermediates go to the sibling `*_artifacts` dir; see [`generate_tasks/README.md`](src/every_query/generate_tasks/README.md)). Output columns conform to [`TaskQuerySchema`](src/every_query/data/schema.py) — `subject_id, prediction_time, query, duration_days, boolean_value` — where `boolean_value` is a nullable three-valued label (`null` = censored, `True` = the query code occurred in the observed window `(prediction_time, prediction_time + duration_days]` — strict-after lower bound, inclusive upper — `False` = the full window is observed with no occurrence). Censoring (`null`) applies when the window extends past the subject's last recorded time.
+One command runs the whole 5-stage sampler in a single process (Stages 0–3 inline, then Stage 4 labels shards in parallel). The dataset lands at `$TRAINING_TASKS_DIR/{split}/{shard}.parquet`, with intermediates in the sibling `*_artifacts` dir (see [`generate_tasks/README.md`](src/every_query/generate_tasks/README.md)). Columns conform to [`TaskQuerySchema`](src/every_query/data/schema.py) — `subject_id, prediction_time, query, duration_days, boolean_value` — where `boolean_value` is three-valued: `True` (query code occurs in `(prediction_time, prediction_time + duration_days]`), `False` (window fully observed, no occurrence), or `null` (censored — window extends past the subject's last recorded time).
+
+> `max_workers` sets how many shards are labeled in parallel, so raising it raises peak RAM. If Stage 4 OOMs, set `max_workers=1`.
+
+> **Note:** The total number of training samples generated will be `num_queries * num_contexts_per_query`
 
 `query_codes=` is optional for training. Leave it unset/null to sample query codes from
 `$PROCESSED/metadata/codes.parquet`, or set it to an inline list / YAML path to restrict which
