@@ -1,6 +1,6 @@
 # Hydra config for the redesigned training-task sampler (5-stage pipeline; see
 # `redesign-spec.md`).  This is the redesign's input surface (issue #203) and is wired in by the
-# later stage issues (#205-#210); the legacy per-worker config lives in `sample_tasks_config.yaml`.
+# later stage issues (#205-#210).
 #
 # Path roots are machine-specific.  Each resolves with precedence `CLI override > env var > raise`
 # (via `_resolve_path` in `resolve_training_task_paths`), matching `EQ_process_data` and the sibling

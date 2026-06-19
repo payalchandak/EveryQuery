@@ -603,7 +603,7 @@ def _resolve_path(cfg_value: str | None, env_var: str, name: str) -> Path:
     if env_value:
         return Path(env_value)
     raise ValueError(
-        f"{name} must be set: pass {name}=... on the CLI, set it in sample_tasks_config.yaml, "
+        f"{name} must be set: pass {name}=... on the CLI, set it in sample_training_tasks_config.yaml, "
         f"or export ${env_var} (or define it in .env — sample_tasks calls load_dotenv())."
     )
 
