@@ -415,18 +415,22 @@ class TestEvaluateIndexDfEdgeCases:
         """
         # window_end for prediction_time 2020-01-01 + 10 days == 2020-01-11 00:00:00 exactly.
         window_end = datetime(2020, 1, 11)
-        events = pl.DataFrame(
-            {
-                "subject_id": [1, 1, 2, 2],
-                "time": [
-                    window_end,  # subj 1: exactly on the boundary → included
-                    datetime(2021, 1, 1),  # pushes max_time well past window_end (uncensored)
-                    window_end + timedelta(microseconds=1),  # subj 2: just past boundary → excluded
-                    datetime(2021, 1, 1),  # uncensored
-                ],
-                "code": ["A", "A", "A", "A"],
-            }
-        ).with_columns(pl.col("time").cast(pl.Datetime("us"))).sort(["subject_id", "time"])
+        events = (
+            pl.DataFrame(
+                {
+                    "subject_id": [1, 1, 2, 2],
+                    "time": [
+                        window_end,  # subj 1: exactly on the boundary → included
+                        datetime(2021, 1, 1),  # pushes max_time well past window_end (uncensored)
+                        window_end + timedelta(microseconds=1),  # subj 2: just past boundary → excluded
+                        datetime(2021, 1, 1),  # uncensored
+                    ],
+                    "code": ["A", "A", "A", "A"],
+                }
+            )
+            .with_columns(pl.col("time").cast(pl.Datetime("us")))
+            .sort(["subject_id", "time"])
+        )
 
         index_df = pl.DataFrame(
             {
@@ -438,10 +442,7 @@ class TestEvaluateIndexDfEdgeCases:
         ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
 
         result = evaluate_index_df(index_df, events, compute_max_time_per_subject(events))
-        labels = {
-            row["subject_id"]: row["boolean_value"]
-            for row in result.iter_rows(named=True)
-        }
+        labels = {row["subject_id"]: row["boolean_value"] for row in result.iter_rows(named=True)}
         assert labels == {1: True, 2: False}
 
     def test_unknown_subject_is_treated_as_censored(self, caplog):
