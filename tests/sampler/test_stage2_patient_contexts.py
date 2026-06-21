@@ -117,7 +117,7 @@ class TestSamplePatientContexts:
         assert set(ctx["subject_id"].to_list()) == set(prediction_time_counts["subject_id"].to_list())
 
     def test_prediction_time_index_dtype_on_nonempty_path(self, prediction_time_counts):
-        """The populated path must also yield Int64 indices so the Stage 3 join key aligns with the
-        Stage 0 map (the empty path is checked separately in ``test_n_zero_returns_typed_empty``)."""
+        """The populated path must also yield Int64 indices so the Stage 3 join key aligns with the Stage 0
+        map (the empty path is checked separately in ``test_n_zero_returns_typed_empty``)."""
         ctx = sample_patient_contexts(prediction_time_counts, 10, 50, self._rng(0))
         assert ctx.schema["prediction_time_index"] == pl.Int64

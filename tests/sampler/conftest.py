@@ -41,7 +41,7 @@ def _setup_doctest_namespace():
 def synthetic_events() -> pl.DataFrame:
     """A deterministic events DataFrame: 3 subjects x 30 events x 5 codes, 10d spacing."""
     codes = ["ICD//A01", "ICD//B02", "ICD//C03", "MED//D04", "MED//E05"]
-    base = datetime(2020, 1, 1)
+    base = datetime(2020, 1, 1)  # noqa: DTZ001 — naive ts is fine for synthetic fixtures (cf. the test_* DTZ ignore)
     rows = [
         {
             "subject_id": subj,
@@ -81,9 +81,12 @@ def prediction_time_counts() -> pl.DataFrame:
 
 @pytest.fixture
 def subject_events():
-    """Return a builder for ``n_times`` distinct ``(subject_id, time)`` rows, each emitted ``dups``
-    times (same time, different code) so Stage 0's distinct-time dedup is exercised.  Times are 1
-    day apart starting at ``base``."""
+    """Return a builder for ``n_times`` distinct ``(subject_id, time)`` rows, each emitted ``dups`` times
+    (same time, different code) so Stage 0's distinct-time dedup is exercised.
+
+    Times are 1
+    day apart starting at ``base``.
+    """
 
     def _subject_events(subject_id: int, n_times: int, *, base: datetime, dups: int = 1) -> pl.DataFrame:
         rows = [
@@ -98,8 +101,8 @@ def subject_events():
 
 @pytest.fixture
 def write_split_shards():
-    """Return a writer for ``{shard: events}`` -> ``tmp_path/intermediate/data/{split}/{shard}.parquet``;
-    the callable returns the ``path_to_data`` root."""
+    """Return a writer for ``{shard: events}`` -> ``tmp_path/intermediate/data/{split}/{shard}.parquet``; the
+    callable returns the ``path_to_data`` root."""
 
     def _write_split_shards(
         tmp_path: Path, shard_to_events: dict[str, pl.DataFrame], split: str = "train"

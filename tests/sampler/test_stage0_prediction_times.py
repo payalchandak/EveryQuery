@@ -81,7 +81,9 @@ class TestStage0:
         assert int(counts["n_prediction_times"].sum()) == pmap.height
         assert counts.height == n == pmap["subject_id"].n_unique()
 
-    def test_subject_spanning_shards_raises(self, tmp_path, artifacts_dir, subject_events, write_split_shards):
+    def test_subject_spanning_shards_raises(
+        self, tmp_path, artifacts_dir, subject_events, write_split_shards
+    ):
         # Subject 1's distinct times split across two shards ⇒ invariant 4 violation.
         path_to_data = write_split_shards(
             tmp_path,

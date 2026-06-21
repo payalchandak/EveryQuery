@@ -188,8 +188,8 @@ class TestStage3:
     def test_build_index_is_deterministic(self, stage0_env):
         """Same queries + contexts + Stage 0 map ⇒ byte-identical index parquet on rerun.
 
-        Artifact-level determinism *below* the end-to-end value snapshot: pins that Stage 3's zip +
-        per-shard join is order-stable so a rebuild never reshuffles the index.
+        Artifact-level determinism *below* the end-to-end value snapshot: pins that Stage 3's zip + per-shard
+        join is order-stable so a rebuild never reshuffles the index.
         """
         _, artifacts_dir = stage0_env
         queries = [QuerySpec("ICD//A", 30.5), QuerySpec("ICD//B", 60.0)]
@@ -203,12 +203,12 @@ class TestStage3:
         assert first.equals(second)
 
     def test_query_zip_alignment_across_shards(self, stage0_env):
-        """Each query's ``(code, duration)`` block stays glued to its contexts even when those
-        contexts land on different shards.
+        """Each query's ``(code, duration)`` block stays glued to its contexts even when those contexts land
+        on different shards.
 
-        queries=[FIRST(10d), SECOND(20d)], num_contexts_per_query=2 ⇒ the np.repeat expansion glues
-        FIRST to contexts[0:2] and SECOND to contexts[2:4].  Routing FIRST's contexts to shard "0"
-        and SECOND's to shard "1" verifies the zip survives the per-shard partitioning.
+        queries=[FIRST(10d), SECOND(20d)], num_contexts_per_query=2 ⇒ the np.repeat expansion glues FIRST to
+        contexts[0:2] and SECOND to contexts[2:4].  Routing FIRST's contexts to shard "0" and SECOND's to
+        shard "1" verifies the zip survives the per-shard partitioning.
         """
         _, artifacts_dir = stage0_env
         queries = [QuerySpec("ICD//FIRST", 10.0), QuerySpec("ICD//SECOND", 20.0)]

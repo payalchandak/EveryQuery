@@ -230,8 +230,8 @@ class TestArtifactLayout:
 
 
 class TestAtomicWrite:
-    """``_atomic_write_parquet`` writes via a unique sibling temp + ``os.replace`` so a present file
-    is always complete and a failed write leaves no orphan."""
+    """``_atomic_write_parquet`` writes via a unique sibling temp + ``os.replace`` so a present file is always
+    complete and a failed write leaves no orphan."""
 
     def test_atomic_write_parquet_round_trip(self, tmp_path):
         fp = tmp_path / "out.parquet"
@@ -244,8 +244,8 @@ class TestAtomicWrite:
         assert orphans == []
 
     def test_failure_leaves_no_orphan_temp(self, tmp_path, monkeypatch):
-        """If the commit (``os.replace``) fails, the helper must clean up its sibling temp and
-        re-raise — no partial ``.out.parquet.tmp.*`` is left behind and no final file appears."""
+        """If the commit (``os.replace``) fails, the helper must clean up its sibling temp and re-raise — no
+        partial ``.out.parquet.tmp.*`` is left behind and no final file appears."""
         fp = tmp_path / "out.parquet"
         df = pl.DataFrame({"a": [1, 2, 3]})
 
@@ -293,9 +293,9 @@ class TestResolveWorkers:
 class TestRedesignConfigFile:
     """``sample_training_tasks_config.yaml`` exposes the spec's keys with the right *shape*.
 
-    We assert key presence and type, not pinned literal default values (a brittle change-detector):
-    the two input roots are optional null overrides, the derived roots are never config keys, and the
-    sampling knobs exist with their expected types.
+    We assert key presence and type, not pinned literal default values (a brittle change-detector): the two
+    input roots are optional null overrides, the derived roots are never config keys, and the sampling knobs
+    exist with their expected types.
     """
 
     @staticmethod
