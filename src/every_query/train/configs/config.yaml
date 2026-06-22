@@ -1,7 +1,7 @@
 defaults:
   - _self_
 
-output_dir: ${oc.env:OUTPUT_DIR}/${run_id:}/
+output_dir: ${oc.env:OUTPUT_DIR,null}/${run_id:}/
 do_overwrite: true
 do_resume: false
 seed: 140799
@@ -11,8 +11,8 @@ datamodule:
   data_class: every_query.data.dataset.EveryQueryPytorchDataset
   config:
     _target_: meds_torchdata.MEDSTorchDataConfig
-    tensorized_cohort_dir: ${oc.env:FINAL_DATA_DIR}
-    task_labels_dir: ${oc.env:TASK_DIR}
+    tensorized_cohort_dir: ${oc.env:FINAL_DATA_DIR,null}
+    task_labels_dir: ${oc.env:TRAINING_TASKS_DIR,null}
     static_inclusion_mode: omit
     seq_sampling_strategy: to_end
     max_seq_len: 256
@@ -58,7 +58,7 @@ trainer:
     project: EveryQuery
     log_model: False # upload lightning ckpts
     prefix: "" # a string to put at the beginning of metric keys
-    entity: ${oc.env:WANDB_ENTITY}
+    entity: ${oc.env:WANDB_ENTITY,null}
   callbacks:
     _target_: every_query.train.train.values_as_list
     learning_rate_monitor:

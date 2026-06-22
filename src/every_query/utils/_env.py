@@ -1,42 +1,20 @@
-"""Load .env and validate that required environment variables are set.
+"""Load ``.env`` so that ``${oc.env:...}`` interpolations in the Hydra configs can resolve.
 
-Imported early by both train.py and tasks.py so that a missing .env on a fresh machine surfaces a single clear
-error rather than a mid-run KeyError or Hydra InterpolationResolutionError.
+This module used to additionally gate a fixed list of "required" environment variables for
+*presence* before the Hydra config was composed.  That check was too blunt: it could not see
+CLI overrides (``datamodule.config.task_labels_dir=/path`` makes the backing ``${oc.env:TASK_DIR}``
+interpolation never evaluate, yet the gate still demanded the env var), and it required
+``WANDB_ENTITY`` even when the logger was disabled.  Path/entity validation now happens
+*post-compose* against the resolved config in ``every_query.train.train.validate_training_config``,
+which can tell whether a node was overridden.  See #184.
+
+``train.py::_init_env`` is the only caller; it loads ``.env`` here so the values are visible to the
+lazy ``${oc.env:...}`` interpolations Hydra resolves later.
 """
-
-import os
-import sys
 
 from dotenv import load_dotenv
 
-REQUIRED_ENV_VARS = (
-    "PROJECT_DIR",
-    "OUTPUT_DIR",
-    "TASK_DIR",
-    "FINAL_DATA_DIR",
-    "WANDB_ENTITY",
-)
-# `PROCESSED` and `INTERMEDIATE` are used by the preprocessing pipeline (the dirs it
-# writes to) and by the generate_tasks stage as dotenv fallbacks inside
-# `sample_tasks.py::_resolve_path` / `sample_evaluation_tasks.py::_resolve_path`.
-# They're not gated by this `REQUIRED_ENV_VARS` check because:
-#   1. `_resolve_path` already tolerates a missing env var when the caller supplies the
-#      path directly (the normal CLI / test path).
-#   2. No Hydra config interpolates `${oc.env:PROCESSED}` or `${oc.env:INTERMEDIATE}`,
-#      so demo fixtures / `--help` invocations don't need throwaway placeholders.
-# If you're running a full fresh-machine setup that includes preprocessing, set both
-# in `.env` (see `.env.example`).  See #117 for the history.
-
 
 def ensure_env() -> None:
+    """Load ``.env`` (if present) so ``${oc.env:...}`` interpolations can resolve."""
     load_dotenv()
-    missing = [v for v in REQUIRED_ENV_VARS if not os.environ.get(v)]
-    if missing:
-        joined = ", ".join(missing)
-        print(
-            f"ERROR: required environment variables not set: {joined}\n"
-            "Copy .env.example to .env and fill in machine-specific paths, "
-            "or export these variables before running.",
-            file=sys.stderr,
-        )
-        sys.exit(1)

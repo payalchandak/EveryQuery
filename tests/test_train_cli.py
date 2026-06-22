@@ -23,14 +23,13 @@ def _run_train_subprocess(
     do_overwrite: bool = True,
     extra_overrides: list[str] | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run ``python -m every_query.train.train`` as a subprocess with the demo config."""
+    """Run ``python -m every_query.train.train`` as a subprocess with the demo config.
+
+    No EveryQuery env vars are set: ``_demo_train.yaml`` overrides every path via Hydra CLI and
+    disables the logger, so a fully CLI-driven run needs zero env vars (regression guard for #184).
+    """
     env = os.environ.copy()
     env["PATH"] = _VENV_BIN + os.pathsep + env.get("PATH", "")
-    # Provide dummy env vars so ensure_env() passes in the subprocess.
-    # Hydra CLI overrides control the actual paths used by the test.
-    for var in ("PROJECT_DIR", "OUTPUT_DIR", "TASK_DIR", "FINAL_DATA_DIR"):
-        env.setdefault(var, str(output_dir))
-    env.setdefault("WANDB_ENTITY", "test")
 
     overrides = [
         f"output_dir={output_dir}",

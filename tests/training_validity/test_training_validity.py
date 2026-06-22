@@ -17,7 +17,7 @@ import pytest
 from meds import DatasetMetadataSchema, train_split, tuning_split
 from meds_testing_helpers.dataset import MEDSDataset
 
-from conftest import ENSURE_ENV_PLACEHOLDERS, run_and_check
+from conftest import run_and_check
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -247,7 +247,6 @@ def oracle_trained_model_dir(
             "trainer.val_check_interval=1000",
             "lightning_module.optimizer.lr=1e-3",
         ],
-        env=ENSURE_ENV_PLACEHOLDERS,
         timeout=1800.0,
     )
     return output_dir
@@ -292,7 +291,6 @@ def test_trained_model_learns_occurs_and_censor(
             f"output_parquet={predictions_parquet!s}",
             f"split={tuning_split}",
         ],
-        env=ENSURE_ENV_PLACEHOLDERS,
         timeout=600.0,
     )
 
@@ -304,7 +302,6 @@ def test_trained_model_learns_occurs_and_censor(
             f"predictions_parquet={predictions_parquet!s}",
             f"metrics_parquet={metrics_parquet!s}",
         ],
-        env=ENSURE_ENV_PLACEHOLDERS,
         timeout=60.0,
     )
     metrics = pl.read_parquet(metrics_parquet).sort(["query", "duration_days"])

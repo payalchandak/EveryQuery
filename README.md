@@ -104,7 +104,7 @@ Both task-generation endpoints emit `TaskQuerySchema`-conformant parquets. Train
 
 ```bash
 EQ_process_data \
-	input_dir="$RAW" \
+	input_dir="$DATA_DIR" \
 	intermediate_dir="$INTERMEDIATE" \
 	output_dir="$FINAL_DATA_DIR"
 ```
@@ -212,11 +212,10 @@ EQ_generate_evaluation_tasks codes=/path/to/sampled_codes.yaml …
 ```bash
 EQ_train \
 	output_dir="$OUTPUT_DIR/outputs/\${run_id:}" \
-	datamodule.config.task_labels_dir="$TRAINING_TASKS_DIR" \
 	datamodule.config.tensorized_cohort_dir="$FINAL_DATA_DIR"
 ```
 
-`datamodule.config.task_labels_dir` defaults to `${oc.env:TASK_DIR}`, so point it at `$TRAINING_TASKS_DIR` (where `EQ_generate_training_tasks` now writes) — or export `$TASK_DIR` to that location. `EQ_train` reads the long-format labels written by `EQ_generate_training_tasks` directly — the inline collation step that lived in `train.py` was removed in [#76](https://github.com/payalchandak/EveryQuery/pull/76).
+`datamodule.config.task_labels_dir` defaults to `${oc.env:TRAINING_TASKS_DIR}` (where `EQ_generate_training_tasks` writes), so with `.env` set you don't need to pass it — override it only to read labels from a different location. `EQ_train` reads the long-format labels written by `EQ_generate_training_tasks` directly — the inline collation step that lived in `train.py` was removed in [#76](https://github.com/payalchandak/EveryQuery/pull/76).
 
 Seeding: `cfg.seed` (default `140799`) is passed through `lightning.seed_everything` *before* model + datamodule instantiation (fix landed in [#124](https://github.com/payalchandak/EveryQuery/pull/124)), so model weight initialization is byte-reproducible across Python versions and platforms for a given seed.
 
@@ -251,26 +250,23 @@ whether you run from a source checkout or a `pip install`ed wheel.
 
 ### Environment variables
 
-`ensure_env()` (in `utils/_env.py`) requires these be set before `EQ_train` and the eval
-CLIs. Scope of this gate was tightened in [#127](https://github.com/payalchandak/EveryQuery/pull/127)
-— `PROCESSED` and `INTERMEDIATE` were dropped because no Hydra config interpolates them
-(they were only read by a dotenv fallback in the sampler, which already tolerates missing
-env vars when CLI config values are supplied).
+These back the `${oc.env:VAR,null}` interpolations in the shipped configs. None are hard-required:
+a CLI override of the corresponding node (e.g. `datamodule.config.task_labels_dir=/path`) makes the
+backing interpolation never evaluate, so you can run fully CLI-driven with no env vars at all. `EQ_train`
+validates only the values it actually resolves — `validate_training_config()` in `train.py` checks that the
+resolved cohort/task dirs exist and that `WANDB_ENTITY` is set *only* when a wandb logger is enabled. The
+old blind presence gate in `ensure_env()` was removed in [#184](https://github.com/payalchandak/EveryQuery/issues/184);
+`ensure_env()` now just loads `.env`.
 
-| Var                  | Purpose                                                                                                                                  |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `PROJECT_DIR`        | Repo root (for relative output paths in a few configs)                                                                                   |
-| `OUTPUT_DIR`         | Where training run dirs land                                                                                                             |
-| `TRAINING_TASKS_DIR` | Final training-task dataset (output of `EQ_generate_training_tasks`); intermediates go to the sibling `*_artifacts` dir                  |
-| `TASK_DIR`           | Evaluation-task parquets (`EQ_generate_evaluation_tasks` writes `$TASK_DIR/eval/...`); also the default `task_labels_dir` for `EQ_train` |
-| `FINAL_DATA_DIR`     | Tensorized cohort (output of `EQ_process_data`)                                                                                          |
-| `WANDB_ENTITY`       | W&B entity for training telemetry                                                                                                        |
+| Var                  | Purpose                                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `OUTPUT_DIR`         | Where training run dirs land (`output_dir`)                                                                        |
+| `TRAINING_TASKS_DIR` | Final training-task dataset (output of `EQ_generate_training_tasks`); the default `task_labels_dir` for `EQ_train` |
+| `TASK_DIR`           | Evaluation-task parquets (`EQ_generate_evaluation_tasks` writes `$TASK_DIR/eval/...`)                              |
+| `FINAL_DATA_DIR`     | Tensorized cohort (output of `EQ_process_data`); the default `tensorized_cohort_dir` for `EQ_train`                |
+| `WANDB_ENTITY`       | W&B entity for training telemetry (only needed when the wandb logger is enabled)                                   |
 
-`.env.example` is the reference — copy to `.env` and edit. Python loads it via
-`python-dotenv`. Further phases of
-[#117](https://github.com/payalchandak/EveryQuery/issues/117) will migrate the remaining
-gated vars to `${oc.env:VAR,???}` / `${oc.env:VAR,default}` form (Hydra-native required
-or optional-with-fallback) and eventually retire `ensure_env()` entirely.
+`.env.example` is the reference — copy to `.env` and edit. Python loads it via `python-dotenv`.
 
 ## Development
 
