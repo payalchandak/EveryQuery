@@ -300,7 +300,11 @@ def sample_patient_contexts(
         )
 
     # Step A — subject indices (consumed first), with replacement.  One row-gather over the table
-    # (same indices for every column) instead of three per-column gathers.
+    # (same indices for every column) instead of three per-column gathers.  Drawn via `rng.integers`
+    # rather than `prediction_time_counts.sample(..., with_replacement=True)` — both do the same
+    # index-then-gather, but `pl.DataFrame.sample` takes only an int seed, not the caller-owned numpy
+    # Generator.  Using it would fork RNG state away from Step B, breaking the single-generator
+    # fixed-order determinism contract (spec invariant 5).
     subject_idx = rng.integers(0, patient_universe_size, size=n)
     sampled = prediction_time_counts[subject_idx]
     subject_id = sampled["subject_id"]

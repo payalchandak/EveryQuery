@@ -66,6 +66,9 @@ class TestSamplePatientContexts:
                 strict=True,
             )
         )
+        # pairs is a subset of truth
+        # i.e. all (subject_id,shard) tuple produced by sample_patient_contexts is consistent
+        # with stage 0's prediction_time_counts
         assert pairs <= truth
 
     def test_with_replacement_allows_n_above_universe(self, prediction_time_counts):
