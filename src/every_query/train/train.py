@@ -185,8 +185,85 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
     return sorted_checkpoints[-1] if sorted_checkpoints else None
 
 
+def _is_wandb_logger(logger_cfg: Any) -> bool:
+    """Return ``True`` if *logger_cfg* is a wandb-shaped logger node.
+
+    A disabled (``false`` / ``null``) or non-wandb logger returns ``False`` so that
+    ``WANDB_ENTITY`` is only required when a wandb logger is actually instantiated.
+
+    Examples:
+        >>> _is_wandb_logger(False)
+        False
+        >>> _is_wandb_logger(None)
+        False
+        >>> _is_wandb_logger(OmegaConf.create({"_target_": "lightning.pytorch.loggers.CSVLogger"}))
+        False
+        >>> _is_wandb_logger(
+        ...     OmegaConf.create({"_target_": "pytorch_lightning.loggers.wandb.WandbLogger"})
+        ... )
+        True
+    """
+    if not logger_cfg or not isinstance(logger_cfg, DictConfig):
+        return False
+    return "WandbLogger" in str(logger_cfg.get("_target_", ""))
+
+
+def validate_training_config(cfg: DictConfig) -> None:
+    """Validate the *resolved* training config, raising a clear error on a missing/bad value.
+
+    Replaces the old blind env-var presence gate (#184).  Because this runs after Hydra has
+    composed the config, a CLI override of a node (e.g. ``datamodule.config.task_labels_dir=/p``)
+    means the backing ``${oc.env:...}`` interpolation never evaluates and the env var is not
+    required.  Each error message names both the config node and the env var that backs it.
+
+    Checks:
+      * ``datamodule.config.tensorized_cohort_dir`` / ``datamodule.config.task_labels_dir`` —
+        must resolve to an existing directory (these are read inputs).
+      * ``output_dir`` — must resolve to a non-empty path (write target; created later, so it
+        need not pre-exist).
+      * wandb ``entity`` — required only when ``trainer.logger`` is wandb-shaped.
+
+    Raises:
+        ValueError: If a required path/value is missing or empty.
+        NotADirectoryError: If a required input path does not exist or is not a directory.
+    """
+    ds_cfg = cfg.datamodule.config
+    for node, env_var in (
+        ("tensorized_cohort_dir", "FINAL_DATA_DIR"),
+        ("task_labels_dir", "TRAINING_TASKS_DIR"),
+    ):
+        value = ds_cfg.get(node)
+        if not value:
+            raise ValueError(
+                f"datamodule.config.{node} is unset. Pass it as a CLI override "
+                f"(datamodule.config.{node}=/path) or set ${env_var} in your .env."
+            )
+        if not Path(value).is_dir():
+            raise NotADirectoryError(
+                f"datamodule.config.{node} ({value!r}, from ${env_var}) is not an existing directory."
+            )
+
+    # An unset $OUTPUT_DIR resolves the shipped ``${oc.env:OUTPUT_DIR,null}/${run_id:}/``
+    # interpolation to the *truthy* string ``'None/<run_id>/'`` (the null default is
+    # stringified into the surrounding path), so a bare falsy check is not enough — reject a
+    # leading ``None/`` / ``null/`` segment too, lest the run write to a literal ``None/...`` dir.
+    output_dir = cfg.get("output_dir")
+    if not output_dir or str(output_dir).startswith(("None/", "null/")):
+        raise ValueError(
+            "output_dir is unset (is $OUTPUT_DIR set?). Pass output_dir=/path "
+            "or set $OUTPUT_DIR in your .env."
+        )
+
+    if _is_wandb_logger(cfg.trainer.get("logger")) and not cfg.trainer.logger.get("entity"):
+        raise ValueError(
+            "trainer.logger.entity is unset for a wandb logger. Pass "
+            "trainer.logger.entity=<entity> or set $WANDB_ENTITY in your .env "
+            "(or disable the logger with trainer.logger=false)."
+        )
+
+
 def _init_env() -> None:
-    """Validate required env vars and configure thread counts for polars/OMP."""
+    """Load ``.env`` and configure thread counts for polars/OMP."""
     from every_query.utils._env import ensure_env
 
     ensure_env()
@@ -202,6 +279,7 @@ CONFIGS = str(files("every_query") / "train" / "configs")
 @hydra.main(version_base="1.3", config_path=CONFIGS, config_name="config.yaml")
 def main(cfg: DictConfig) -> float | None:
     _init_env()
+    validate_training_config(cfg)
 
     if cfg.do_overwrite and cfg.do_resume:
         logger.warning(

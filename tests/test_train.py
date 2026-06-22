@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import torch
 from omegaconf import OmegaConf
 
-from conftest import ENSURE_ENV_PLACEHOLDERS, run_and_check
+from conftest import run_and_check
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -151,7 +151,6 @@ def test_resume_actually_loads_checkpoint_state(
             "do_resume=True",
             f"trainer.max_steps={starting_step}",
         ],
-        env=ENSURE_ENV_PLACEHOLDERS,
         timeout=300.0,
     )
     _, noop_ckpt = _highest_step_checkpoint(resume_dir)
@@ -183,7 +182,6 @@ def test_resume_actually_loads_checkpoint_state(
             "do_resume=True",
             "trainer.max_steps=4",
         ],
-        env=ENSURE_ENV_PLACEHOLDERS,
         timeout=300.0,
     )
     _, resumed_ckpt = _highest_step_checkpoint(resume_dir)

@@ -165,18 +165,6 @@ def run_and_check(cmd: list[str], *, env: dict[str, str] | None = None, timeout:
     return result
 
 
-# Placeholder values for the ``ensure_env()`` gate in ``utils/_env.py``.  The demo Hydra configs
-# do not interpolate any of these env vars, so the actual values are inert — they exist purely
-# to let the gate pass on a clean CI machine with no ``.env`` file.
-ENSURE_ENV_PLACEHOLDERS: dict[str, str] = {
-    "PROJECT_DIR": "/tmp",
-    "OUTPUT_DIR": "/tmp",
-    "TASK_DIR": "/tmp",
-    "FINAL_DATA_DIR": "/tmp",
-    "WANDB_ENTITY": "test",
-}
-
-
 @pytest.fixture(scope="session")
 def eq_preprocessed_dataset(simple_static_MEDS: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Runs ``EQ_process_data do_demo=True`` against ``simple_static_MEDS``.
@@ -273,7 +261,6 @@ def eq_trained_model_dir(
             f"datamodule.config.tensorized_cohort_dir={eq_preprocessed_dataset!s}",
             f"datamodule.config.task_labels_dir={eq_sampled_tasks_dir!s}",
         ],
-        env=ENSURE_ENV_PLACEHOLDERS,
         timeout=300.0,
     )
     return output_dir
