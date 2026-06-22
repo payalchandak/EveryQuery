@@ -199,8 +199,9 @@ re-sampling or re-resolving.
 > so any disagreement between `_prediction_time_counts.parquet` and `_prediction_times/` means `_prediction_time_counts.parquet`
 > is **stale or corrupt** and must be rebuilt from `_prediction_times/`.
 
-- **Eligibility:** `n_prediction_times >= min_prediction_times_per_subject + 1`. The `+1` guarantees at
-    least one prediction time beyond the prefix, so Stage 2's draw range is non-empty.
+- **Eligibility:** `n_prediction_times > min_prediction_times_per_subject` (strictly more than the
+    minimum). This guarantees at least one prediction time beyond the prefix, so Stage 2's draw range
+    is non-empty.
 - **Algorithm:**
     1. Loop over shards `path_to_data/data/{split}/{i}.parquet`, reading only `subject_id`, `time`. Per
         shard, dedup to distinct `(subject_id, time)`; record each `subject_id`'s `shard`.

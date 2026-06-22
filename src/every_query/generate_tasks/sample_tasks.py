@@ -317,7 +317,7 @@ def sample_patient_contexts(
         raise ValueError(
             "prediction_time_counts contains a subject with "
             f"n_prediction_times <= min_prediction_times_per_subject ({min_prediction_times_per_subject}); "
-            "Stage 0 eligibility requires n_prediction_times >= min_prediction_times_per_subject + 1 — "
+            "Stage 0 eligibility requires n_prediction_times > min_prediction_times_per_subject — "
             "the counts table is stale or corrupt and must be rebuilt from _prediction_times/"
         )
 
@@ -946,8 +946,8 @@ def build_prediction_times(
     Scans ``path_to_data/data/{split}/*.parquet`` once, deduping to distinct ``(subject_id, time)``
     rows, assigns each subject a gapless zero-based ``prediction_time_index`` over its
     ascending-sorted distinct times, filters to eligible subjects
-    (``n_prediction_times >= min_prediction_times_per_subject + 1`` — the ``+1`` keeps Stage 2's
-    ``[min, n)`` draw range non-empty), and writes:
+    (``n_prediction_times > min_prediction_times_per_subject`` — strictly more than the minimum,
+    which keeps Stage 2's ``[min, n)`` draw range non-empty), and writes:
 
     - ``_prediction_times/{shard}.parquet`` -- canonical map ``(subject_id, prediction_time_index, time)``.
     - ``_prediction_time_counts.parquet``   -- summary ``(subject_id, shard, n_prediction_times)``,
@@ -996,7 +996,7 @@ def build_prediction_times(
         pl.col("shard").first(),
         pl.len().alias("n_prediction_times"),
     )
-    eligible = counts.filter(pl.col("n_prediction_times") >= min_prediction_times_per_subject + 1).sort(
+    eligible = counts.filter(pl.col("n_prediction_times") > min_prediction_times_per_subject).sort(
         "subject_id"
     )
 
