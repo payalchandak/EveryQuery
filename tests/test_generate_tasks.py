@@ -2,7 +2,7 @@
 
 These are integration tests: they run the real console script against the preprocessed
 cohort and verify *behavior*, not internal contracts.  Schema-shape checks, dtype checks,
-and bounds-checking on the sampler primitives live in ``test_sample_tasks.py`` — unit-level
+and bounds-checking on the sampler primitives live in ``tests/sampler/`` — unit-level
 coverage where those properties are cheap and reliable to assert.
 
 The integration tests here do two things that unit tests can't:

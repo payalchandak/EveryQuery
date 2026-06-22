@@ -66,7 +66,7 @@ and end-to-end subprocess tests that run the real script against a fixture cohor
 | Script                         | Stage            | Purpose                                                                                                                 | Tests                                                                                                                    |
 | ------------------------------ | ---------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `EQ_process_data`              | preprocessing    | Orchestrate MEDS-transforms + `meds-torch-data` tensorization                                                           | smoke; E2E via `test_process_data.py` + `test_e2e_foundation.py`                                                         |
-| `EQ_generate_training_tasks`   | PT task labels   | Sample `N` tasks × `M` contexts (scattered `(query, duration_days)`), label via single-pass asof                        | smoke; unit `test_sample_tasks.py`; E2E `test_generate_tasks.py`                                                         |
+| `EQ_generate_training_tasks`   | PT task labels   | Sample `N` tasks × `M` contexts (scattered `(query, duration_days)`), label via single-pass asof                        | smoke; unit `tests/sampler/`; E2E `test_generate_tasks.py`                                                               |
 | `EQ_generate_evaluation_tasks` | eval task labels | Sample `K` prediction times per subject, cross-join with `(codes × durations)` grid for dense evaluation shape          | smoke; E2E `test_generate_evaluation_tasks_cli.py`                                                                       |
 | `EQ_train`                     | training         | Train the ModernBERT encoder on the labeled tasks                                                                       | smoke; unit `test_training.py`; E2E `test_train_cli.py` + `test_train.py`; signal test `tests/training_validity/` (slow) |
 | `EQ_predict`                   | inference        | Consume a `TaskQuerySchema` parquet dir + checkpoint, emit a `PredictionSchema` parquet (`censor_prob`, `occurs_prob`)  | smoke; E2E `test_predict_cli.py` (row-order preserved); exercised by `tests/training_validity/` (slow)                   |
@@ -294,7 +294,8 @@ tests/
 ├── test_process_data.py            (E2E: EQ_process_data output shape + metadata)
 ├── test_generate_tasks.py          (E2E: EQ_generate_training_tasks ground-truth label recompute + reproducibility)
 ├── test_generate_evaluation_tasks_cli.py  (E2E: EQ_generate_evaluation_tasks dense-grid shape + determinism)
-├── test_sample_tasks.py            (unit: sampler primitives, determinism, edge cases)
+├── sampler/                        (unit: per-stage sampler tests — stage0-4, pure helpers, orchestration)
+├── test_sampler_dataset_integration.py  (integration: sampler output is drop-in for EveryQueryPytorchDataset)
 ├── test_train_cli.py               (E2E: EQ_train CLI, resume flow, overwrite flag)
 ├── test_train.py                   (E2E: resume-actually-loads-ckpt two-stage differential)
 ├── test_training.py                (unit: single training step, checkpoint roundtrip, demo-mode checks)
