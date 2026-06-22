@@ -243,8 +243,16 @@ def validate_training_config(cfg: DictConfig) -> None:
                 f"datamodule.config.{node} ({value!r}, from ${env_var}) is not an existing directory."
             )
 
-    if not cfg.get("output_dir"):
-        raise ValueError("output_dir is unset. Pass output_dir=/path or set $OUTPUT_DIR in your .env.")
+    # An unset $OUTPUT_DIR resolves the shipped ``${oc.env:OUTPUT_DIR,null}/${run_id:}/``
+    # interpolation to the *truthy* string ``'None/<run_id>/'`` (the null default is
+    # stringified into the surrounding path), so a bare falsy check is not enough — reject a
+    # leading ``None/`` / ``null/`` segment too, lest the run write to a literal ``None/...`` dir.
+    output_dir = cfg.get("output_dir")
+    if not output_dir or str(output_dir).startswith(("None/", "null/")):
+        raise ValueError(
+            "output_dir is unset (is $OUTPUT_DIR set?). Pass output_dir=/path "
+            "or set $OUTPUT_DIR in your .env."
+        )
 
     if _is_wandb_logger(cfg.trainer.get("logger")) and not cfg.trainer.logger.get("entity"):
         raise ValueError(
