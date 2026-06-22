@@ -39,7 +39,29 @@ def _setup_doctest_namespace():
 
 @pytest.fixture
 def synthetic_events() -> pl.DataFrame:
-    """A deterministic events DataFrame: 3 subjects x 30 events x 5 codes, 10d spacing."""
+    """A deterministic events DataFrame: 3 subjects x 30 events x 5 codes, 10d spacing.
+
+    When printed, the returned DataFrame looks like::
+
+        shape: (90, 3)
+        ┌────────────┬─────────────────────┬──────────┐
+        │ subject_id ┆ time                ┆ code     │
+        │ ---        ┆ ---                 ┆ ---      │
+        │ i64        ┆ datetime[μs]        ┆ str      │
+        ╞════════════╪═════════════════════╪══════════╡
+        │ 1          ┆ 2020-01-02 00:00:00 ┆ ICD//A01 │
+        │ 1          ┆ 2020-01-12 00:00:00 ┆ ICD//B02 │
+        │ 1          ┆ 2020-01-22 00:00:00 ┆ ICD//C03 │
+        │ 1          ┆ 2020-02-01 00:00:00 ┆ MED//D04 │
+        │ 1          ┆ 2020-02-11 00:00:00 ┆ MED//E05 │
+        │ …          ┆ …                   ┆ …        │
+        │ 3          ┆ 2020-09-10 00:00:00 ┆ ICD//A01 │
+        │ 3          ┆ 2020-09-20 00:00:00 ┆ ICD//B02 │
+        │ 3          ┆ 2020-09-30 00:00:00 ┆ ICD//C03 │
+        │ 3          ┆ 2020-10-10 00:00:00 ┆ MED//D04 │
+        │ 3          ┆ 2020-10-20 00:00:00 ┆ MED//E05 │
+        └────────────┴─────────────────────┴──────────┘
+    """
     codes = ["ICD//A01", "ICD//B02", "ICD//C03", "MED//D04", "MED//E05"]
     base = datetime(2020, 1, 1)  # noqa: DTZ001 — naive ts is fine for synthetic fixtures (cf. the test_* DTZ ignore)
     rows = [
@@ -64,6 +86,21 @@ def prediction_time_counts() -> pl.DataFrame:
     """A small Stage 0 ``_prediction_time_counts`` table, sorted by ``subject_id``.
 
     Row position is ``subject_idx``; subjects span two shards with varying ``n_prediction_times``.
+
+    When printed, the returned DataFrame looks like::
+
+        shape: (5, 3)
+        ┌────────────┬───────┬────────────────────┐
+        │ subject_id ┆ shard ┆ n_prediction_times │
+        │ ---        ┆ ---   ┆ ---                │
+        │ i64        ┆ str   ┆ i64                │
+        ╞════════════╪═══════╪════════════════════╡
+        │ 10         ┆ 0     ┆ 60                 │
+        │ 20         ┆ 0     ┆ 51                 │
+        │ 30         ┆ 0     ┆ 200                │
+        │ 40         ┆ 1     ┆ 80                 │
+        │ 50         ┆ 1     ┆ 120                │
+        └────────────┴───────┴────────────────────┘
     """
     return pl.DataFrame(
         {
@@ -86,6 +123,23 @@ def subject_events():
 
     Times are 1
     day apart starting at ``base``.
+
+    When printed, the DataFrame from e.g. ``_subject_events(1, 3, base=datetime(2021, 1, 1), dups=2)``
+    looks like::
+
+        shape: (6, 3)
+        ┌────────────┬─────────────────────┬─────────┐
+        │ subject_id ┆ time                ┆ code    │
+        │ ---        ┆ ---                 ┆ ---     │
+        │ i64        ┆ datetime[μs]        ┆ str     │
+        ╞════════════╪═════════════════════╪═════════╡
+        │ 1          ┆ 2021-01-01 00:00:00 ┆ ICD//00 │
+        │ 1          ┆ 2021-01-01 00:00:00 ┆ ICD//01 │
+        │ 1          ┆ 2021-01-02 00:00:00 ┆ ICD//00 │
+        │ 1          ┆ 2021-01-02 00:00:00 ┆ ICD//01 │
+        │ 1          ┆ 2021-01-03 00:00:00 ┆ ICD//00 │
+        │ 1          ┆ 2021-01-03 00:00:00 ┆ ICD//01 │
+        └────────────┴─────────────────────┴─────────┘
     """
 
     def _subject_events(subject_id: int, n_times: int, *, base: datetime, dups: int = 1) -> pl.DataFrame:
