@@ -28,6 +28,21 @@ class TestEvaluateIndexDfEdgeCases:
 
         Under the collapsed ``TaskQuerySchema`` label: non-censored row with an event in
         the window → ``boolean_value = True``; non-censored row without → ``False``.
+
+        When printed, the ``events`` DataFrame looks like::
+
+            shape: (5, 3)
+            ┌────────────┬─────────────────────┬──────┐
+            │ subject_id ┆ time                ┆ code │
+            │ ---        ┆ ---                 ┆ ---  │
+            │ i64        ┆ datetime[μs]        ┆ str  │
+            ╞════════════╪═════════════════════╪══════╡
+            │ 1          ┆ 2020-01-01 00:00:00 ┆ A    │
+            │ 1          ┆ 2020-01-02 00:00:00 ┆ A    │
+            │ 1          ┆ 2020-01-03 00:00:00 ┆ A    │
+            │ 1          ┆ 2020-01-04 00:00:00 ┆ A    │
+            │ 1          ┆ 2021-01-01 00:00:00 ┆ A    │
+            └────────────┴─────────────────────┴──────┘
         """
         events = pl.DataFrame(
             {
@@ -223,6 +238,109 @@ class TestEvaluateIndexDfEdgeCases:
         result = evaluate_index_df(index_df, events, compute_max_time_per_subject(events))
         assert result.height == 1
         assert result["boolean_value"].to_list() == [True]
+
+
+class TestBooleanValueTruthTable:
+    """One test per row of the spec's labeling truth table (redesign-spec.md §Stage 4).
+
+    For each ``(subject_id, prediction_time)`` row the observed window is
+    ``(prediction_time, min(prediction_time + duration_days, max_time[subject_id])]``.
+    Occurrence is resolved first; censoring applies only when the event did **not** occur:
+
+    | occurs in observed window | censored | ``boolean_value`` |
+    | ------------------------- | -------- | ----------------- |
+    | yes                       | —        | True              |
+    | no                        | yes      | null              |
+    | no                        | no       | False             |
+
+    Each case is a single index row over a single subject so the resolved label is
+    unambiguously the table row under test, pinned independently of the other two.
+    """
+
+    BASE = datetime(2020, 1, 1)
+
+    def _evaluate_one(self, events: pl.DataFrame, duration_days: float) -> bool | None:
+        """Label a single index row (subject 1, code ``A``, ``prediction_time = BASE``) and return its
+        ``boolean_value``."""
+        events = events.with_columns(pl.col("time").cast(pl.Datetime("us"))).sort(["subject_id", "time"])
+        index_df = pl.DataFrame(
+            {
+                "subject_id": [1],
+                "prediction_time": [self.BASE],
+                "query": ["A"],
+                "duration_days": [duration_days],
+            }
+        ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
+        result = evaluate_index_df(index_df, events, compute_max_time_per_subject(events))
+        assert result.height == 1
+        return result["boolean_value"].to_list()[0]
+
+    def test_occurs_in_observed_window_is_true(self):
+        """Row 1: a matching event falls in the observed window → ``True``.
+
+        Event ``A`` at day 3 is strictly within ``(day 0, day 7]``; the later event at day 100
+        pushes ``max_time`` well past the window so occurrence — not censoring — decides the label.
+        """
+        events = pl.DataFrame(
+            {
+                "subject_id": [1, 1],
+                "time": [self.BASE + timedelta(days=3), self.BASE + timedelta(days=100)],
+                "code": ["A", "A"],
+            }
+        )
+        assert self._evaluate_one(events, duration_days=7.0) is True
+
+    def test_occurs_takes_priority_over_censoring_is_true(self):
+        """Row 1, censored column ``—``: occurrence wins even when the requested window runs past ``max_time``
+        → ``True``, never ``null``.
+
+        The subject's last (and only matching) event is ``A`` at day 3, so ``max_time = day 3``.
+        The requested window end (day 30) exceeds ``max_time`` — the censoring predicate
+        ``prediction_time + duration_days > max_time`` is **true** — but the ``A`` at day 3 falls
+        in the observed window ``(day 0, day 3]``.  Per the spec, occurrence is resolved first, so
+        the label is ``True`` and censoring never applies.
+        """
+        events = pl.DataFrame(
+            {
+                "subject_id": [1],
+                "time": [self.BASE + timedelta(days=3)],
+                "code": ["A"],
+            }
+        )
+        assert self._evaluate_one(events, duration_days=30.0) is True
+
+    def test_no_occurrence_and_censored_is_null(self):
+        """Row 2: no matching event in the observed window **and** the window runs past
+        ``max_time`` → ``null`` (censored).
+
+        The subject's only event is at day 10 (so ``max_time = day 10``) and carries a
+        non-matching code, so no ``A`` occurs in ``(day 0, day 10]``.  The requested window
+        end (day 30) exceeds ``max_time``, so the unobserved tail is unknown → censored.
+        """
+        events = pl.DataFrame(
+            {
+                "subject_id": [1],
+                "time": [self.BASE + timedelta(days=10)],
+                "code": ["B"],  # non-matching: no "A" anywhere
+            }
+        )
+        assert self._evaluate_one(events, duration_days=30.0) is None
+
+    def test_no_occurrence_and_fully_observed_is_false(self):
+        """Row 3: no matching event in the window and the full window is observed → ``False``.
+
+        The matching event ``A`` lands at day 100 — outside ``(day 0, day 7]`` — and keeps
+        ``max_time`` (day 100) past the window end (day 7), so the window is fully observed
+        with no in-window occurrence.
+        """
+        events = pl.DataFrame(
+            {
+                "subject_id": [1],
+                "time": [self.BASE + timedelta(days=100)],
+                "code": ["A"],
+            }
+        )
+        assert self._evaluate_one(events, duration_days=7.0) is False
 
 
 class TestReadEventShardDtypeNormalization:
