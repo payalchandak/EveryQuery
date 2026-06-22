@@ -1250,7 +1250,7 @@ def run(cfg: DictConfig) -> None:
         min_prediction_times_per_subject=cfg.min_prediction_times_per_subject,
         overwrite=cfg.overwrite,
     )
-    logger.info("Stage 0: %d eligible subject(s) for split=%s.", n_subjects, cfg.split)
+    logger.info("Stage 0: %s eligible subject(s) for split=%s.", f"{n_subjects:,}", cfg.split)
 
     # Independent RNG streams per axis (invariant 5): the query and context draws reproduce separately
     # for a fixed ``cfg.seed``.  Cross-process RNG-order determinism tests land in #211.
@@ -1261,10 +1261,10 @@ def run(cfg: DictConfig) -> None:
     query_dist = QueryDistribution.from_config(cfg)
     sampled_queries = query_dist.sample(cfg.num_queries, query_rng)
     logger.info(
-        "Stage 1: sampled %d quer%s from a %d-code universe (%s durations over [%g, %g] days).",
-        len(sampled_queries),
+        "Stage 1: sampled %s quer%s from a %s-code universe (%s durations over [%g, %g] days).",
+        f"{len(sampled_queries):,}",
         "y" if len(sampled_queries) == 1 else "ies",
-        query_dist.query_universe_size,
+        f"{query_dist.query_universe_size:,}",
         query_dist.duration_distribution,
         query_dist.min_duration,
         query_dist.max_duration,
@@ -1283,11 +1283,11 @@ def run(cfg: DictConfig) -> None:
         rng=context_rng,
     )
     logger.info(
-        "Stage 2: sampled %d patient context(s) (%d quer%s * %d context(s) each).",
-        total_rows,
-        cfg.num_queries,
+        "Stage 2: sampled %s patient context(s) (%s quer%s * %s context(s) each).",
+        f"{total_rows:,}",
+        f"{cfg.num_queries:,}",
         "y" if cfg.num_queries == 1 else "ies",
-        cfg.num_contexts_per_query,
+        f"{cfg.num_contexts_per_query:,}",
     )
 
     # Stage 3: zip queries with contexts, resolve prediction time, write the per-shard index.
@@ -1299,10 +1299,10 @@ def run(cfg: DictConfig) -> None:
         num_contexts_per_query=cfg.num_contexts_per_query,
     )
     logger.info(
-        "Stage 3: wrote partitioned index for split=%s (%d rows across %d shards).",
+        "Stage 3: wrote partitioned index for split=%s (%s rows across %s shards).",
         cfg.split,
-        sampled_patient_contexts.height,
-        n_index_shards,
+        f"{sampled_patient_contexts.height:,}",
+        f"{n_index_shards:,}",
     )
 
     # Stage 4: fan one labeling worker out per shard.  Shards are exactly the Stage 3 index
@@ -1326,7 +1326,7 @@ def run(cfg: DictConfig) -> None:
             stale.unlink()
 
     n_workers = resolve_workers(cfg.max_workers)
-    logger.info("Stage 4: labeling %d shard(s) across %d worker(s).", len(shards), n_workers)
+    logger.info("Stage 4: labeling %s shard(s) across %s worker(s).", f"{len(shards):,}", f"{n_workers:,}")
 
     # Use the "spawn" start method, not the Linux default "fork": by Stage 4 the driver has already
     # run polars (which starts a rayon threadpool), and forking a process while those threads hold
@@ -1346,7 +1346,7 @@ def run(cfg: DictConfig) -> None:
             f"Stage 4 wrote {written} rows but expected {total_rows} "
             f"(num_queries={cfg.num_queries} * num_contexts_per_query={cfg.num_contexts_per_query})."
         )
-    logger.info("Pipeline complete: wrote %d labeled rows to %s.", written, out_dir)
+    logger.info("Pipeline complete: wrote %s labeled rows to %s.", f"{written:,}", out_dir)
 
     # Summary of the final dataset's coverage: how many distinct subjects and distinct queries the
     # written rows span (one scan over the {split}/*.parquet union).  A "query" is the full
@@ -1359,17 +1359,31 @@ def run(cfg: DictConfig) -> None:
             pl.struct(TaskQuerySchema.query_name, TaskQuerySchema.duration_days_name)
             .n_unique()
             .alias("n_queries"),
+            # boolean_value is nullable (null = censored); count each of the three label outcomes so
+            # the final class balance (and censoring rate) is visible at a glance.
+            pl.col(TaskQuerySchema.boolean_value_name).null_count().alias("n_null"),
+            (pl.col(TaskQuerySchema.boolean_value_name) == False).sum().alias("n_false"),  # noqa: E712
+            (pl.col(TaskQuerySchema.boolean_value_name) == True).sum().alias("n_true"),  # noqa: E712
         )
         .collect()
     )
     n_subjects = int(summary["n_subjects"].item())
     n_queries = int(summary["n_queries"].item())
+    n_null = int(summary["n_null"].item())
+    n_false = int(summary["n_false"].item())
+    n_true = int(summary["n_true"].item())
     logger.info(
-        "Summary: %d row(s) across %d unique subject_id(s) and %d unique quer%s.",
-        written,
-        n_subjects,
-        n_queries,
+        "Summary: %s row(s) across %s unique subject_id(s) and %s unique quer%s.",
+        f"{written:,}",
+        f"{n_subjects:,}",
+        f"{n_queries:,}",
         "y" if n_queries == 1 else "ies",
+    )
+    logger.info(
+        "Summary: boolean_value label counts -- %s null (censored), %s false, %s true.",
+        f"{n_null:,}",
+        f"{n_false:,}",
+        f"{n_true:,}",
     )
 
 
