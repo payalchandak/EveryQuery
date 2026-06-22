@@ -88,6 +88,10 @@ class TestStage0:
         assert s1["prediction_time_index"].to_list() == [0, 1, 2, 3, 4]
         assert s1["time"].to_list() == sorted(s1["time"].to_list())
 
+        s2 = pmap.filter(pl.col("subject_id") == 2).sort("time")
+        assert s2["prediction_time_index"].to_list() == [0, 1, 2]
+        assert s2["time"].to_list() == sorted(s2["time"].to_list())
+
     def test_eligibility_drops_subjects_below_min_plus_one(self, path_to_data, artifacts_dir):
         build_prediction_times(path_to_data, artifacts_dir, "train", self.MIN)
         counts = pl.read_parquet(prediction_time_counts_path(artifacts_dir, "train"))
@@ -106,7 +110,9 @@ class TestStage0:
 
     def test_row_count_identity(self, path_to_data, artifacts_dir):
         n = build_prediction_times(path_to_data, artifacts_dir, "train", self.MIN)
+        # counts should contain a unique row per elible subject
         counts = pl.read_parquet(prediction_time_counts_path(artifacts_dir, "train"))
+        # pmap has a row for each unique timestamp for each subject
         pmap = pl.read_parquet(prediction_times_path(artifacts_dir, "train", "0"))
         assert int(counts["n_prediction_times"].sum()) == pmap.height
         assert counts.height == n == pmap["subject_id"].n_unique()
