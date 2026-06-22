@@ -1268,6 +1268,15 @@ def run(cfg: DictConfig) -> None:
     # Stage 1: Sample num_queries QuerySpecs
     query_dist = QueryDistribution.from_config(cfg)
     sampled_queries = query_dist.sample(cfg.num_queries, query_rng)
+    logger.info(
+        "Stage 1: sampled %d quer%s from a %d-code universe (%s durations over [%g, %g] days).",
+        len(sampled_queries),
+        "y" if len(sampled_queries) == 1 else "ies",
+        query_dist.query_universe_size,
+        query_dist.duration_distribution,
+        query_dist.min_duration,
+        query_dist.max_duration,
+    )
 
     # Stage 2: Sample (num_queries*num_contexts_per_query) patient contexts
     total_rows = cfg.num_queries * cfg.num_contexts_per_query
@@ -1280,6 +1289,13 @@ def run(cfg: DictConfig) -> None:
         n=total_rows,
         min_prediction_times_per_subject=cfg.min_prediction_times_per_subject,
         rng=context_rng,
+    )
+    logger.info(
+        "Stage 2: sampled %d patient context(s) (%d quer%s * %d context(s) each).",
+        total_rows,
+        cfg.num_queries,
+        "y" if cfg.num_queries == 1 else "ies",
+        cfg.num_contexts_per_query,
     )
 
     # Stage 3: zip queries with contexts, resolve prediction time, write the per-shard index.
@@ -1333,6 +1349,30 @@ def run(cfg: DictConfig) -> None:
             f"(num_queries={cfg.num_queries} * num_contexts_per_query={cfg.num_contexts_per_query})."
         )
     logger.info("Pipeline complete: wrote %d labeled rows to %s.", written, out_dir)
+
+    # Summary of the final dataset's coverage: how many distinct subjects and distinct queries the
+    # written rows span (one scan over the {split}/*.parquet union).  A "query" is the full
+    # QuerySpec identity -- the (query-code, duration_days) pair -- so it's counted as the number of
+    # distinct (query, duration_days) combinations, not distinct codes alone.
+    summary = (
+        pl.scan_parquet(out_dir / "*.parquet")
+        .select(
+            pl.col(TaskQuerySchema.subject_id_name).n_unique().alias("n_subjects"),
+            pl.struct(TaskQuerySchema.query_name, TaskQuerySchema.duration_days_name)
+            .n_unique()
+            .alias("n_queries"),
+        )
+        .collect()
+    )
+    n_subjects = int(summary["n_subjects"].item())
+    n_queries = int(summary["n_queries"].item())
+    logger.info(
+        "Summary: %d row(s) across %d unique subject_id(s) and %d unique quer%s.",
+        written,
+        n_subjects,
+        n_queries,
+        "y" if n_queries == 1 else "ies",
+    )
 
 
 @hydra.main(version_base=None, config_path=CONFIGS, config_name="sample_training_tasks_config")
