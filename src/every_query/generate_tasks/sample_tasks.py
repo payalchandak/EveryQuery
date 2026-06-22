@@ -966,7 +966,6 @@ def build_prediction_times(
     ):
         counts_fp = prediction_time_counts_path(training_task_artifacts_dir, split)
         height = pl.read_parquet(counts_fp).height
-        logger.info("Stage 0: reusing cached prediction-time artifacts (%d subjects).", height)
         return height
 
     shards = _split_shards(path_to_data, split)
@@ -1047,12 +1046,6 @@ def build_prediction_times(
         prediction_times_meta_path(training_task_artifacts_dir, split),
     )
 
-    logger.info(
-        "Stage 0: built prediction-time artifacts for split=%s (%d eligible subjects across %d shards).",
-        split,
-        eligible.height,
-        len(written_shards),
-    )
     return eligible.height
 
 
@@ -1072,7 +1065,7 @@ def build_index(
     training_task_artifacts_dir: Path,
     split: str,
     num_contexts_per_query: int,
-) -> None:
+) -> int:
     """Stage 3: zip queries with contexts, resolve prediction times, write partitioned index.
 
     ``np.repeat`` s the Stage 1 queries ``num_contexts_per_query`` times and zips them with the
@@ -1094,6 +1087,9 @@ def build_index(
         split: Dataset split name (e.g. ``"train"``).
         num_contexts_per_query: Number of patient contexts per query (the ``M`` multiplier).
 
+    Returns:
+        ``n_shards`` — the number of index partitions written (0 when there are no queries/contexts).
+
     Raises:
         ValueError: If ``contexts.height != len(queries) * num_contexts_per_query``, or if
             any context fails to resolve a prediction time (null after join).
@@ -1108,7 +1104,7 @@ def build_index(
         )
 
     if n_queries == 0 or contexts.height == 0:
-        return
+        return 0
 
     query_col = pl.Series(
         TaskQuerySchema.query_name,
@@ -1185,12 +1181,7 @@ def build_index(
         )
         n_shards += 1
 
-    logger.info(
-        "Stage 3: wrote partitioned index for split=%s (%d rows across %d shards).",
-        split,
-        contexts.height,
-        n_shards,
-    )
+    return n_shards
 
 
 # ---------------------------------------------------------------------------
@@ -1252,13 +1243,14 @@ def run(cfg: DictConfig) -> None:
     path_to_data, training_tasks_dir, training_task_artifacts_dir = resolve_training_task_paths(cfg)
 
     # Stage 0: precompute & cache subject prediction_time_indexes and number of prediction_times_per_subject
-    build_prediction_times(
+    n_subjects = build_prediction_times(
         path_to_data=path_to_data,
         training_task_artifacts_dir=training_task_artifacts_dir,
         split=cfg.split,
         min_prediction_times_per_subject=cfg.min_prediction_times_per_subject,
         overwrite=cfg.overwrite,
     )
+    logger.info("Stage 0: %d eligible subject(s) for split=%s.", n_subjects, cfg.split)
 
     # Independent RNG streams per axis (invariant 5): the query and context draws reproduce separately
     # for a fixed ``cfg.seed``.  Cross-process RNG-order determinism tests land in #211.
@@ -1299,12 +1291,18 @@ def run(cfg: DictConfig) -> None:
     )
 
     # Stage 3: zip queries with contexts, resolve prediction time, write the per-shard index.
-    build_index(
+    n_index_shards = build_index(
         queries=sampled_queries,
         contexts=sampled_patient_contexts,
         training_task_artifacts_dir=training_task_artifacts_dir,
         split=cfg.split,
         num_contexts_per_query=cfg.num_contexts_per_query,
+    )
+    logger.info(
+        "Stage 3: wrote partitioned index for split=%s (%d rows across %d shards).",
+        cfg.split,
+        sampled_patient_contexts.height,
+        n_index_shards,
     )
 
     # Stage 4: fan one labeling worker out per shard.  Shards are exactly the Stage 3 index
