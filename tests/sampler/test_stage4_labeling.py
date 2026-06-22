@@ -474,17 +474,56 @@ class TestLabelOneShard:
         # prediction_time=day2, event at day5 is in (day2, day2+7=day9] → True for all
         assert result["boolean_value"].to_list() == [True, True, True]
 
-    def test_skip_on_success(self, tmp_path):
+    def test_skip_on_matching_fingerprint(self, tmp_path):
+        """A second run over the *same* index skips (fingerprint matches), leaving output untouched."""
         events = self._events()
         index_df = self._index()
         index_dir, data_dir, out_dir = _make_shard_fixture(tmp_path, events, index_df)
 
-        sentinel = b"sentinel"
-        (out_dir / "0.parquet").write_bytes(sentinel)
+        _shard, status = label_one_shard("0", index_dir, data_dir, out_dir, overwrite=False)
+        assert status == "labeled"
+        first_bytes = (out_dir / "0.parquet").read_bytes()
 
         _shard, status = label_one_shard("0", index_dir, data_dir, out_dir, overwrite=False)
         assert status == "skipped"
-        assert (out_dir / "0.parquet").read_bytes() == sentinel
+        assert (out_dir / "0.parquet").read_bytes() == first_bytes
+
+    def test_relabels_when_fingerprint_missing(self, tmp_path):
+        """An existing output with no provenance sidecar is treated as stale ⇒ relabel (safe default).
+
+        Guards against the old existence-only skip, which would silently keep a pre-fingerprint (or half-
+        written) output.
+        """
+        events = self._events()
+        index_df = self._index()
+        index_dir, data_dir, out_dir = _make_shard_fixture(tmp_path, events, index_df)
+
+        (out_dir / "0.parquet").write_bytes(b"stale-no-fingerprint")
+
+        _shard, status = label_one_shard("0", index_dir, data_dir, out_dir, overwrite=False)
+        assert status == "labeled"
+        assert pl.read_parquet(out_dir / "0.parquet").height == 3
+
+    def test_relabels_when_index_changed(self, tmp_path):
+        """When the Stage 3 index is rewritten with different content, overwrite=False still relabels.
+
+        This is bug #2: Stage 3 always rebuilds the index, so an existence-only skip would keep stale labels
+        after a sampling-config change. The fingerprint mismatch must force a relabel.
+        """
+        events = self._events()
+        index_dir, data_dir, out_dir = _make_shard_fixture(tmp_path, events, self._index(duration_days=7.0))
+
+        _shard, status = label_one_shard("0", index_dir, data_dir, out_dir, overwrite=False)
+        assert status == "labeled"
+
+        # Rewrite the index partition with a duration that flips the labels (window day2->day3 excludes
+        # the day5 event), mimicking Stage 3 rebuilding under a changed config.
+        self._index(duration_days=1.0).write_parquet(index_dir / "0.parquet")
+
+        _shard, status = label_one_shard("0", index_dir, data_dir, out_dir, overwrite=False)
+        assert status == "labeled"
+        # day2 + 1d = day3 window; the next "A01" event is day5 (outside) → False, not the prior True.
+        assert pl.read_parquet(out_dir / "0.parquet")["boolean_value"].to_list() == [False, False, False]
 
     def test_overwrite(self, tmp_path):
         events = self._events()
@@ -621,12 +660,16 @@ class TestCleanStaleTemps:
     def test_removes_matching_temps(self, tmp_path):
         (tmp_path / ".0.parquet.tmp.111").write_bytes(b"x")
         (tmp_path / ".0.parquet.tmp.222").write_bytes(b"x")
+        # A temp produced the *real* way (via _unique_tmp_path) must be cleaned too — guards against
+        # the cleanup glob drifting from the actual mkstemp naming.
+        real = st._unique_tmp_path(tmp_path / "0.parquet")
         (tmp_path / ".1.parquet.tmp.333").write_bytes(b"x")  # different shard
 
         removed = _clean_stale_temps(tmp_path, "0")
-        assert removed == 2
+        assert removed == 3
         assert not (tmp_path / ".0.parquet.tmp.111").exists()
         assert not (tmp_path / ".0.parquet.tmp.222").exists()
+        assert not real.exists()
         assert (tmp_path / ".1.parquet.tmp.333").exists()  # untouched
 
     def test_no_temps_returns_zero(self, tmp_path):

@@ -259,6 +259,30 @@ class TestAtomicWrite:
         assert not fp.exists()
         assert list(tmp_path.glob(".out.parquet.tmp.*")) == []
 
+    def test_unique_tmp_path_matches_clean_glob(self, tmp_path):
+        """The temp name produced by ``_unique_tmp_path`` must match the ``_clean_stale_temps`` glob.
+
+        Regression for the bug where ``mkstemp(suffix=".tmp")`` emitted ``.{name}.<random>.tmp`` while
+        cleanup globbed ``.{name}.tmp.*`` — the two never agreed, so orphaned temps were never cleaned.
+        Pin the contract: a real ``_unique_tmp_path`` temp is found by the cleanup glob and removed.
+        """
+        fp = tmp_path / "0.parquet"
+        tmp = st._unique_tmp_path(fp)
+        try:
+            assert tmp.parent == fp.parent
+            assert tmp in set(tmp_path.glob(f".{fp.name}.tmp.*"))
+        finally:
+            tmp.unlink(missing_ok=True)
+
+        # And it does NOT collide with the final-root ``*.parquet`` safety glob (invariant 7).
+        recreated = st._unique_tmp_path(fp)
+        try:
+            assert recreated not in set(tmp_path.glob("*.parquet"))
+            assert st._clean_stale_temps(tmp_path, "0") == 1
+            assert not recreated.exists()
+        finally:
+            recreated.unlink(missing_ok=True)
+
 
 class TestResolveWorkers:
     """Stage 4 worker-pool sizing: SLURM env precedence, cpu_count fallback, downward-only cap."""

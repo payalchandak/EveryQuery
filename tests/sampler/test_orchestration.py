@@ -223,6 +223,47 @@ class TestMainOrchestration:
         rebuilt = _union_final_output(tasks_dir)
         assert rebuilt.equals(clean)
 
+    def test_changed_seed_relabels_without_overwrite(
+        self, monkeypatch, tmp_path, synthetic_events, synthetic_query_codes
+    ):
+        """Bug #2: a sampling-config change must not leave stale labels under ``overwrite=False``.
+
+        Stage 3 always rebuilds the index, but Stage 4's skip used to be existence-only — so rerunning
+        with a new ``seed`` (same shard set) silently kept the previous run's labels. The per-shard
+        index fingerprint must detect the mismatch and relabel even without ``overwrite=True``.
+        """
+        tasks_dir = self._run_env(monkeypatch, tmp_path, synthetic_events, synthetic_query_codes)
+
+        st.run(self._cfg(synthetic_query_codes))  # seed=1
+        seed1 = _union_final_output(tasks_dir)
+
+        cfg2 = self._cfg(synthetic_query_codes)  # overwrite stays False
+        cfg2.seed = 2
+        st.run(cfg2)
+        relabeled = _union_final_output(tasks_dir)
+
+        # The stale seed-1 labels must be gone, and the output must match an overwrite=True rebuild at
+        # seed 2 (the ground truth for that config) — proving the relabel happened in place.
+        assert not relabeled.equals(seed1)
+        cfg2_force = self._cfg(synthetic_query_codes, overwrite=True)
+        cfg2_force.seed = 2
+        st.run(cfg2_force)
+        assert relabeled.equals(_union_final_output(tasks_dir))
+
+    def test_num_queries_zero_writes_empty_dataset(
+        self, monkeypatch, tmp_path, synthetic_events, synthetic_query_codes
+    ):
+        """Bug #3: ``num_queries=0`` (empty budget) must report 0 rows, not crash on an empty glob.
+
+        With no queries, Stage 3 writes no index and Stage 4 writes no output; the final/summary scans must
+        side-step polars' "no files found" error and the row-count guard must pass (0 == 0).
+        """
+        tasks_dir = self._run_env(monkeypatch, tmp_path, synthetic_events, synthetic_query_codes)
+
+        st.run(self._cfg(synthetic_query_codes, num_queries=0))  # must not raise
+
+        assert sorted((tasks_dir / "train").glob("*.parquet")) == []
+
 
 class TestCrossProcessDeterminism:
     """The parallel Stage 4 fan-out must produce the same labeled dataset as the serial path.
