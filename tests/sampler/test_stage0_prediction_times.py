@@ -30,6 +30,36 @@ class TestStage0:
 
     @pytest.fixture
     def path_to_data(self, tmp_path: Path, subject_events, write_split_shards) -> Path:
+        """Single-shard MEDS dataset; returns the ``path_to_data`` root.
+
+        The concatenated ``events`` written to shard ``"0"`` look like::
+
+            shape: (15, 3)
+            ┌────────────┬─────────────────────┬─────────┐
+            │ subject_id ┆ time                ┆ code    │
+            │ ---        ┆ ---                 ┆ ---     │
+            │ i64        ┆ datetime[μs]        ┆ str     │
+            ╞════════════╪═════════════════════╪═════════╡
+            │ 1          ┆ 2020-01-01 00:00:00 ┆ ICD//00 │
+            │ 1          ┆ 2020-01-01 00:00:00 ┆ ICD//01 │
+            │ 1          ┆ 2020-01-02 00:00:00 ┆ ICD//00 │
+            │ 1          ┆ 2020-01-02 00:00:00 ┆ ICD//01 │
+            │ 1          ┆ 2020-01-03 00:00:00 ┆ ICD//00 │
+            │ 1          ┆ 2020-01-03 00:00:00 ┆ ICD//01 │
+            │ 1          ┆ 2020-01-04 00:00:00 ┆ ICD//00 │
+            │ 1          ┆ 2020-01-04 00:00:00 ┆ ICD//01 │
+            │ 1          ┆ 2020-01-05 00:00:00 ┆ ICD//00 │
+            │ 1          ┆ 2020-01-05 00:00:00 ┆ ICD//01 │
+            │ 2          ┆ 2020-01-01 00:00:00 ┆ ICD//00 │
+            │ 2          ┆ 2020-01-02 00:00:00 ┆ ICD//00 │
+            │ 2          ┆ 2020-01-03 00:00:00 ┆ ICD//00 │
+            │ 3          ┆ 2020-01-01 00:00:00 ┆ ICD//00 │
+            │ 3          ┆ 2020-01-02 00:00:00 ┆ ICD//00 │
+            └────────────┴─────────────────────┴─────────┘
+
+        Subject 1 has ``dups=2`` (two codes per distinct time → 5 distinct times,
+        10 rows); subjects 2 and 3 have 3 and 2 distinct times respectively.
+        """
         events = pl.concat(
             [
                 subject_events(1, 5, base=self.BASE, dups=2),  # duplicate (subject,time) rows
