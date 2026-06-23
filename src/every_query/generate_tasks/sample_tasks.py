@@ -547,9 +547,14 @@ def _unique_tmp_path(fp: Path) -> Path:
     at the end to be the atomicity primitive.
     """
     fp.parent.mkdir(parents=True, exist_ok=True)
+    # The random token sits *after* ``.tmp.`` (prefix=".{name}.tmp.", empty suffix) so the produced
+    # name is ``.{name}.tmp.<random>`` — matching the ``.{shard}.parquet.tmp.*`` glob in
+    # ``_clean_stale_temps``.  Putting ``tmp`` in a ``suffix=".tmp"`` instead would emit
+    # ``.{name}.<random>.tmp``, which that glob never matches, so orphaned temps would never be
+    # cleaned (the random token lands between ``.parquet.`` and ``.tmp``).
     fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{fp.name}.",
-        suffix=".tmp",
+        prefix=f".{fp.name}.tmp.",
+        suffix="",
         dir=str(fp.parent),
     )
     os.close(fd)
@@ -695,6 +700,7 @@ PREDICTION_TIME_COUNTS_NAME = "_prediction_time_counts.parquet"
 PREDICTION_TIMES_DIRNAME = "_prediction_times"
 PREDICTION_TIMES_META_NAME = "_prediction_times_meta.json"
 INDEX_DIRNAME = "_index"
+LABELED_DIRNAME = "_labeled"
 
 
 def final_output_path(training_tasks_dir: Path, split: str, shard: str) -> Path:
@@ -742,6 +748,22 @@ def index_path(training_task_artifacts_dir: Path, split: str, shard: str) -> Pat
     return training_task_artifacts_dir / split / INDEX_DIRNAME / f"{shard}.parquet"
 
 
+def labeled_fingerprint_path(training_task_artifacts_dir: Path, split: str, shard: str) -> Path:
+    """Stage 4 per-shard label-provenance sidecar: ``{artifacts}/{split}/_labeled/{shard}.json``.
+
+    Records the :func:`_index_fingerprint` of the Stage 3 index partition that produced the current
+    final ``{shard}.parquet`` output.  It lives in the **artifacts** root, never the final-output root,
+    so the final root keeps holding nothing but ``{shard}.parquet`` (invariant 7).  Stage 4 compares
+    the recorded fingerprint against the current index's fingerprint to decide whether an existing
+    output is still valid (skip) or was produced by a different index (stale ⇒ relabel).
+
+    Examples:
+        >>> labeled_fingerprint_path(Path("/x/tasks_artifacts"), "train", "0")
+        PosixPath('/x/tasks_artifacts/train/_labeled/0.json')
+    """
+    return training_task_artifacts_dir / split / LABELED_DIRNAME / f"{shard}.json"
+
+
 def prediction_times_meta_path(training_task_artifacts_dir: Path, split: str) -> Path:
     """Stage 0 cache sidecar: ``{artifacts}/{split}/_prediction_times_meta.json``.
 
@@ -768,6 +790,25 @@ def prediction_times_meta_path(training_task_artifacts_dir: Path, split: str) ->
 # ``evaluate_index_df``, aligns to ``TaskQuerySchema``, and writes the final dataset
 # shard atomically.  Workers are fully independent (own index partition, own event file,
 # own output file) so the orchestrator (#210) fans them out with ProcessPoolExecutor.
+
+
+def _index_fingerprint(index_df: pl.DataFrame) -> str:
+    """Serialization-independent fingerprint of a Stage 3 index partition's *logical* content.
+
+    Stage 3 unconditionally rebuilds (``rmtree`` + rewrite) the index every run, so an existence-only
+    Stage 4 skip would keep stale labels after a sampling-config change (different ``seed`` /
+    ``num_queries`` / ``query_codes`` / duration params) when ``overwrite=False``.  This fingerprint
+    lets the worker tell "same index as last time" (skip) from "different index" (relabel).
+
+    Built from polars' vectorized :meth:`~polars.DataFrame.hash_rows` summed over rows, combined with
+    the row count.  Summing is order-independent and counts duplicates, so the fingerprint depends only
+    on the *multiset* of index rows — exactly what determines the labels — and is stable across the
+    parquet re-serialization Stage 3 performs each run (a byte-hash of the parquet file would not be,
+    which would break ``overwrite=False`` idempotency).  Not collision-proof, but a collision only
+    causes an over-skip on content that already hashed and counted identically.
+    """
+    row_hash_sum = int(index_df.hash_rows(seed=0).sum()) if index_df.height else 0
+    return f"{index_df.height}:{row_hash_sum & 0xFFFFFFFFFFFFFFFF:016x}"
 
 
 def _clean_stale_temps(out_dir: Path, shard: str) -> int:
@@ -806,15 +847,30 @@ def label_one_shard(
 
     Returns:
         ``(shard, status)`` where status is ``"skipped"`` or ``"labeled"``.
+
+    The skip is keyed on the :func:`_index_fingerprint` of the current Stage 3 index partition, not
+    on mere output existence: an existing output is reused only when a recorded fingerprint matches
+    the current index (a genuine restart of the *same* run).  A changed sampling config rewrites the
+    index with a different fingerprint, so the stale output is relabeled even under ``overwrite=False``.
+    A missing/unreadable fingerprint (e.g. a pre-fingerprint output, or a crash between the parquet
+    and sidecar writes) is treated as stale ⇒ relabel.
     """
     final = out_dir / f"{shard}.parquet"
+    fingerprint_fp = index_dir.parent / LABELED_DIRNAME / f"{shard}.json"
+
+    index_df = pl.read_parquet(index_dir / f"{shard}.parquet")
+    current_fingerprint = _index_fingerprint(index_df)
 
     if not overwrite and final.exists():
-        return shard, "skipped"
+        try:
+            recorded = json.loads(fingerprint_fp.read_text()).get("index_fingerprint")
+        except (OSError, json.JSONDecodeError, AttributeError):
+            recorded = None
+        if recorded == current_fingerprint:
+            return shard, "skipped"
 
     _clean_stale_temps(out_dir, shard)
 
-    index_df = pl.read_parquet(index_dir / f"{shard}.parquet")
     events_df = _read_event_shard(data_dir / f"{shard}.parquet")
     max_time = compute_max_time_per_subject(events_df)
 
@@ -822,6 +878,9 @@ def label_one_shard(
     aligned = TaskQuerySchema.align(labeled.to_arrow())
 
     _atomic_write_parquet(pl.from_arrow(aligned), final)
+    # Record the index fingerprint *after* the output is committed so a present sidecar always
+    # describes a present, complete output (the parquet is the value, the sidecar is its provenance).
+    _atomic_write_json({"index_fingerprint": current_fingerprint}, fingerprint_fp)
     return shard, "labeled"
 
 
@@ -1139,9 +1198,11 @@ def build_index(
     # ``group_by`` (not ``partition_by``) for the same reason — it streams one group at a time
     # rather than materializing every shard's frame up front.
 
-    # Sort to make order that shards are processed deterministic
+    # Sort + ``maintain_order=True`` make the order shards are processed (and logged) deterministic;
+    # ``group_by`` alone is not order-preserving.  Output content is unaffected (shards are
+    # independent), but the deterministic order keeps reruns and logs stable.
     combined = combined.sort("shard")
-    for shard_key, shard_group in combined.group_by("shard"):
+    for shard_key, shard_group in combined.group_by("shard", maintain_order=True):
         (shard_name,) = shard_key
         pt_map = pl.read_parquet(prediction_times_path(training_task_artifacts_dir, split, str(shard_name)))
 
@@ -1324,6 +1385,13 @@ def run(cfg: DictConfig) -> None:
     for stale in out_dir.glob("*.parquet"):
         if stale.stem not in current_shards:
             stale.unlink()
+    # Mirror the prune onto the per-shard label-provenance sidecars so the _labeled/ dir never
+    # carries fingerprints for shards the final root no longer has.
+    labeled_dir = training_task_artifacts_dir / cfg.split / LABELED_DIRNAME
+    if labeled_dir.exists():
+        for stale_fp in labeled_dir.glob("*.json"):
+            if stale_fp.stem not in current_shards:
+                stale_fp.unlink()
 
     n_workers = resolve_workers(cfg.max_workers)
     logger.info("Stage 4: labeling %s shard(s) across %s worker(s).", f"{len(shards):,}", f"{n_workers:,}")
@@ -1339,8 +1407,12 @@ def run(cfg: DictConfig) -> None:
             fut.result()  # re-raise so a failed shard aborts the run loudly
 
     # The final dataset is the union of the shard parquets; its row count must equal the sampling
-    # budget N = num_queries * num_contexts_per_query (spec Stage 4).
-    written = int(pl.scan_parquet(out_dir / "*.parquet").select(pl.len()).collect().item())
+    # budget N = num_queries * num_contexts_per_query (spec Stage 4).  Resolve the file list
+    # explicitly (rather than a glob string) so the degenerate empty-budget case (num_queries=0 or
+    # num_contexts_per_query=0 -> no index, no output) reports 0 rows instead of tripping polars'
+    # "no files found" on an empty glob.
+    out_files = sorted(out_dir.glob("*.parquet"))
+    written = int(pl.scan_parquet(out_files).select(pl.len()).collect().item()) if out_files else 0
     if written != total_rows:
         raise ValueError(
             f"Stage 4 wrote {written} rows but expected {total_rows} "
@@ -1348,12 +1420,17 @@ def run(cfg: DictConfig) -> None:
         )
     logger.info("Pipeline complete: wrote %s labeled rows to %s.", f"{written:,}", out_dir)
 
+    if not out_files:
+        # Empty budget: nothing to summarize, and the summary scan below would hit the same empty-glob
+        # error the row-count scan just side-stepped.
+        return
+
     # Summary of the final dataset's coverage: how many distinct subjects and distinct queries the
     # written rows span (one scan over the {split}/*.parquet union).  A "query" is the full
     # QuerySpec identity -- the (query-code, duration_days) pair -- so it's counted as the number of
     # distinct (query, duration_days) combinations, not distinct codes alone.
     summary = (
-        pl.scan_parquet(out_dir / "*.parquet")
+        pl.scan_parquet(out_files)
         .select(
             pl.col(TaskQuerySchema.subject_id_name).n_unique().alias("n_subjects"),
             pl.struct(TaskQuerySchema.query_name, TaskQuerySchema.duration_days_name)
