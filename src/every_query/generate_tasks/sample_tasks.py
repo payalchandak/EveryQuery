@@ -342,8 +342,8 @@ def sample_patient_contexts(
 def compute_max_time_per_subject(events_df: pl.DataFrame) -> pl.DataFrame:
     """Return a ``(subject_id, max_time)`` DataFrame.
 
-    Used once per shard to turn the per-row censoring check into an O(1) lookup inside
-    ``evaluate_index_df``.
+    Implementation detail of ``evaluate_index_df``'s censoring check (kept module-level for
+    direct unit testing).
     """
     return events_df.group_by(DataSchema.subject_id_name).agg(
         pl.col(DataSchema.time_name).max().alias("max_time")
@@ -353,7 +353,6 @@ def compute_max_time_per_subject(events_df: pl.DataFrame) -> pl.DataFrame:
 def evaluate_index_df(
     index_df: pl.DataFrame,
     events_df: pl.DataFrame,
-    max_time_per_subject: pl.DataFrame,
 ) -> pl.DataFrame:
     """Label an index DataFrame with the single nullable ``boolean_value`` column via a single ``join_asof``.
 
@@ -375,7 +374,6 @@ def evaluate_index_df(
             ``query``, ``duration_days``. If ``task_id`` is present it is ignored and dropped from
             the output.
         events_df: Shard events with columns ``subject_id``, ``time``, ``code``.
-        max_time_per_subject: Output of ``compute_max_time_per_subject``.
 
     Returns:
         DataFrame with columns ``(subject_id, prediction_time, boolean_value, query,
@@ -398,6 +396,8 @@ def evaluate_index_df(
     # dtypes, guaranteed to pass ``TaskQuerySchema.align()`` downstream.
     if index_df.height == 0:
         return empty_task_query_df().select(out_cols)
+
+    max_time_per_subject = compute_max_time_per_subject(events_df)
 
     # Left side: index rows with a +1µs-shifted prediction_time for the strict-> asof key.
     left = index_df.with_columns(
@@ -872,9 +872,8 @@ def label_one_shard(
     _clean_stale_temps(out_dir, shard)
 
     events_df = _read_event_shard(data_dir / f"{shard}.parquet")
-    max_time = compute_max_time_per_subject(events_df)
 
-    labeled = evaluate_index_df(index_df, events_df, max_time)
+    labeled = evaluate_index_df(index_df, events_df)
     aligned = TaskQuerySchema.align(labeled.to_arrow())
 
     _atomic_write_parquet(pl.from_arrow(aligned), final)

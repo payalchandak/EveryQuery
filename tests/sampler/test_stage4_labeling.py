@@ -14,7 +14,6 @@ import polars as pl
 from every_query.generate_tasks import sample_tasks as st
 from every_query.generate_tasks.sample_tasks import (
     _clean_stale_temps,
-    compute_max_time_per_subject,
     evaluate_index_df,
     label_one_shard,
 )
@@ -68,14 +67,13 @@ class TestEvaluateIndexDfEdgeCases:
                 "duration_days": [10],
             }
         ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
-        max_time_df = compute_max_time_per_subject(events)
-        result = evaluate_index_df(index_df, events, max_time_df)
+        result = evaluate_index_df(index_df, events)
         assert result["boolean_value"].to_list() == [True]
 
         # Now with duration=0: no window → False (and not censored because 2020-01-03
         # + 0 days = 2020-01-03 which is <= 2021-01-01).
         index_df_zero = index_df.with_columns(pl.lit(0, dtype=pl.Int64).alias("duration_days"))
-        result_zero = evaluate_index_df(index_df_zero, events, max_time_df)
+        result_zero = evaluate_index_df(index_df_zero, events)
         assert result_zero["boolean_value"].to_list() == [False]
 
     def test_event_exactly_at_window_end_is_included(self):
@@ -118,7 +116,7 @@ class TestEvaluateIndexDfEdgeCases:
             }
         ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
 
-        result = evaluate_index_df(index_df, events, compute_max_time_per_subject(events))
+        result = evaluate_index_df(index_df, events)
         labels = {row["subject_id"]: row["boolean_value"] for row in result.iter_rows(named=True)}
         assert labels == {1: True, 2: False}
 
@@ -143,9 +141,8 @@ class TestEvaluateIndexDfEdgeCases:
             }
         ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
 
-        max_time_df = compute_max_time_per_subject(events)
         with caplog.at_level("WARNING", logger="every_query.generate_tasks.sample_tasks"):
-            result = evaluate_index_df(index_df, events, max_time_df)
+            result = evaluate_index_df(index_df, events)
 
         # Subject 2 (unknown) → censored → null boolean_value.
         unknown = result.filter(pl.col("subject_id") == 2)
@@ -182,7 +179,7 @@ class TestEvaluateIndexDfEdgeCases:
             }
         ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
 
-        result = evaluate_index_df(index_df, events, compute_max_time_per_subject(events))
+        result = evaluate_index_df(index_df, events)
         assert result["boolean_value"].to_list() == [False]
 
     def test_nonmatching_code_in_window_is_ignored(self):
@@ -211,7 +208,7 @@ class TestEvaluateIndexDfEdgeCases:
             }
         ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
 
-        result = evaluate_index_df(index_df, events, compute_max_time_per_subject(events))
+        result = evaluate_index_df(index_df, events)
         labels = {row["query"]: row["boolean_value"] for row in result.iter_rows(named=True)}
         assert labels == {"A": False, "B": True}
 
@@ -235,7 +232,7 @@ class TestEvaluateIndexDfEdgeCases:
             }
         ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
 
-        result = evaluate_index_df(index_df, events, compute_max_time_per_subject(events))
+        result = evaluate_index_df(index_df, events)
         assert result.height == 1
         assert result["boolean_value"].to_list() == [True]
 
@@ -271,7 +268,7 @@ class TestBooleanValueTruthTable:
                 "duration_days": [duration_days],
             }
         ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
-        result = evaluate_index_df(index_df, events, compute_max_time_per_subject(events))
+        result = evaluate_index_df(index_df, events)
         assert result.height == 1
         return result["boolean_value"].to_list()[0]
 
@@ -401,7 +398,7 @@ class TestReadEventShardDtypeNormalization:
             }
         ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
 
-        result = evaluate_index_df(index_df, events, compute_max_time_per_subject(events))
+        result = evaluate_index_df(index_df, events)
         # Uncensored (max_time = 2021-01-01 is way past prediction + 10d) and the next "A"
         # event is 2020-01-02, which is strictly within the window → boolean_value=True.
         assert result["boolean_value"].to_list() == [True]
