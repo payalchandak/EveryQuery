@@ -1286,6 +1286,112 @@ def resolve_workers(max_workers: int | None = None) -> int:
 CONFIGS = str(files("every_query") / "generate_tasks" / "configs")
 
 
+def _prune_stale_outputs(out_dir: Path, labeled_dir: Path, current_shards: set[str]) -> None:
+    """Drop outputs from a previous run whose shard isn't in this run's set.
+
+    Unlike index_dir (rebuilt via rmtree in build_index), out_dir persists across runs, so a leftover
+    {shard}.parquet would pollute the {split}/*.parquet union AND get miscounted by the row-count guard.  Drop
+    any output whose shard isn't in this run's set so the final split dir holds exactly these shards (mirrors
+    Stage 0/3 dropping stale partitions).  Current shards are kept so overwrite=False can still skip already-
+    labeled ones.
+    """
+    for stale in out_dir.glob("*.parquet"):
+        if stale.stem not in current_shards:
+            stale.unlink()
+    # Mirror the prune onto the per-shard label-provenance sidecars so the _labeled/ dir never
+    # carries fingerprints for shards the final root no longer has.
+    if labeled_dir.exists():
+        for stale_fp in labeled_dir.glob("*.json"):
+            if stale_fp.stem not in current_shards:
+                stale_fp.unlink()
+
+
+def _label_shards(
+    shards: list[str],
+    index_dir: Path,
+    data_dir: Path,
+    out_dir: Path,
+    overwrite: bool,
+    n_workers: int,
+) -> None:
+    """Fan one :func:`label_one_shard` worker out per shard via a spawn-based pool.
+
+    Workers receive ids/paths (never DataFrames) and write their own atomic output.
+    """
+    # Use the "spawn" start method, not the Linux default "fork": by Stage 4 the driver has already
+    # run polars (which starts a rayon threadpool), and forking a process while those threads hold
+    # locks leaves the child with inherited-but-locked mutexes -> the worker deadlocks in futex the
+    # moment label_one_shard touches polars (see #210).  spawn gives each worker a fresh interpreter.
+    mp_context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=n_workers, mp_context=mp_context) as ex:
+        futs = {ex.submit(label_one_shard, s, index_dir, data_dir, out_dir, overwrite): s for s in shards}
+        for fut in as_completed(futs):
+            fut.result()  # re-raise so a failed shard aborts the run loudly
+
+
+def _validate_row_count(out_files: list[Path], total_rows: int, cfg: DictConfig) -> int:
+    """Return the row count of the written union, raising if it doesn't equal the sampling budget.
+
+    The final dataset is the union of the shard parquets; its row count must equal the sampling budget N =
+    num_queries * num_contexts_per_query (spec Stage 4).  Resolve the file list explicitly (rather than a glob
+    string) so the degenerate empty-budget case (num_queries=0 or num_contexts_per_query=0 -> no index, no
+    output) reports 0 rows instead of tripping polars' "no files found" on an empty glob.
+    """
+    written = int(pl.scan_parquet(out_files).select(pl.len()).collect().item()) if out_files else 0
+    if written != total_rows:
+        raise ValueError(
+            f"Stage 4 wrote {written} rows but expected {total_rows} "
+            f"(num_queries={cfg.num_queries} * num_contexts_per_query={cfg.num_contexts_per_query})."
+        )
+    return written
+
+
+def _log_coverage_summary(out_files: list[Path], written: int) -> None:
+    """Log distinct-subject / distinct-query coverage and the boolean_value class balance.
+
+    A "query" is the full QuerySpec identity -- the (query-code, duration_days) pair -- so it's counted as the
+    number of distinct (query, duration_days) combinations, not distinct codes alone.
+    """
+    if not out_files:
+        # Empty budget: nothing to summarize, and the summary scan below would hit the same empty-glob
+        # error the row-count scan just side-stepped.
+        return
+
+    summary = (
+        pl.scan_parquet(out_files)
+        .select(
+            pl.col(TaskQuerySchema.subject_id_name).n_unique().alias("n_subjects"),
+            pl.struct(TaskQuerySchema.query_name, TaskQuerySchema.duration_days_name)
+            .n_unique()
+            .alias("n_queries"),
+            # boolean_value is nullable (null = censored); count each of the three label outcomes so
+            # the final class balance (and censoring rate) is visible at a glance.
+            pl.col(TaskQuerySchema.boolean_value_name).null_count().alias("n_null"),
+            (pl.col(TaskQuerySchema.boolean_value_name) == False).sum().alias("n_false"),  # noqa: E712
+            (pl.col(TaskQuerySchema.boolean_value_name) == True).sum().alias("n_true"),  # noqa: E712
+        )
+        .collect()
+    )
+    n_subjects = int(summary["n_subjects"].item())
+    n_queries = int(summary["n_queries"].item())
+    n_null = int(summary["n_null"].item())
+    n_false = int(summary["n_false"].item())
+    n_true = int(summary["n_true"].item())
+    logger.info(
+        "Summary: %s row(s) across %s unique subject_id(s) and %s unique quer%s.",
+        f"{written:,}",
+        f"{n_subjects:,}",
+        f"{n_queries:,}",
+        "y" if n_queries == 1 else "ies",
+    )
+    logger.info(
+        "Summary: boolean_value label counts -- %s null (censored), %s false, %s true.",
+        f"{n_null:,}",
+        f"{n_false:,}",
+        f"{n_true:,}",
+    )
+
+
 def run(cfg: DictConfig) -> None:
     """Execute the 5-stage pipeline for a fully-resolved config (no Hydra/dotenv side effects).
 
@@ -1374,94 +1480,17 @@ def run(cfg: DictConfig) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)  # driver creates out_dir once, before the pool
 
     shards = sorted(p.stem for p in index_dir.glob("*.parquet"))
-
-    # Prune stale outputs from a previous run with a different shard set: unlike index_dir (rebuilt
-    # via rmtree in build_index), out_dir persists across runs, so a leftover {shard}.parquet would
-    # pollute the {split}/*.parquet union AND get miscounted by the row-count guard below.  Drop any
-    # output whose shard isn't in this run's set so the final split dir holds exactly these shards
-    # (mirrors Stage 0/3 dropping stale partitions).  Current shards are kept so overwrite=False can
-    # still skip already-labeled ones.
-    current_shards = set(shards)
-    for stale in out_dir.glob("*.parquet"):
-        if stale.stem not in current_shards:
-            stale.unlink()
-    # Mirror the prune onto the per-shard label-provenance sidecars so the _labeled/ dir never
-    # carries fingerprints for shards the final root no longer has.
     labeled_dir = training_task_artifacts_dir / cfg.split / LABELED_DIRNAME
-    if labeled_dir.exists():
-        for stale_fp in labeled_dir.glob("*.json"):
-            if stale_fp.stem not in current_shards:
-                stale_fp.unlink()
+    _prune_stale_outputs(out_dir, labeled_dir, set(shards))
 
     n_workers = resolve_workers(cfg.max_workers)
     logger.info("Stage 4: labeling %s shard(s) across %s worker(s).", f"{len(shards):,}", f"{n_workers:,}")
+    _label_shards(shards, index_dir, data_dir, out_dir, cfg.overwrite, n_workers)
 
-    # Use the "spawn" start method, not the Linux default "fork": by Stage 4 the driver has already
-    # run polars (which starts a rayon threadpool), and forking a process while those threads hold
-    # locks leaves the child with inherited-but-locked mutexes -> the worker deadlocks in futex the
-    # moment label_one_shard touches polars (see #210).  spawn gives each worker a fresh interpreter.
-    mp_context = multiprocessing.get_context("spawn")
-    with ProcessPoolExecutor(max_workers=n_workers, mp_context=mp_context) as ex:
-        futs = {ex.submit(label_one_shard, s, index_dir, data_dir, out_dir, cfg.overwrite): s for s in shards}
-        for fut in as_completed(futs):
-            fut.result()  # re-raise so a failed shard aborts the run loudly
-
-    # The final dataset is the union of the shard parquets; its row count must equal the sampling
-    # budget N = num_queries * num_contexts_per_query (spec Stage 4).  Resolve the file list
-    # explicitly (rather than a glob string) so the degenerate empty-budget case (num_queries=0 or
-    # num_contexts_per_query=0 -> no index, no output) reports 0 rows instead of tripping polars'
-    # "no files found" on an empty glob.
     out_files = sorted(out_dir.glob("*.parquet"))
-    written = int(pl.scan_parquet(out_files).select(pl.len()).collect().item()) if out_files else 0
-    if written != total_rows:
-        raise ValueError(
-            f"Stage 4 wrote {written} rows but expected {total_rows} "
-            f"(num_queries={cfg.num_queries} * num_contexts_per_query={cfg.num_contexts_per_query})."
-        )
+    written = _validate_row_count(out_files, total_rows, cfg)
     logger.info("Pipeline complete: wrote %s labeled rows to %s.", f"{written:,}", out_dir)
-
-    if not out_files:
-        # Empty budget: nothing to summarize, and the summary scan below would hit the same empty-glob
-        # error the row-count scan just side-stepped.
-        return
-
-    # Summary of the final dataset's coverage: how many distinct subjects and distinct queries the
-    # written rows span (one scan over the {split}/*.parquet union).  A "query" is the full
-    # QuerySpec identity -- the (query-code, duration_days) pair -- so it's counted as the number of
-    # distinct (query, duration_days) combinations, not distinct codes alone.
-    summary = (
-        pl.scan_parquet(out_files)
-        .select(
-            pl.col(TaskQuerySchema.subject_id_name).n_unique().alias("n_subjects"),
-            pl.struct(TaskQuerySchema.query_name, TaskQuerySchema.duration_days_name)
-            .n_unique()
-            .alias("n_queries"),
-            # boolean_value is nullable (null = censored); count each of the three label outcomes so
-            # the final class balance (and censoring rate) is visible at a glance.
-            pl.col(TaskQuerySchema.boolean_value_name).null_count().alias("n_null"),
-            (pl.col(TaskQuerySchema.boolean_value_name) == False).sum().alias("n_false"),  # noqa: E712
-            (pl.col(TaskQuerySchema.boolean_value_name) == True).sum().alias("n_true"),  # noqa: E712
-        )
-        .collect()
-    )
-    n_subjects = int(summary["n_subjects"].item())
-    n_queries = int(summary["n_queries"].item())
-    n_null = int(summary["n_null"].item())
-    n_false = int(summary["n_false"].item())
-    n_true = int(summary["n_true"].item())
-    logger.info(
-        "Summary: %s row(s) across %s unique subject_id(s) and %s unique quer%s.",
-        f"{written:,}",
-        f"{n_subjects:,}",
-        f"{n_queries:,}",
-        "y" if n_queries == 1 else "ies",
-    )
-    logger.info(
-        "Summary: boolean_value label counts -- %s null (censored), %s false, %s true.",
-        f"{n_null:,}",
-        f"{n_false:,}",
-        f"{n_true:,}",
-    )
+    _log_coverage_summary(out_files, written)
 
 
 @hydra.main(version_base=None, config_path=CONFIGS, config_name="sample_training_tasks_config")
