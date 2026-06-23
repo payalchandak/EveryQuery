@@ -25,6 +25,10 @@ export TASK_DIR="/path/to/eq_stuff/tasks"               # out_dir= for evaluatio
 export TRAINING_TASKS_DIR="/path/to/eq_stuff/training_tasks"  # out_dir= for training tasks
 export OUTPUT_DIR="/path/to/EveryQuery/results"         # OUTPUT_DIR for ${oc.env:OUTPUT_DIR} in train config
 
+# Only for the `aces_to_eq` conversion pipeline (predict/external_tasks), read via
+# ${oc.env:ACES_SHARDS_DIR}. Leave unset/commented otherwise.
+# export ACES_SHARDS_DIR="/path/to/eic_stuff/make_index_dfs/task_configs"
+
 # --- Weights & Biases (read natively by wandb) -------------------------------
 export WANDB_ENTITY="your-wandb-entity"
 export WANDB_PROJECT="EveryQuery"

@@ -259,9 +259,11 @@ machines (SLURM scripts `source` the same file). `EQ_train` validates only the v
 resolves — `validate_training_config()` in `train.py` checks the resolved cohort/task dirs exist and
 that `WANDB_ENTITY` is set *only* when a wandb logger is enabled.
 
-The two genuine env reads that remain: `OUTPUT_DIR` (backs `${oc.env:OUTPUT_DIR}` in the train
-config's `output_dir`) and `WANDB_ENTITY` (read natively by `wandb`, backs
-`${oc.env:WANDB_ENTITY,null}`).
+The genuine env reads that remain in the **train** config: `OUTPUT_DIR` (backs
+`${oc.env:OUTPUT_DIR,null}` in `output_dir`) and `WANDB_ENTITY` (read natively by `wandb`, backs
+`${oc.env:WANDB_ENTITY,null}`). The **preprocessing** subprocess bridge (`RAW_MEDS_DIR`,
+`MTD_INPUT_DIR`, `MIN_SUBJECTS_PER_CODE`, `MIN_EVENTS_PER_SUBJECT`) and the optional `aces_to_eq`
+pipeline (`ACES_SHARDS_DIR`) also use `${oc.env:...}` — see those submodules.
 
 | Var                  | Used as                                                                            |
 | -------------------- | ---------------------------------------------------------------------------------- |

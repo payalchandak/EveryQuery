@@ -236,7 +236,7 @@ def validate_training_config(cfg: DictConfig) -> None:
         if not value:
             raise ValueError(
                 f"datamodule.config.{node} is unset. Pass it as a CLI override "
-                f"(datamodule.config.{node}=/path) or set ${env_var} in your .env."
+                f"(datamodule.config.{node}=/path, typically =${env_var})."
             )
         if not Path(value).is_dir():
             raise NotADirectoryError(
@@ -250,8 +250,7 @@ def validate_training_config(cfg: DictConfig) -> None:
     output_dir = cfg.get("output_dir")
     if not output_dir or str(output_dir).startswith(("None/", "null/")):
         raise ValueError(
-            "output_dir is unset (is $OUTPUT_DIR set?). Pass output_dir=/path "
-            "or set $OUTPUT_DIR in your .env."
+            "output_dir is unset (is $OUTPUT_DIR exported?). Pass output_dir=/path or export $OUTPUT_DIR."
         )
 
     if _is_wandb_logger(cfg.trainer.get("logger")) and not cfg.trainer.logger.get("entity"):

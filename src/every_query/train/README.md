@@ -11,8 +11,8 @@ Training stage of the EveryQuery pipeline. Home of the `EQ_train` console script
     - `config.yaml` — default production config (ModernBERT encoder, AdamW, wandb
         logger, early-stopping on tuning/loss). Training has no query-codes knob:
         the set of queried codes is determined by whatever `EQ_generate_training_tasks`
-        wrote into the task-labels parquet (`datamodule.config.task_labels_dir`,
-        default `${oc.env:TRAINING_TASKS_DIR}`). Code filtering happens
+        wrote into the task-labels parquet (`datamodule.config.task_labels_dir`, a
+        required Hydra arg — typically `=$TRAINING_TASKS_DIR`). Code filtering happens
         upstream in preprocessing.
     - `fast_config.yaml` — speed-tuned override bundle that inherits `config.yaml` and
         shrinks `max_seq_len`, bumps batch size, etc. Targeted at tokenization-sweep
@@ -34,8 +34,8 @@ EQ_process_data       EQ_generate_training_tasks         EQ_train       EQ_predi
 2. Long-format task-label parquets, produced by
     [`generate_tasks/`](../generate_tasks/) (no intermediate "collation" step — the
     sampler writes the dataloader's input format directly). `EQ_generate_training_tasks`
-    writes these to `$TRAINING_TASKS_DIR`, which is also the default for
-    `datamodule.config.task_labels_dir` — no override needed when `.env` is set.
+    writes these to `$TRAINING_TASKS_DIR`; pass that path as the required
+    `datamodule.config.task_labels_dir` Hydra arg (typically `=$TRAINING_TASKS_DIR`).
 
 `train/` produces a run directory at
 `$OUTPUT_DIR/outputs/<YYYY-MM-DD>/<HH-MM-SS>/` containing `best_model.ckpt`,

@@ -427,8 +427,9 @@ def main(cfg: DictConfig) -> None:
     data_dir = Path(str(cfg.data_dir))
     out_dir = Path(str(cfg.out_dir))
 
-    codes_cfg = cfg.get("codes")
-    codes = read_query_codes(None, cfg.get("codes_dir")) if codes_cfg is None else read_query_codes(codes_cfg)
+    # read_query_codes ignores codes_dir whenever codes_cfg is a real list/path, so this one call
+    # covers both the explicit-codes and default-universe branches.
+    codes = read_query_codes(cfg.get("codes"), cfg.get("codes_dir"))
 
     # Durations must be whole-day ints — silent truncation (e.g. ``0.5 → 0``) would
     # change the window semantics.  ``TaskQuerySchema.duration_days`` is float32 on
