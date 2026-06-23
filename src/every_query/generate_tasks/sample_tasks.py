@@ -600,6 +600,25 @@ def _atomic_write_json(obj: object, fp: Path) -> None:
 # functions (no file I/O, no dir creation) so they are unit-testable without a Hydra run.
 
 
+def _require_path_arg(value: object, name: str) -> Path:
+    """Coerce a required path arg to ``Path``, rejecting unset/empty values with a clear message.
+
+    Path roots are mandatory (``???``) Hydra args, but a value supplied as ``{name}=$VAR`` with an
+    *unexported* shell var expands to an empty override (``{name}=``) that Hydra parses as ``None`` —
+    which overrides the ``???`` sentinel, so ``MissingMandatoryValue`` never fires and the value would
+    otherwise slip through as the literal path ``None``.  ``cfg.get(name)`` returns ``None`` for both
+    the truly-unset (``???``) and empty-override cases, so guarding here gives one clear up-front
+    error for both (mirrors the empty-check the removed ``_resolve_path`` did; see #235).
+    """
+    s = "" if value is None else str(value).strip()
+    if not s:
+        raise ValueError(
+            f"{name} is unset or empty. Pass {name}=/path on the CLI "
+            f"(if you wrote {name}=$VAR, the shell variable is unset — export it or `source env.sh`)."
+        )
+    return Path(s)
+
+
 def default_artifacts_dir(training_tasks_dir: Path) -> Path:
     """Return the sibling intermediate-artifacts root for ``training_tasks_dir``.
 
@@ -618,9 +637,9 @@ def resolve_training_task_paths(cfg: DictConfig) -> tuple[Path, Path, Path]:
     """Resolve the redesigned sampler's three path roots from required Hydra keys.
 
     The two input roots are machine-specific Hydra args (supplied on the CLI, typically as
-    shell-expanded ``data_dir=$INTERMEDIATE out_dir=$TRAINING_TASKS_DIR``).  Both are mandatory
-    (``???`` in the config), so accessing them when unset raises OmegaConf's
-    ``MissingMandatoryValue`` — there is no env-var fallback (see issue #235).
+    shell-expanded ``data_dir=$INTERMEDIATE out_dir=$TRAINING_TASKS_DIR``).  Both are mandatory; an
+    unset or empty value (including ``data_dir=$VAR`` with an unexported ``$VAR``) raises a clear
+    ``ValueError`` via :func:`_require_path_arg` — there is no env-var fallback (see issue #235).
 
     - ``path_to_data`` — MEDS dataset root (``cfg.data_dir``).
     - ``training_tasks_dir`` — final-output-only root (``cfg.out_dir``).
@@ -632,8 +651,8 @@ def resolve_training_task_paths(cfg: DictConfig) -> tuple[Path, Path, Path]:
     Returns:
         ``(path_to_data, training_tasks_dir, training_task_artifacts_dir)`` as ``Path``s.
     """
-    path_to_data = Path(str(cfg.data_dir))
-    training_tasks_dir = Path(str(cfg.out_dir))
+    path_to_data = _require_path_arg(cfg.get("data_dir"), "data_dir")
+    training_tasks_dir = _require_path_arg(cfg.get("out_dir"), "out_dir")
     training_task_artifacts_dir = default_artifacts_dir(training_tasks_dir)
 
     return path_to_data, training_tasks_dir, training_task_artifacts_dir

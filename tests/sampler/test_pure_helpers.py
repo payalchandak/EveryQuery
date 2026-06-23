@@ -17,7 +17,6 @@ from pathlib import Path
 import polars as pl
 import pytest
 from omegaconf import OmegaConf
-from omegaconf.errors import MissingMandatoryValue
 
 from every_query.generate_tasks import sample_tasks as st
 from every_query.generate_tasks.sample_tasks import (
@@ -107,10 +106,19 @@ class TestResolveTrainingTaskPaths:
         assert arts == Path("/cli/tasks_artifacts")
 
     def test_missing_required_root_raises(self):
-        # `???` is OmegaConf MISSING; accessing it must raise rather than fall back to any env var.
+        # `???` is OmegaConf MISSING; it must raise a clear ValueError rather than fall back to any
+        # env var or slip through as a literal `None`/empty path.
         cfg = OmegaConf.create({"data_dir": "???", "out_dir": "/cli/tasks"})
-        with pytest.raises(MissingMandatoryValue):
+        with pytest.raises(ValueError, match="data_dir is unset or empty"):
             resolve_training_task_paths(cfg)
+
+    def test_empty_override_raises_not_silent_none(self):
+        # `data_dir=$VAR` with an unexported $VAR expands to an empty override that Hydra parses as
+        # None, overriding `???`.  Must raise up front, not become Path("None") and fail in Stage 0.
+        for bad in (None, "", "   "):
+            cfg = OmegaConf.create({"data_dir": bad, "out_dir": "/cli/tasks"})
+            with pytest.raises(ValueError, match="data_dir is unset or empty"):
+                resolve_training_task_paths(cfg)
 
 
 class TestArtifactLayout:

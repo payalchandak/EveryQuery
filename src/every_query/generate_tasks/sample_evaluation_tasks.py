@@ -37,6 +37,7 @@ from every_query.data.schema import TaskQuerySchema, empty_task_query_df
 from every_query.generate_tasks.sample_tasks import (
     _atomic_write_parquet,
     _read_event_shard,
+    _require_path_arg,
     evaluate_index_df,
     read_query_codes,
 )
@@ -424,8 +425,8 @@ def main(cfg: DictConfig) -> None:
     Sweep across shards with
     ``python -m every_query.generate_tasks.sample_evaluation_tasks -m input_shard=0,1,2,...``.
     """
-    data_dir = Path(str(cfg.data_dir))
-    out_dir = Path(str(cfg.out_dir))
+    data_dir = _require_path_arg(cfg.get("data_dir"), "data_dir")
+    out_dir = _require_path_arg(cfg.get("out_dir"), "out_dir")
 
     # read_query_codes ignores codes_dir whenever codes_cfg is a real list/path, so this one call
     # covers both the explicit-codes and default-universe branches.

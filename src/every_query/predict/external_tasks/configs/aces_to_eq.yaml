@@ -12,6 +12,6 @@ queries: ${query_codes}
 duration_days: 30.0
 
 eq_tasks_all_dir: ${oc.env:TASK_DIR}/all/held_out
-# ACES_SHARDS_DIR lives outside TASK_DIR/OUTPUT_DIR — set it in .env if you use this pipeline.
+# ACES_SHARDS_DIR lives outside TASK_DIR/OUTPUT_DIR — export it (e.g. via env.sh) if you use this pipeline.
 aces_shards_dir: ${oc.env:ACES_SHARDS_DIR}/${task_name}/held_out
 output_dir: ${oc.env:TASK_DIR}/eval/aces/${task_name}/held_out
