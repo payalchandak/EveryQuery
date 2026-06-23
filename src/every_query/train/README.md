@@ -29,7 +29,7 @@ EQ_process_data       EQ_generate_training_tasks         EQ_train       EQ_predi
 
 `train/` consumes two artifacts from upstream:
 
-1. The tensorized MEDS cohort at `$FINAL_DATA_DIR`, produced by
+1. The tensorized MEDS cohort at `$TENSORIZED_COHORT_DIR`, produced by
     [`preprocessing/`](../preprocessing/).
 2. Long-format task-label parquets, produced by
     [`generate_tasks/`](../generate_tasks/) (no intermediate "collation" step — the
@@ -38,7 +38,7 @@ EQ_process_data       EQ_generate_training_tasks         EQ_train       EQ_predi
     `datamodule.config.task_labels_dir` Hydra arg (typically `=$TRAINING_TASKS_DIR`).
 
 `train/` produces a run directory at
-`$OUTPUT_DIR/outputs/<YYYY-MM-DD>/<HH-MM-SS>/` containing `best_model.ckpt`,
+`$TRAINING_OUTPUT_DIR/outputs/<YYYY-MM-DD>/<HH-MM-SS>/` containing `best_model.ckpt`,
 `config.yaml` (used config), `resolved_config.yaml` (used config with all
 interpolations resolved — consumed by downstream loaders), and a
 `checkpoints/` dir with epoch-indexed checkpoints.

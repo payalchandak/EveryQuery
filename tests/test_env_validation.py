@@ -103,7 +103,7 @@ def test_missing_output_dir_raises(existing_dirs):
 
 
 def test_unset_output_dir_env_resolves_to_none_string_raises(existing_dirs, tmp_path):
-    """An unset $OUTPUT_DIR resolves the config interpolation to a truthy 'None/<run_id>/'.
+    """An unset $TRAINING_OUTPUT_DIR resolves the config interpolation to a truthy 'None/<run_id>/'.
 
     Regression guard for the #234 review gap: the gate must reject this, not let a run write
     to a directory literally named ``None/...``.

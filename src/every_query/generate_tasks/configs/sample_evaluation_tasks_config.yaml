@@ -10,7 +10,7 @@
 #   python -m every_query.generate_tasks.sample_evaluation_tasks -m input_shard=0,1,2,...
 #
 # Path roots are required Hydra args (no `.env`/env-var fallback — see #235).  Pass them on the
-# CLI, typically as shell-expanded vars (`data_dir=$INTERMEDIATE out_dir=$TASK_DIR`):
+# CLI, typically as shell-expanded vars (`data_dir=$TOKENIZED_EVENTS_DIR out_dir=$EVAL_TASKS_DIR`):
 #   data_dir  (event shards live under `{data_dir}/data/{split}/*.parquet`)
 #   out_dir   (labeled shards land at {out_dir}/eval/{split}/*.parquet — separate `eval/` subdir
 #             so they don't collide with `sample_tasks`'s pretraining outputs at {out_dir}/{split}/*)
@@ -33,7 +33,7 @@ min_context_per_subject: 50
 
 # Codes to evaluate (required).  Either an explicit list (`query_codes=[HR, TEMP]`), a YAML/parquet
 # path, or a metadata root directory to load the full vocabulary from `{dir}/metadata/codes.parquet`
-# (typically `query_codes=$PROCESSED`).
+# (typically `query_codes=$TENSORIZED_COHORT_DIR`).
 query_codes: ???
 
 # Duration-day horizons to evaluate at every prediction time.  Must be a list of

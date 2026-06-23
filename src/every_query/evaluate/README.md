@@ -22,8 +22,8 @@ predict/ predictions.parquet  ──►  EQ_evaluate  ──►  metrics.parquet
 
 ```bash
 EQ_evaluate \
-	predictions_parquet="$OUTPUT_DIR/predictions.parquet" \
-	metrics_parquet="$OUTPUT_DIR/metrics.parquet"
+	predictions_parquet="$TRAINING_OUTPUT_DIR/predictions.parquet" \
+	metrics_parquet="$TRAINING_OUTPUT_DIR/metrics.parquet"
 ```
 
 One Hydra main. No model instantiation, no trainer loop, no multi-model orchestration.

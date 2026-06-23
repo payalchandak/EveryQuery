@@ -41,7 +41,7 @@ different row distributions:
     — shipped Hydra configs. Path roots (`data_dir`, `out_dir`, and `query_codes` — pass the
     metadata root dir to load the full universe) are **required Hydra args** — no `.env`/env-var
     fallback (see [#235](https://github.com/payalchandak/EveryQuery/issues/235)). Pass them as
-    shell-expanded vars (`data_dir=$INTERMEDIATE out_dir=$TRAINING_TASKS_DIR query_codes=$PROCESSED`);
+    shell-expanded vars (`data_dir=$TOKENIZED_EVENTS_DIR out_dir=$TRAINING_TASKS_DIR query_codes=$TENSORIZED_COHORT_DIR`);
     everything else is a Hydra override.
 
 ## Pipeline position
@@ -54,10 +54,10 @@ EQ_process_data       EQ_generate_training_tasks           EQ_train       EQ_pre
 
 Both endpoints consume:
 
-1. Event shards at `$INTERMEDIATE/data/{split}/*.parquet` (from
+1. Event shards at `$TOKENIZED_EVENTS_DIR/data/{split}/*.parquet` (from
     [`preprocessing/`](../preprocessing/)).
-2. The query-code universe — pass `query_codes=$PROCESSED` (a metadata root dir resolves to
-    `$PROCESSED/metadata/codes.parquet`), or override with an explicit list / file path. Same
+2. The query-code universe — pass `query_codes=$TENSORIZED_COHORT_DIR` (a metadata root dir resolves to
+    `$TENSORIZED_COHORT_DIR/metadata/codes.parquet`), or override with an explicit list / file path. Same
     `query_codes` knob for both training and evaluation.
 
 **Training-task outputs** land at `$TRAINING_TASKS_DIR/{split}/{shard}.parquet` — the final
@@ -66,7 +66,7 @@ All intermediates (the Stage 0 prediction-time map, Stage 3 index) live in the *
 `*_artifacts` root (`{parent}/{name}_artifacts` of `$TRAINING_TASKS_DIR`, no env var of its
 own), so the two trees never nest and cleanup is a single `rm -rf` of the artifacts dir.
 
-**Evaluation-task outputs** land at `$TASK_DIR/eval/{split}/*.parquet`. The separate `eval/`
+**Evaluation-task outputs** land at `$EVAL_TASKS_DIR/eval/{split}/*.parquet`. The separate `eval/`
 subdirectory keeps the two row distributions from colliding in one directory.
 
 ## Running it
@@ -96,8 +96,8 @@ process samples globally and fans Stage-4 labeling out itself. Key knobs (full l
     (distinct `(subject_id, time)` rows, not events) before a prediction time is eligible.
 - `min_duration`, `max_duration`, `duration_distribution` (`uniform | log-uniform`) — the
     Stage 1 duration draw; `duration_days` is a float (no day-rounding).
-- `query_codes` — **required**: `query_codes=$PROCESSED` (a metadata root dir) loads the full
-    vocabulary from `$PROCESSED/metadata/codes.parquet`; or pass an inline Hydra list
+- `query_codes` — **required**: `query_codes=$TENSORIZED_COHORT_DIR` (a metadata root dir) loads the full
+    vocabulary from `$TENSORIZED_COHORT_DIR/metadata/codes.parquet`; or pass an inline Hydra list
     (`query_codes=[HR,TEMP]`) or a YAML/parquet path.
 - `max_workers` — optional cap on the Stage 4 pool; `null` uses cores-on-node, an int caps that
     downward only. Set it when a run OOMs.

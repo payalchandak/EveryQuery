@@ -3,7 +3,7 @@
 # later stage issues (#205-#210).
 #
 # Path roots are machine-specific, required Hydra args (no `.env`/env-var fallback — see #235).
-# Pass them on the CLI, typically as shell-expanded vars (`data_dir=$INTERMEDIATE out_dir=$TRAINING_TASKS_DIR`):
+# Pass them on the CLI, typically as shell-expanded vars (`data_dir=$TOKENIZED_EVENTS_DIR out_dir=$TRAINING_TASKS_DIR`):
 #   path_to_data (data_dir)       (event shards under `{path_to_data}/data/{split}/*.parquet`)
 #   training_tasks_dir (out_dir)  (final dataset only: `{split}/{shard}.parquet`)
 # Both are `???` (mandatory); leaving one unset raises OmegaConf's MissingMandatoryValue.  The
@@ -25,7 +25,7 @@ max_workers: null
 
 # Query-code sampling universe (required).  Pass an explicit Hydra list (`query_codes=[HR,TEMP]`),
 # a YAML/parquet path, or a metadata root directory to load the full vocabulary from
-# `{dir}/metadata/codes.parquet` (typically `query_codes=$PROCESSED`).  Resolved by
+# `{dir}/metadata/codes.parquet` (typically `query_codes=$TENSORIZED_COHORT_DIR`).  Resolved by
 # `read_query_codes` outside `QueryDistribution`.
 query_codes: ???
 
@@ -34,7 +34,7 @@ min_duration: 1
 max_duration: 731
 duration_distribution: log-uniform # uniform | log-uniform
 
-# Path roots (see header): required Hydra args, no env fallback.  Pass `data_dir=$INTERMEDIATE out_dir=$TRAINING_TASKS_DIR`.
+# Path roots (see header): required Hydra args, no env fallback.  Pass `data_dir=$TOKENIZED_EVENTS_DIR out_dir=$TRAINING_TASKS_DIR`.
 data_dir: ???
 out_dir: ???
 

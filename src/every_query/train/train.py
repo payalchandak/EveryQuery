@@ -229,7 +229,7 @@ def validate_training_config(cfg: DictConfig) -> None:
     """
     ds_cfg = cfg.datamodule.config
     for node, env_var in (
-        ("tensorized_cohort_dir", "FINAL_DATA_DIR"),
+        ("tensorized_cohort_dir", "TENSORIZED_COHORT_DIR"),
         ("task_labels_dir", "TRAINING_TASKS_DIR"),
     ):
         value = ds_cfg.get(node)
@@ -243,14 +243,15 @@ def validate_training_config(cfg: DictConfig) -> None:
                 f"datamodule.config.{node} ({value!r}, from ${env_var}) is not an existing directory."
             )
 
-    # An unset $OUTPUT_DIR resolves the shipped ``${oc.env:OUTPUT_DIR,null}/${run_id:}/``
+    # An unset $TRAINING_OUTPUT_DIR resolves the shipped ``${oc.env:TRAINING_OUTPUT_DIR,null}/${run_id:}/``
     # interpolation to the *truthy* string ``'None/<run_id>/'`` (the null default is
     # stringified into the surrounding path), so a bare falsy check is not enough — reject a
     # leading ``None/`` / ``null/`` segment too, lest the run write to a literal ``None/...`` dir.
     output_dir = cfg.get("output_dir")
     if not output_dir or str(output_dir).startswith(("None/", "null/")):
         raise ValueError(
-            "output_dir is unset (is $OUTPUT_DIR exported?). Pass output_dir=/path or export $OUTPUT_DIR."
+            "output_dir is unset (is $TRAINING_OUTPUT_DIR exported?). "
+            "Pass output_dir=/path or export $TRAINING_OUTPUT_DIR."
         )
 
     if _is_wandb_logger(cfg.trainer.get("logger")) and not cfg.trainer.logger.get("entity"):

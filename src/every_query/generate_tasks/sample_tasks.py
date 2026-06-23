@@ -487,7 +487,7 @@ def read_query_codes(
     Accepts:
     - an explicit list (from Hydra ``query_codes: [A, B, C]`` or a code-group YAML default),
     - a metadata root directory (``codes.parquet`` is expected at ``{dir}/metadata/codes.parquet``;
-      e.g. ``query_codes=$PROCESSED`` to load the full vocabulary), or
+      e.g. ``query_codes=$TENSORIZED_COHORT_DIR`` to load the full vocabulary), or
     - a direct path to a ``codes.parquet``/YAML file.
 
     The ``.unique().sort()`` makes the returned list deterministic across workers reading
@@ -505,8 +505,8 @@ def read_query_codes(
     if not codes_or_path:
         raise ValueError(
             "query_codes is unset; pass an explicit list (query_codes=[A,B]), a codes.parquet/YAML "
-            "path, or a metadata root directory (query_codes=$PROCESSED) to load the full vocabulary "
-            "from {dir}/metadata/codes.parquet."
+            "path, or a metadata root dir (query_codes=$TENSORIZED_COHORT_DIR) to load the full "
+            "vocabulary from {dir}/metadata/codes.parquet."
         )
     p = Path(str(codes_or_path))
     if p.suffix in {".yaml", ".yml"}:
@@ -634,7 +634,7 @@ def resolve_training_task_paths(cfg: DictConfig) -> tuple[Path, Path, Path]:
     """Resolve the redesigned sampler's three path roots from required Hydra keys.
 
     The two input roots are machine-specific Hydra args (supplied on the CLI, typically as
-    shell-expanded ``data_dir=$INTERMEDIATE out_dir=$TRAINING_TASKS_DIR``).  Both are mandatory; an
+    shell-expanded ``data_dir=$TOKENIZED_EVENTS_DIR out_dir=$TRAINING_TASKS_DIR``).  Both are mandatory; an
     unset or empty value (including ``data_dir=$VAR`` with an unexported ``$VAR``) raises a clear
     ``ValueError`` via :func:`_require_path_arg` — there is no env-var fallback (see issue #235).
 

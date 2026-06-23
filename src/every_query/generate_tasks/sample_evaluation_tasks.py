@@ -427,7 +427,7 @@ def main(cfg: DictConfig) -> None:
     data_dir = _require_path_arg(cfg.get("data_dir"), "data_dir")
     out_dir = _require_path_arg(cfg.get("out_dir"), "out_dir")
 
-    # Either an explicit list or a directory/path (query_codes=$PROCESSED loads the full universe).
+    # Either an explicit list or a dir/path (query_codes=$TENSORIZED_COHORT_DIR loads the full universe).
     codes = read_query_codes(cfg.get("query_codes"))
 
     # Durations must be whole-day ints — silent truncation (e.g. ``0.5 → 0``) would

@@ -86,7 +86,7 @@ These hold throughout the design; later sections reference them rather than rest
 | `seed`                             | top-level seed; all draws derive from it                                                                                                                                                               |
 
 Path roots are **required Hydra args** (machine-specific, no `.env`/env-var fallback — see #235);
-pass them as shell-expanded vars (`data_dir=$INTERMEDIATE out_dir=$TRAINING_TASKS_DIR`). See
+pass them as shell-expanded vars (`data_dir=$TOKENIZED_EVENTS_DIR out_dir=$TRAINING_TASKS_DIR`). See
 `resolve_training_task_paths`:
 
 | key / derived                    | meaning                                                                                 |
@@ -100,7 +100,7 @@ code draw and the duration draw, so Stage 1 is just `query_dist.sample(num_queri
 
 - `query_codes`: already-resolved `list[str]` code universe (one code per query). **Resolution stays
     outside the dataclass** — the caller runs `read_query_codes()` (a metadata root dir →
-    `{dir}/metadata/codes.parquet`, e.g. `query_codes=$PROCESSED`; an explicit Hydra list; or a
+    `{dir}/metadata/codes.parquet`, e.g. `query_codes=$TENSORIZED_COHORT_DIR`; an explicit Hydra list; or a
     YAML/parquet path; see `read_query_codes` in `sample_tasks.py`) and passes the result in, e.g.
     `QueryDistribution.from_config(cfg, query_codes=read_query_codes(...))`. The dataclass does no file I/O.
 - `min_duration`, `max_duration`: duration bounds in days.

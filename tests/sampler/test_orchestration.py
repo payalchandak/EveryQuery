@@ -63,7 +63,7 @@ def _union_final_output(tasks_dir: Path, split: str = "train") -> pl.DataFrame:
 def _two_shard_cohort(tmp_path: Path, query_codes: list[str], *, split: str = "train") -> Path:
     """Write a two-shard MEDS cohort (subjects do NOT span shards — invariant 4) and return its root.
 
-    Mirrors ``_write_fake_cohort``'s ``$INTERMEDIATE`` layout but splits subjects across two shard
+    Mirrors ``_write_fake_cohort``'s ``$TOKENIZED_EVENTS_DIR`` layout but splits subjects across two shard
     parquets so Stage 4's ProcessPoolExecutor actually fans out (a single shard collapses N workers
     to 1).  Shard "0" holds subjects 1 & 2, shard "1" holds subject 3; each subject gets enough
     distinct prediction times to clear ``min_prediction_times_per_subject`` and cycles through
