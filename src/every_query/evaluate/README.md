@@ -7,7 +7,7 @@ written by `EQ_predict`, produces a per-`(query, duration_days)` metrics parquet
 to point at the consolidated `evaluate.py` (single-stage, no model instantiation). The
 legacy four-stage evaluator (`eval.py`, `gen_index_times.py`, `gen_task.py`,
 `select_model.py`) has been deleted; recover from git history if needed. Cross-model
-comparison (what the old `EQ_select_model` did) moves to `experiments/leaderboard/`
+comparison (what the old `EQ_select_model` did) lives in the `EveryQueryExperiments` repo
 — tracked on [#83](https://github.com/payalchandak/EveryQuery/issues/83).
 
 ## Consolidated pipeline (`evaluate/evaluate.py`)
@@ -34,4 +34,4 @@ One Hydra main. No model instantiation, no trainer loop, no multi-model orchestr
 - Phase 2.2 — `EQ_predict` (the producer for the new pipeline): [#81](https://github.com/payalchandak/EveryQuery/issues/81) (closed, merged in [#99](https://github.com/payalchandak/EveryQuery/pull/99))
 - Phase 2.4 — consolidated `evaluate.py` landed: [#100](https://github.com/payalchandak/EveryQuery/pull/100)
 - Phase 2.5 — `EQ_evaluate` rewired to new main: [#131](https://github.com/payalchandak/EveryQuery/pull/131)
-- Leaderboard relocation (tracks `experiments/leaderboard/`): [#83](https://github.com/payalchandak/EveryQuery/issues/83)
+- Cross-model leaderboard (lives in `EveryQueryExperiments`): [#83](https://github.com/payalchandak/EveryQuery/issues/83)

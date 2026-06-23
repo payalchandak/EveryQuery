@@ -1,11 +1,6 @@
 default_language_version:
   python: python3.12
 
-# experiments/ is staged research-only code (see #186): best-effort, destined for the
-# EveryQueryExperiments repo, and not held to the core lint gate. This mirrors the
-# `--ignore=experiments` pytest setting in pyproject.toml.
-exclude: "^experiments/"
-
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

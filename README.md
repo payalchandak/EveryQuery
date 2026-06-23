@@ -51,9 +51,9 @@ Every submodule has its own `README.md` explaining what belongs there, its pipel
 position, and the tracking issues for remaining work.
 
 Research-only, paper-specific code (ID/OOD code sampling, ablations, the results notebook,
-figure code) lives in the top-level [`experiments/`](experiments/) directory, **outside** the
-shipped `every_query` package. It is a staging area for the planned `EveryQueryExperiments`
-repo split tracked in [#186](https://github.com/payalchandak/EveryQuery/issues/186).
+figure code, the ETHOS comparison) lives in the separate `EveryQueryExperiments` repo, which
+depends on `EveryQuery` as an installed library. The split is tracked in
+[#186](https://github.com/payalchandak/EveryQuery/issues/186).
 
 ## Console scripts
 
@@ -72,7 +72,7 @@ and end-to-end subprocess tests that run the real script against a fixture cohor
 | `EQ_predict`                   | inference        | Consume a `TaskQuerySchema` parquet dir + checkpoint, emit a `PredictionSchema` parquet (`censor_prob`, `occurs_prob`)  | smoke; E2E `test_predict_cli.py` (row-order preserved); exercised by `tests/training_validity/` (slow)                   |
 | `EQ_evaluate`                  | metrics          | Consume a `PredictionSchema` parquet, write per-`(query, duration_days)` metrics (`occurs_auroc`, `censor_auroc`, etc.) | smoke; E2E `test_evaluate_cli.py`; exercised by `tests/training_validity/` (slow)                                        |
 
-The legacy four-stage evaluator (`every_query.evaluate.eval`, with `gen_index_times`, `gen_task`, `select_model` siblings) has been deleted; recover from git history if needed. [#83](https://github.com/payalchandak/EveryQuery/issues/83) tracks any `experiments/leaderboard/` relocation for cross-model comparison.
+The legacy four-stage evaluator (`every_query.evaluate.eval`, with `gen_index_times`, `gen_task`, `select_model` siblings) has been deleted; recover from git history if needed. [#83](https://github.com/payalchandak/EveryQuery/issues/83) tracks the cross-model leaderboard, which now lives in the `EveryQueryExperiments` repo.
 
 ## Pipeline
 
@@ -351,7 +351,6 @@ shared cross-stage task-query schema.
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | [#62](https://github.com/payalchandak/EveryQuery/issues/62)   | Promote `aces_to_eq` / `process_composite` to entry points — draft PR [#95](https://github.com/payalchandak/EveryQuery/pull/95) |
 | [#64](https://github.com/payalchandak/EveryQuery/issues/64)   | Drop gitignored `{train,eval}_codes` defaults (design pick pending)                                                             |
-| [#85](https://github.com/payalchandak/EveryQuery/issues/85)   | Rewrite `sample_codes/` dataset-agnostic — draft PR [#97](https://github.com/payalchandak/EveryQuery/pull/97)                   |
 | [#117](https://github.com/payalchandak/EveryQuery/issues/117) | Env-var audit — phase 1 merged via [#127](https://github.com/payalchandak/EveryQuery/pull/127); phases 2-4 pending              |
 | [#125](https://github.com/payalchandak/EveryQuery/issues/125) | Adopt hypothesis-based property tests for the sampler                                                                           |
 | [#129](https://github.com/payalchandak/EveryQuery/issues/129) | Rename `PredictionSchema.occurs_prob` → `label_prob` post-NeurIPS once non-occurrence task types land                           |

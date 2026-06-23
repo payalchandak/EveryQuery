@@ -182,7 +182,6 @@ cython_debug/
 #.idea/
 
 src/every_query/evaluate/outputs/
-experiments/sample_codes/outputs/
 
 # AI
 .cursor/
@@ -191,7 +190,5 @@ CLAUDE.md
 
 # GCP analysis
 /data/
-experiments/analysis/tables/
-experiments/analysis/figures/
 .DS_Store
 .codex

@@ -95,7 +95,6 @@ addopts = [
   "--color=yes",
   "--doctest-modules", # Ensures that doctest runs
   "--ignore=docs",
-  "--ignore=experiments", # Staged research-only code (see #186); not part of the core package.
   "--ignore=AGENTS.md",
   "--ignore=CONTRIBUTORS.md",
   "--doctest-glob=*.md",
