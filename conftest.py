@@ -225,6 +225,7 @@ def eq_sampled_tasks_dir(eq_preprocessed_dataset: Path, tmp_path_factory: pytest
                 "EQ_generate_training_tasks",
                 f"data_dir={intermediate!s}",
                 f"out_dir={out_dir!s}",
+                f"codes_dir={eq_preprocessed_dataset!s}",
                 f"split={split}",
                 "num_queries=8",
                 "num_contexts_per_query=2",
@@ -233,7 +234,6 @@ def eq_sampled_tasks_dir(eq_preprocessed_dataset: Path, tmp_path_factory: pytest
                 "min_prediction_times_per_subject=1",
                 "seed=1",
             ],
-            env={"PROCESSED": str(eq_preprocessed_dataset)},
             timeout=120.0,
         )
 

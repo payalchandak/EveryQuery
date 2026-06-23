@@ -38,7 +38,6 @@ dependencies = [
   "torch>=2.6,<3",
   "torchmetrics>=1.4,<2",
   "lightning>=2.3,<3",
-  "dotenv>=0.9.9,<1",
   "wandb>=0.22.3,<1",
   "ipykernel>=7.2,<8",
   "scikit-learn>=1.6,<2",

@@ -85,22 +85,23 @@ These hold throughout the design; later sections reference them rather than rest
 | `split`                            | split to process                                                                                                                                                                                       |
 | `seed`                             | top-level seed; all draws derive from it                                                                                                                                                               |
 
-Path roots are **not** Hydra keys — they are machine-specific and resolved from env vars only (via
-`load_dotenv()` in `main()`); see `resolve_training_task_paths`:
+Path roots are **required Hydra args** (machine-specific, no `.env`/env-var fallback — see #235);
+pass them as shell-expanded vars (`data_dir=$INTERMEDIATE out_dir=$TRAINING_TASKS_DIR`). See
+`resolve_training_task_paths`:
 
-| env var / derived                            | meaning                                                                                     |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `$INTERMEDIATE` → `path_to_data`             | MEDS dataset root, with `path_to_data/data/{train,tuning,test}/{i}.parquet`. Required.      |
-| `$TRAINING_TASKS_DIR` → `training_tasks_dir` | final-output-only root (see *Artifact layout*). Required.                                   |
-| `training_task_artifacts_dir`                | intermediate-artifact root (see *Artifact layout*). No env var: always the sibling default. |
+| key / derived                    | meaning                                                                                 |
+| -------------------------------- | --------------------------------------------------------------------------------------- |
+| `data_dir` → `path_to_data`      | MEDS dataset root, with `path_to_data/data/{train,tuning,test}/{i}.parquet`. Required.  |
+| `out_dir` → `training_tasks_dir` | final-output-only root (see *Artifact layout*). Required.                               |
+| `training_task_artifacts_dir`    | intermediate-artifact root (see *Artifact layout*). No key: always the sibling default. |
 
 **`QueryDistribution(query_codes, min_duration, max_duration, uniform|log-uniform)`** — owns both the
 code draw and the duration draw, so Stage 1 is just `query_dist.sample(num_queries, rng) -> list[QuerySpec]`.
 
 - `query_codes`: already-resolved `list[str]` code universe (one code per query). **Resolution stays
     outside the dataclass** — the caller runs `read_query_codes()` (default
-    `$PROCESSED/metadata/codes.parquet`, an explicit Hydra list, or a YAML/parquet path; see
-    `read_query_codes` in `sample_tasks.py`) and passes the result in, e.g.
+    `{codes_dir}/metadata/codes.parquet` with `codes_dir=$PROCESSED`, an explicit Hydra list, or a
+    YAML/parquet path; see `read_query_codes` in `sample_tasks.py`) and passes the result in, e.g.
     `QueryDistribution.from_config(cfg, query_codes=read_query_codes(...))`. The dataclass does no file I/O.
 - `min_duration`, `max_duration`: duration bounds in days.
 - `uniform|log-uniform`: duration sampling distribution.
@@ -359,18 +360,24 @@ def label_one_shard(shard, index_dir, data_dir, out_dir, overwrite=False):
     if not overwrite and final.exists():
         return shard, "skipped"  # atomic writes ⇒ a present file is a complete file
 
-    idx = pl.read_parquet(f"{index_dir}/{shard}.parquet")  # already carries prediction_time
+    idx = pl.read_parquet(
+        f"{index_dir}/{shard}.parquet"
+    )  # already carries prediction_time
     events = pl.read_parquet(f"{data_dir}/{shard}.parquet")
     out = do_labeling(idx, events)  # no index resolution; just label
 
-    tmp = final.with_name(f".{shard}.parquet.tmp.{os.getpid()}")  # same dir ⇒ same filesystem
+    tmp = final.with_name(
+        f".{shard}.parquet.tmp.{os.getpid()}"
+    )  # same dir ⇒ same filesystem
     out.write_parquet(tmp)
     os.replace(tmp, final)  # atomic rename into place
     return shard, "labeled"  # tiny ack; big data never crosses the process boundary
 
 
 with ProcessPoolExecutor(max_workers=resolve_workers()) as ex:
-    futs = {ex.submit(label_one_shard, s, idx_dir, data_dir, out_dir): s for s in shards}
+    futs = {
+        ex.submit(label_one_shard, s, idx_dir, data_dir, out_dir): s for s in shards
+    }
     for fut in as_completed(futs):
         fut.result()  # re-raise so a failed shard aborts the run loudly
 ```

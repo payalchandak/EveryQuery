@@ -122,10 +122,11 @@ EQ_generate_training_tasks \
 	num_contexts_per_query=1 \
 	max_workers=1 \
 	data_dir="$INTERMEDIATE" \
-	out_dir="$TRAINING_TASKS_DIR"
+	out_dir="$TRAINING_TASKS_DIR" \
+	codes_dir="$PROCESSED"
 ```
 
-`data_dir` is the MEDS dataset root (event shards read from `{data_dir}/data/{split}/*.parquet`) and `out_dir` is the final-dataset root. Both are optional CLI overrides — omit them to fall back to `$INTERMEDIATE` and `$TRAINING_TASKS_DIR` from your `.env`.
+`data_dir` is the MEDS dataset root (event shards read from `{data_dir}/data/{split}/*.parquet`) and `out_dir` is the final-dataset root. Both are required Hydra args (no `.env` fallback — see [#235](https://github.com/payalchandak/EveryQuery/issues/235)); pass them as shell-expanded vars after `source env.sh`.
 
 One command runs the whole 5-stage sampler in a single process (Stages 0–3 inline, then Stage 4 labels shards in parallel). The dataset lands at `$TRAINING_TASKS_DIR/{split}/{shard}.parquet`, with intermediates in the sibling `*_artifacts` dir (see [`generate_tasks/README.md`](src/every_query/generate_tasks/README.md)). Columns conform to [`TaskQuerySchema`](src/every_query/data/schema.py) — `subject_id, prediction_time, query, duration_days, boolean_value` — where `boolean_value` is three-valued: `True` (query code occurs in `(prediction_time, prediction_time + duration_days]`), `False` (window fully observed, no occurrence), or `null` (censored — window extends past the subject's last recorded time).
 
@@ -134,9 +135,9 @@ One command runs the whole 5-stage sampler in a single process (Stages 0–3 inl
 > **Note:** The total number of training samples generated will be `num_queries * num_contexts_per_query`
 
 `query_codes=` is optional for training. Leave it unset/null to sample query codes from
-`$PROCESSED/metadata/codes.parquet`, or set it to an inline list / YAML path to restrict which
-codes can be sampled as queries. YAML files may be a flat list or a mapping with a `codes:`
-key. This does not remove codes from patient histories.
+`{codes_dir}/metadata/codes.parquet` (so `codes_dir=$PROCESSED` must be set), or set it to an
+inline list / YAML path to restrict which codes can be sampled as queries. YAML files may be a
+flat list or a mapping with a `codes:` key. This does not remove codes from patient histories.
 
 ```bash
 EQ_generate_training_tasks query_codes=/path/to/train_query_codes.yaml …
@@ -191,7 +192,7 @@ EQ_generate_evaluation_tasks -m \
 
 A comma list (`input_shard=0,1,2`) works too; `range(0,16)` is just shorthand for `0..15`. The prediction-time sampler is deterministic in `(seed, input_shard, split)`, so a swept run and the equivalent per-shard runs produce identical output.
 
-As with training, `data_dir` / `codes_dir` / `out_dir` are optional CLI overrides — omit them to fall back to `$INTERMEDIATE`, `$PROCESSED`, and `$TASK_DIR` from your `.env`. `codes_dir` (the `{codes_dir}/metadata/codes.parquet` query universe) is ignored when `codes=` is passed explicitly.
+As with training, `data_dir` / `out_dir` are required Hydra args (pass them as shell-expanded vars). `codes_dir` (the `{codes_dir}/metadata/codes.parquet` query universe) is only needed when `codes=` is not passed explicitly.
 
 `codes=` accepts an inline list (as above), a metadata root / `codes.parquet` path, or — for reproducible pre-sampled code universes kept out of git — a path to a YAML file. The YAML is either a bare list or a mapping with a `codes:` key:
 
@@ -211,11 +212,11 @@ EQ_generate_evaluation_tasks codes=/path/to/sampled_codes.yaml …
 
 ```bash
 EQ_train \
-	output_dir="$OUTPUT_DIR/outputs/\${run_id:}" \
-	datamodule.config.tensorized_cohort_dir="$FINAL_DATA_DIR"
+	datamodule.config.tensorized_cohort_dir="$FINAL_DATA_DIR" \
+	datamodule.config.task_labels_dir="$TRAINING_TASKS_DIR"
 ```
 
-`datamodule.config.task_labels_dir` defaults to `${oc.env:TRAINING_TASKS_DIR}` (where `EQ_generate_training_tasks` writes), so with `.env` set you don't need to pass it — override it only to read labels from a different location. `EQ_train` reads the long-format labels written by `EQ_generate_training_tasks` directly — the inline collation step that lived in `train.py` was removed in [#76](https://github.com/payalchandak/EveryQuery/pull/76).
+`tensorized_cohort_dir` and `task_labels_dir` are required Hydra args (no `.env` fallback — see [#235](https://github.com/payalchandak/EveryQuery/issues/235)); `task_labels_dir` is where `EQ_generate_training_tasks` writes. `output_dir` defaults to `${oc.env:OUTPUT_DIR}/${run_id:}/`, so export `OUTPUT_DIR` (via `env.sh`) or override `output_dir=` directly. `EQ_train` reads the long-format labels written by `EQ_generate_training_tasks` directly — the inline collation step that lived in `train.py` was removed in [#76](https://github.com/payalchandak/EveryQuery/pull/76).
 
 Seeding: `cfg.seed` (default `140799`) is passed through `lightning.seed_everything` *before* model + datamodule instantiation (fix landed in [#124](https://github.com/payalchandak/EveryQuery/pull/124)), so model weight initialization is byte-reproducible across Python versions and platforms for a given seed.
 
@@ -248,25 +249,31 @@ line with `key=value` or `+new_key=value`. The config directory is resolved via
 `importlib.resources.files("every_query")`, so package-shipped YAMLs work identically
 whether you run from a source checkout or a `pip install`ed wheel.
 
-### Environment variables
+### Paths & environment
 
-These back the `${oc.env:VAR,null}` interpolations in the shipped configs. None are hard-required:
-a CLI override of the corresponding node (e.g. `datamodule.config.task_labels_dir=/path`) makes the
-backing interpolation never evaluate, so you can run fully CLI-driven with no env vars at all. `EQ_train`
-validates only the values it actually resolves — `validate_training_config()` in `train.py` checks that the
-resolved cohort/task dirs exist and that `WANDB_ENTITY` is set *only* when a wandb logger is enabled. The
-old blind presence gate in `ensure_env()` was removed in [#184](https://github.com/payalchandak/EveryQuery/issues/184);
-`ensure_env()` now just loads `.env`.
+Path roots are **plain Hydra args**, not env vars read by the package (the `.env`/`load_dotenv`
+layer was removed in [#235](https://github.com/payalchandak/EveryQuery/issues/235)). The shell owns
+the vars: `source env.sh` (copied from `env.example.sh`) exports them, and you pass them into each
+CLI as shell-expanded `key=$VAR` overrides — `source`-ing one file is all that's needed to move
+machines (SLURM scripts `source` the same file). `EQ_train` validates only the values it actually
+resolves — `validate_training_config()` in `train.py` checks the resolved cohort/task dirs exist and
+that `WANDB_ENTITY` is set *only* when a wandb logger is enabled.
 
-| Var                  | Purpose                                                                                                            |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `OUTPUT_DIR`         | Where training run dirs land (`output_dir`)                                                                        |
-| `TRAINING_TASKS_DIR` | Final training-task dataset (output of `EQ_generate_training_tasks`); the default `task_labels_dir` for `EQ_train` |
-| `TASK_DIR`           | Evaluation-task parquets (`EQ_generate_evaluation_tasks` writes `$TASK_DIR/eval/...`)                              |
-| `FINAL_DATA_DIR`     | Tensorized cohort (output of `EQ_process_data`); the default `tensorized_cohort_dir` for `EQ_train`                |
-| `WANDB_ENTITY`       | W&B entity for training telemetry (only needed when the wandb logger is enabled)                                   |
+The two genuine env reads that remain: `OUTPUT_DIR` (backs `${oc.env:OUTPUT_DIR}` in the train
+config's `output_dir`) and `WANDB_ENTITY` (read natively by `wandb`, backs
+`${oc.env:WANDB_ENTITY,null}`).
 
-`.env.example` is the reference — copy to `.env` and edit. Python loads it via `python-dotenv`.
+| Var                  | Used as                                                                            |
+| -------------------- | ---------------------------------------------------------------------------------- |
+| `INTERMEDIATE`       | `data_dir=` for the samplers (MEDS event shards)                                   |
+| `PROCESSED`          | `codes_dir=` for the samplers (query-universe metadata)                            |
+| `FINAL_DATA_DIR`     | `datamodule.config.tensorized_cohort_dir=` for `EQ_train`                          |
+| `TRAINING_TASKS_DIR` | `out_dir=` for training tasks; `datamodule.config.task_labels_dir=` for `EQ_train` |
+| `TASK_DIR`           | `out_dir=` for evaluation tasks (`$TASK_DIR/eval/...`)                             |
+| `OUTPUT_DIR`         | `${oc.env:OUTPUT_DIR}` in the train config's `output_dir`                          |
+| `WANDB_ENTITY`       | W&B entity (read natively by `wandb`; only when the logger is enabled)             |
+
+`env.example.sh` is the reference — copy to `env.sh`, edit, and `source` it.
 
 ## Development
 

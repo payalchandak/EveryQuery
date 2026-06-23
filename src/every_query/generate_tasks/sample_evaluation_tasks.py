@@ -37,7 +37,6 @@ from every_query.data.schema import TaskQuerySchema, empty_task_query_df
 from every_query.generate_tasks.sample_tasks import (
     _atomic_write_parquet,
     _read_event_shard,
-    _resolve_path,
     evaluate_index_df,
     read_query_codes,
 )
@@ -425,19 +424,11 @@ def main(cfg: DictConfig) -> None:
     Sweep across shards with
     ``python -m every_query.generate_tasks.sample_evaluation_tasks -m input_shard=0,1,2,...``.
     """
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
-    data_dir = _resolve_path(cfg.get("data_dir"), "INTERMEDIATE", "data_dir")
-    out_dir = _resolve_path(cfg.get("out_dir"), "TASK_DIR", "out_dir")
+    data_dir = Path(str(cfg.data_dir))
+    out_dir = Path(str(cfg.out_dir))
 
     codes_cfg = cfg.get("codes")
-    if codes_cfg is None:
-        codes_dir = _resolve_path(cfg.get("codes_dir"), "PROCESSED", "codes_dir")
-        codes = read_query_codes(codes_dir)
-    else:
-        codes = read_query_codes(codes_cfg)
+    codes = read_query_codes(None, cfg.get("codes_dir")) if codes_cfg is None else read_query_codes(codes_cfg)
 
     # Durations must be whole-day ints — silent truncation (e.g. ``0.5 → 0``) would
     # change the window semantics.  ``TaskQuerySchema.duration_days`` is float32 on

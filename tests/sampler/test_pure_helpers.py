@@ -1,8 +1,7 @@
 """Pure leaf helpers shared across the pipeline (not tied to a single stage).
 
 - ``TestPrimitives`` — ``derive_seed`` axis separation, ``read_query_codes`` resolution branches.
-- ``TestResolvePath`` / ``TestResolveTrainingTaskPaths`` — the ``override > env > raise`` path
-  contract (the wrapper is trimmed to the cases that add information beyond the primitive).
+- ``TestResolveTrainingTaskPaths`` — the three path roots resolve from required Hydra keys (#235).
 - ``TestArtifactLayout`` — the two-root *safety* invariants (the trivial path-string equalities
   are covered by the source doctests and intentionally not duplicated here).
 - ``TestAtomicWrite`` — round-trip + the failure path leaves no orphan temp.
@@ -18,6 +17,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 from omegaconf import OmegaConf
+from omegaconf.errors import MissingMandatoryValue
 
 from every_query.generate_tasks import sample_tasks as st
 from every_query.generate_tasks.sample_tasks import (
@@ -43,21 +43,17 @@ class TestPrimitives:
         assert derive_seed(1, "contexts", "a", 0) != derive_seed(1, "contexts", "a", 1)
         assert derive_seed(1, "tasks", 0) != derive_seed(2, "tasks", 0)
 
-    def test_read_query_codes_uses_processed_fallback(self, monkeypatch, tmp_path, synthetic_query_codes):
-        processed = tmp_path / "processed"
-        metadata_dir = processed / "metadata"
+    def test_read_query_codes_reads_codes_dir(self, tmp_path, synthetic_query_codes):
+        codes_dir = tmp_path / "processed"
+        metadata_dir = codes_dir / "metadata"
         metadata_dir.mkdir(parents=True)
         pl.DataFrame({"code": synthetic_query_codes}).write_parquet(metadata_dir / "codes.parquet")
 
-        monkeypatch.setenv("PROCESSED", str(processed))
+        assert st.read_query_codes(None, codes_dir) == sorted(synthetic_query_codes)
 
-        assert st.read_query_codes(None) == sorted(synthetic_query_codes)
-
-    def test_read_query_codes_requires_processed_when_null(self, monkeypatch):
-        monkeypatch.delenv("PROCESSED", raising=False)
-
+    def test_read_query_codes_requires_codes_dir_when_null(self):
         with pytest.raises(ValueError, match="query_codes is null"):
-            st.read_query_codes(None)
+            st.read_query_codes(None, None)
 
     def test_read_query_codes_reads_codes_key_yaml(self, tmp_path):
         codes_yaml = tmp_path / "allowed_codes.yaml"
@@ -89,93 +85,32 @@ class TestPrimitives:
         assert st.read_query_codes(["A", "B", "A"]) == ["A", "B"]
 
 
-class TestResolvePath:
-    """``_resolve_path`` is how ``main()`` threads explicit path roots / env fallbacks / required.
-
-    Directly exercising the helper lets us pin the fallback matrix without spinning up a full Hydra run per
-    case.
-    """
-
-    def test_explicit_cfg_value_wins(self, monkeypatch):
-        monkeypatch.setenv("MY_VAR", "/from/env")
-        result = st._resolve_path("/from/cfg", "MY_VAR", "data_dir")
-        assert result == Path("/from/cfg")
-
-    def test_env_fallback_when_cfg_is_none(self, monkeypatch):
-        monkeypatch.setenv("MY_VAR", "/from/env")
-        result = st._resolve_path(None, "MY_VAR", "data_dir")
-        assert result == Path("/from/env")
-
-    def test_raises_when_both_unset(self, monkeypatch):
-        monkeypatch.delenv("MY_VAR", raising=False)
-        with pytest.raises(ValueError, match="data_dir must be set"):
-            st._resolve_path(None, "MY_VAR", "data_dir")
-
-    def test_error_message_mentions_env_var_and_dotenv(self, monkeypatch):
-        monkeypatch.delenv("INTERMEDIATE", raising=False)
-        with pytest.raises(ValueError) as excinfo:
-            st._resolve_path(None, "INTERMEDIATE", "data_dir")
-        msg = str(excinfo.value)
-        assert "INTERMEDIATE" in msg
-        assert ".env" in msg  # dotenv hint
-
-    def test_empty_env_var_is_treated_as_unset(self, monkeypatch):
-        """An explicitly-empty env var should not be taken as a valid path."""
-        monkeypatch.setenv("MY_VAR", "")
-        with pytest.raises(ValueError, match="must be set"):
-            st._resolve_path(None, "MY_VAR", "data_dir")
-
-
 class TestResolveTrainingTaskPaths:
-    """The redesigned sampler's three path roots (``override > env > raise``).
+    """The redesigned sampler's three path roots, resolved from required Hydra keys (#235).
 
-    Trimmed to the cases the wrapper adds *on top of* ``_resolve_path``: the sibling artifacts-root
-    derivation, that the artifacts root has no env var of its own, the override-beats-env precedence,
-    and that each missing required root raises.  The bare env-fallback / null-override cases are
-    already proven by ``TestResolvePath`` and are not re-tested through the wrapper.
+    Covers the sibling artifacts-root derivation, that the artifacts root has no key of its own, that
+    the keys resolve straight from cfg (no env fallback), and that a missing (``???``) required root
+    raises OmegaConf's ``MissingMandatoryValue``.
     """
-
-    @pytest.fixture(autouse=True)
-    def _clear_env(self, monkeypatch):
-        # Isolate from the developer's own .env / shell so assertions are deterministic.
-        monkeypatch.delenv("INTERMEDIATE", raising=False)
-        monkeypatch.delenv("TRAINING_TASKS_DIR", raising=False)
 
     def test_default_artifacts_dir_is_a_sibling(self):
         assert default_artifacts_dir(Path("/x/y/tasks")) == Path("/x/y/tasks_artifacts")
         # Sibling, never nested under the final-output root (invariant 7).
         assert default_artifacts_dir(Path("/x/y/tasks")).parent == Path("/x/y/tasks").parent
 
-    def test_artifacts_dir_has_no_env_var(self, monkeypatch):
-        # Even if someone exports it, the resolver ignores it and uses the sibling default.
-        monkeypatch.setenv("INTERMEDIATE", "/env/data")
-        monkeypatch.setenv("TRAINING_TASKS_DIR", "/env/tasks")
-        monkeypatch.setenv("TRAINING_TASK_ARTIFACTS_DIR", "/env/should_be_ignored")
-        _, _, arts = resolve_training_task_paths()
-        assert arts == Path("/env/tasks_artifacts")
-
-    def test_missing_path_to_data_raises(self, monkeypatch):
-        monkeypatch.delenv("INTERMEDIATE", raising=False)
-        monkeypatch.setenv("TRAINING_TASKS_DIR", "/env/tasks")
-        with pytest.raises(ValueError, match="data_dir"):
-            resolve_training_task_paths()
-
-    def test_missing_training_tasks_dir_raises(self, monkeypatch):
-        monkeypatch.setenv("INTERMEDIATE", "/env/data")
-        monkeypatch.delenv("TRAINING_TASKS_DIR", raising=False)
-        with pytest.raises(ValueError, match="out_dir"):
-            resolve_training_task_paths()
-
-    def test_cfg_overrides_take_precedence_over_env(self, monkeypatch):
-        # override > env: cfg.data_dir / cfg.out_dir win even when the env vars are set, and the
-        # artifacts root derives from the *override* out_dir.
-        monkeypatch.setenv("INTERMEDIATE", "/env/data")
-        monkeypatch.setenv("TRAINING_TASKS_DIR", "/env/tasks")
+    def test_resolves_from_cfg_keys(self):
         cfg = OmegaConf.create({"data_dir": "/cli/data", "out_dir": "/cli/tasks"})
         data, tasks, arts = resolve_training_task_paths(cfg)
         assert data == Path("/cli/data")
         assert tasks == Path("/cli/tasks")
+        # artifacts root derives from out_dir and has no key/env var of its own.
         assert arts == Path("/cli/tasks_artifacts")
+
+    def test_missing_required_root_raises(self):
+        # `???` is OmegaConf MISSING; accessing it must raise rather than fall back to any env var.
+        cfg = OmegaConf.create({"data_dir": "???", "out_dir": "/cli/tasks"})
+        with pytest.raises(MissingMandatoryValue):
+            resolve_training_task_paths(cfg)
 
 
 class TestArtifactLayout:
@@ -307,8 +242,8 @@ class TestRedesignConfigFile:
     """``sample_training_tasks_config.yaml`` exposes the spec's keys with the right *shape*.
 
     We assert key presence and type, not pinned literal default values (a brittle change-detector): the two
-    input roots are optional null overrides, the derived roots are never config keys, and the sampling knobs
-    exist with their expected types.
+    input roots are mandatory (``???``) Hydra args, the derived roots are never config keys, and the sampling
+    knobs exist with their expected types.
     """
 
     @staticmethod
@@ -318,9 +253,9 @@ class TestRedesignConfigFile:
 
     def test_required_keys_present_and_typed(self):
         cfg = self._load()
-        # The two input roots are optional CLI overrides defaulting to null (override > env > raise).
-        assert "data_dir" in cfg and cfg.data_dir is None
-        assert "out_dir" in cfg and cfg.out_dir is None
+        # The two input roots are mandatory (`???`) Hydra args — no env fallback (#235).
+        assert OmegaConf.is_missing(cfg, "data_dir")
+        assert OmegaConf.is_missing(cfg, "out_dir")
         # The derived roots are never config keys.
         for derived_key in ("path_to_data", "training_tasks_dir", "training_task_artifacts_dir"):
             assert derived_key not in cfg

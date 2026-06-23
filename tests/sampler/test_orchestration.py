@@ -28,11 +28,11 @@ def _write_fake_cohort(
 ) -> tuple[Path, Path]:
     """Write a minimal MEDS-shaped cohort the redesigned ``run()`` can read from.
 
-    Mirrors the split layout of ``.env.example``: ``$INTERMEDIATE`` and ``$PROCESSED`` are sibling
-    directories rather than the same root, so the cohort this helper writes uses:
+    Mirrors the conventional layout where the data root (``data_dir``) and the metadata root
+    (``codes_dir``) are sibling directories rather than the same root, so the cohort uses:
 
-        {data_dir}/data/{split}/{shard_name}.parquet     <- event shards ($INTERMEDIATE)
-        {processed_dir}/metadata/codes.parquet           <- query universe ($PROCESSED)
+        {data_dir}/data/{split}/{shard_name}.parquet     <- event shards (data_dir)
+        {processed_dir}/metadata/codes.parquet           <- query universe (codes_dir)
 
     Returns ``(data_dir, processed_dir)`` as two distinct paths so tests can exercise the separation.
     """
@@ -113,15 +113,17 @@ class TestMainOrchestration:
                 "split": "train",
                 "seed": 1,
                 "overwrite": overwrite,
+                "data_dir": self._data_dir,
+                "out_dir": self._out_dir,
             }
         )
 
     def _run_env(self, monkeypatch, tmp_path, synthetic_events, synthetic_query_codes):
-        """Write a synthetic cohort and point the env-only path roots at it."""
+        """Write a synthetic cohort and point the cfg path roots (``data_dir`` / ``out_dir``) at it."""
         data_dir, _processed = _write_fake_cohort(tmp_path, synthetic_events, synthetic_query_codes)
         tasks_dir = tmp_path / "training_tasks"
-        monkeypatch.setenv("INTERMEDIATE", str(data_dir))
-        monkeypatch.setenv("TRAINING_TASKS_DIR", str(tasks_dir))
+        self._data_dir = str(data_dir)
+        self._out_dir = str(tasks_dir)
         return tasks_dir
 
     def test_run_writes_final_dataset_with_expected_rows(
@@ -275,7 +277,7 @@ class TestCrossProcessDeterminism:
     in RNG order, shard assignment, or asof labeling.
     """
 
-    def _cfg(self, query_codes, *, max_workers):
+    def _cfg(self, query_codes, *, max_workers, data_dir, out_dir):
         return OmegaConf.create(
             {
                 "num_queries": 8,
@@ -289,23 +291,21 @@ class TestCrossProcessDeterminism:
                 "split": "train",
                 "seed": 1,
                 "overwrite": False,
+                "data_dir": str(data_dir),
+                "out_dir": str(out_dir),
             }
         )
 
     def test_serial_and_parallel_outputs_are_identical(self, monkeypatch, tmp_path, synthetic_query_codes):
         data_dir = _two_shard_cohort(tmp_path, synthetic_query_codes)
-        monkeypatch.setenv("INTERMEDIATE", str(data_dir))
 
-        # Two disjoint output roots: TRAINING_TASKS_DIR drives both the final root and (via
+        # Two disjoint output roots: out_dir drives both the final root and (via
         # default_artifacts_dir's sibling rule) the intermediate root, so the runs never share state.
         serial_dir = tmp_path / "tasks_serial"
         parallel_dir = tmp_path / "tasks_parallel"
 
-        monkeypatch.setenv("TRAINING_TASKS_DIR", str(serial_dir))
-        st.run(self._cfg(synthetic_query_codes, max_workers=1))
-
-        monkeypatch.setenv("TRAINING_TASKS_DIR", str(parallel_dir))
-        st.run(self._cfg(synthetic_query_codes, max_workers=2))
+        st.run(self._cfg(synthetic_query_codes, max_workers=1, data_dir=data_dir, out_dir=serial_dir))
+        st.run(self._cfg(synthetic_query_codes, max_workers=2, data_dir=data_dir, out_dir=parallel_dir))
 
         serial = _union_final_output(serial_dir)
         parallel = _union_final_output(parallel_dir)
@@ -375,8 +375,6 @@ class TestSnapshot:
     def test_output_matches_inline_snapshot(self, monkeypatch, tmp_path, synthetic_query_codes):
         data_dir = _two_shard_cohort(tmp_path, synthetic_query_codes)
         tasks_dir = tmp_path / "training_tasks"
-        monkeypatch.setenv("INTERMEDIATE", str(data_dir))
-        monkeypatch.setenv("TRAINING_TASKS_DIR", str(tasks_dir))
 
         cfg = OmegaConf.create(
             {
@@ -391,6 +389,8 @@ class TestSnapshot:
                 "split": "train",
                 "seed": 1,
                 "overwrite": False,
+                "data_dir": str(data_dir),
+                "out_dir": str(tasks_dir),
             }
         )
         st.run(cfg)

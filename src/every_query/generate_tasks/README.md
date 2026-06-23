@@ -38,9 +38,10 @@ different row distributions:
     `python -m every_query.generate_tasks.sample_evaluation_tasks`.
 
 - **`configs/sample_training_tasks_config.yaml`** / **`configs/sample_evaluation_tasks_config.yaml`**
-    — shipped Hydra configs. Path roots resolve with precedence `CLI override > env var > raise`
-    via the repo's `.env`-based convention (`$INTERMEDIATE`, `$PROCESSED`,
-    `$TRAINING_TASKS_DIR` for training; `$TASK_DIR` for evaluation); everything else is a
+    — shipped Hydra configs. Path roots (`data_dir`, `out_dir`, and `codes_dir` when the query
+    universe is loaded from metadata) are **required Hydra args** — no `.env`/env-var fallback (see
+    [#235](https://github.com/payalchandak/EveryQuery/issues/235)). Pass them as shell-expanded vars
+    (`data_dir=$INTERMEDIATE out_dir=$TRAINING_TASKS_DIR codes_dir=$PROCESSED`); everything else is a
     Hydra override.
 
 ## Pipeline position

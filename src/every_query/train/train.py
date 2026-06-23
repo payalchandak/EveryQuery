@@ -257,16 +257,13 @@ def validate_training_config(cfg: DictConfig) -> None:
     if _is_wandb_logger(cfg.trainer.get("logger")) and not cfg.trainer.logger.get("entity"):
         raise ValueError(
             "trainer.logger.entity is unset for a wandb logger. Pass "
-            "trainer.logger.entity=<entity> or set $WANDB_ENTITY in your .env "
+            "trainer.logger.entity=<entity> or export $WANDB_ENTITY "
             "(or disable the logger with trainer.logger=false)."
         )
 
 
 def _init_env() -> None:
-    """Load ``.env`` and configure thread counts for polars/OMP."""
-    from dotenv import load_dotenv
-
-    load_dotenv()  # so ${oc.env:...} interpolations resolve
+    """Configure thread counts for polars/OMP from the SLURM/system environment."""
     num_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
     threads_per_file = max(1, num_cpus // 10)
     os.environ["POLARS_MAX_THREADS"] = str(threads_per_file)
