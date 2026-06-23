@@ -16,7 +16,7 @@ from meds_torchdata.config import MEDSTorchDataConfig
 
 from every_query.data.dataset import EveryQueryPytorchDataset
 from every_query.data.schema import TaskQuerySchema
-from every_query.generate_tasks.sample_tasks import compute_max_time_per_subject, evaluate_index_df
+from every_query.generate_tasks.sample_tasks import evaluate_index_df
 
 # Subject IDs and prediction times from conftest / simple_static_MEDS.  Duplicated here rather
 # than imported to keep the test module self-contained.
@@ -87,8 +87,7 @@ class TestEndToEndWithDataset:
             }
         )
 
-        max_time_df = compute_max_time_per_subject(events_df)
-        labeled = evaluate_index_df(index_df, events_df, max_time_df)
+        labeled = evaluate_index_df(index_df, events_df)
 
         # Sanity: labeled output conforms to TaskQuerySchema — same check the Stage 4 write path
         # (``label_one_shard``) does, exercised here at the per-function boundary.

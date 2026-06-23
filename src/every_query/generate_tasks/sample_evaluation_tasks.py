@@ -38,7 +38,6 @@ from every_query.generate_tasks.sample_tasks import (
     _atomic_write_parquet,
     _read_event_shard,
     _resolve_path,
-    compute_max_time_per_subject,
     evaluate_index_df,
     read_query_codes,
 )
@@ -374,8 +373,7 @@ def run_worker(
         ]
         labeled = empty_task_query_df().select(out_cols)
     else:
-        max_time_df = compute_max_time_per_subject(events_df)
-        labeled = evaluate_index_df(index_df, events_df, max_time_df)
+        labeled = evaluate_index_df(index_df, events_df)
 
     # Censored rows (null boolean_value) are not actionable downstream — drop them
     # so EQ_predict / EQ_evaluate consume a ready-to-score parquet.
