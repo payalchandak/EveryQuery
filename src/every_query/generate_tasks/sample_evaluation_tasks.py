@@ -411,16 +411,15 @@ CONFIGS = str(files("every_query") / "generate_tasks" / "configs")
 def main(cfg: DictConfig) -> None:
     """Produce one evaluation-tasks parquet per (split, input_shard) pair.
 
-    Path fallback mirrors ``sample_tasks``: ``cfg.data_dir`` -> ``$INTERMEDIATE``,
-    ``cfg.codes_dir`` -> ``$PROCESSED``, ``cfg.out_dir`` -> ``$TASK_DIR`` (new
-    subdir ``eval/`` underneath so training-task parquets and evaluation-task
-    parquets don't collide in one directory).
+    Required path args mirror ``sample_tasks`` (``data_dir``, ``out_dir``); eval
+    outputs land under a new ``eval/`` subdir so training-task parquets and
+    evaluation-task parquets don't collide in one directory.
 
     Usage (single worker):
         EQ_generate_evaluation_tasks \\
             split=held_out input_shard=0 \\
             prediction_times_per_subject=5 \\
-            'codes=[HR, TEMP]' 'durations=[1, 7, 30]'
+            'query_codes=[HR, TEMP]' 'durations=[1, 7, 30]'
 
     Sweep across shards with
     ``python -m every_query.generate_tasks.sample_evaluation_tasks -m input_shard=0,1,2,...``.
@@ -428,9 +427,8 @@ def main(cfg: DictConfig) -> None:
     data_dir = _require_path_arg(cfg.get("data_dir"), "data_dir")
     out_dir = _require_path_arg(cfg.get("out_dir"), "out_dir")
 
-    # read_query_codes ignores codes_dir whenever codes_cfg is a real list/path, so this one call
-    # covers both the explicit-codes and default-universe branches.
-    codes = read_query_codes(cfg.get("codes"), cfg.get("codes_dir"))
+    # Either an explicit list or a directory/path (query_codes=$PROCESSED loads the full universe).
+    codes = read_query_codes(cfg.get("query_codes"))
 
     # Durations must be whole-day ints — silent truncation (e.g. ``0.5 → 0``) would
     # change the window semantics.  ``TaskQuerySchema.duration_days`` is float32 on

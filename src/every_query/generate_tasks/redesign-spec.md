@@ -99,8 +99,8 @@ pass them as shell-expanded vars (`data_dir=$INTERMEDIATE out_dir=$TRAINING_TASK
 code draw and the duration draw, so Stage 1 is just `query_dist.sample(num_queries, rng) -> list[QuerySpec]`.
 
 - `query_codes`: already-resolved `list[str]` code universe (one code per query). **Resolution stays
-    outside the dataclass** — the caller runs `read_query_codes()` (default
-    `{codes_dir}/metadata/codes.parquet` with `codes_dir=$PROCESSED`, an explicit Hydra list, or a
+    outside the dataclass** — the caller runs `read_query_codes()` (a metadata root dir →
+    `{dir}/metadata/codes.parquet`, e.g. `query_codes=$PROCESSED`; an explicit Hydra list; or a
     YAML/parquet path; see `read_query_codes` in `sample_tasks.py`) and passes the result in, e.g.
     `QueryDistribution.from_config(cfg, query_codes=read_query_codes(...))`. The dataclass does no file I/O.
 - `min_duration`, `max_duration`: duration bounds in days.
@@ -360,18 +360,24 @@ def label_one_shard(shard, index_dir, data_dir, out_dir, overwrite=False):
     if not overwrite and final.exists():
         return shard, "skipped"  # atomic writes ⇒ a present file is a complete file
 
-    idx = pl.read_parquet(f"{index_dir}/{shard}.parquet")  # already carries prediction_time
+    idx = pl.read_parquet(
+        f"{index_dir}/{shard}.parquet"
+    )  # already carries prediction_time
     events = pl.read_parquet(f"{data_dir}/{shard}.parquet")
     out = do_labeling(idx, events)  # no index resolution; just label
 
-    tmp = final.with_name(f".{shard}.parquet.tmp.{os.getpid()}")  # same dir ⇒ same filesystem
+    tmp = final.with_name(
+        f".{shard}.parquet.tmp.{os.getpid()}"
+    )  # same dir ⇒ same filesystem
     out.write_parquet(tmp)
     os.replace(tmp, final)  # atomic rename into place
     return shard, "labeled"  # tiny ack; big data never crosses the process boundary
 
 
 with ProcessPoolExecutor(max_workers=resolve_workers()) as ex:
-    futs = {ex.submit(label_one_shard, s, idx_dir, data_dir, out_dir): s for s in shards}
+    futs = {
+        ex.submit(label_one_shard, s, idx_dir, data_dir, out_dir): s for s in shards
+    }
     for fut in as_completed(futs):
         fut.result()  # re-raise so a failed shard aborts the run loudly
 ```

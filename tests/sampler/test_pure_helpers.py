@@ -42,17 +42,17 @@ class TestPrimitives:
         assert derive_seed(1, "contexts", "a", 0) != derive_seed(1, "contexts", "a", 1)
         assert derive_seed(1, "tasks", 0) != derive_seed(2, "tasks", 0)
 
-    def test_read_query_codes_reads_codes_dir(self, tmp_path, synthetic_query_codes):
+    def test_read_query_codes_reads_metadata_dir(self, tmp_path, synthetic_query_codes):
         codes_dir = tmp_path / "processed"
         metadata_dir = codes_dir / "metadata"
         metadata_dir.mkdir(parents=True)
         pl.DataFrame({"code": synthetic_query_codes}).write_parquet(metadata_dir / "codes.parquet")
 
-        assert st.read_query_codes(None, codes_dir) == sorted(synthetic_query_codes)
+        assert st.read_query_codes(codes_dir) == sorted(synthetic_query_codes)
 
-    def test_read_query_codes_requires_codes_dir_when_null(self):
-        with pytest.raises(ValueError, match="query_codes is null"):
-            st.read_query_codes(None, None)
+    def test_read_query_codes_requires_value_when_unset(self):
+        with pytest.raises(ValueError, match="query_codes is unset"):
+            st.read_query_codes(None)
 
     def test_read_query_codes_reads_codes_key_yaml(self, tmp_path):
         codes_yaml = tmp_path / "allowed_codes.yaml"

@@ -38,11 +38,11 @@ different row distributions:
     `python -m every_query.generate_tasks.sample_evaluation_tasks`.
 
 - **`configs/sample_training_tasks_config.yaml`** / **`configs/sample_evaluation_tasks_config.yaml`**
-    — shipped Hydra configs. Path roots (`data_dir`, `out_dir`, and `codes_dir` when the query
-    universe is loaded from metadata) are **required Hydra args** — no `.env`/env-var fallback (see
-    [#235](https://github.com/payalchandak/EveryQuery/issues/235)). Pass them as shell-expanded vars
-    (`data_dir=$INTERMEDIATE out_dir=$TRAINING_TASKS_DIR codes_dir=$PROCESSED`); everything else is a
-    Hydra override.
+    — shipped Hydra configs. Path roots (`data_dir`, `out_dir`, and `query_codes` — pass the
+    metadata root dir to load the full universe) are **required Hydra args** — no `.env`/env-var
+    fallback (see [#235](https://github.com/payalchandak/EveryQuery/issues/235)). Pass them as
+    shell-expanded vars (`data_dir=$INTERMEDIATE out_dir=$TRAINING_TASKS_DIR query_codes=$PROCESSED`);
+    everything else is a Hydra override.
 
 ## Pipeline position
 
@@ -56,8 +56,9 @@ Both endpoints consume:
 
 1. Event shards at `$INTERMEDIATE/data/{split}/*.parquet` (from
     [`preprocessing/`](../preprocessing/)).
-2. The query-code universe at `$PROCESSED/metadata/codes.parquet` — or a CLI override:
-    `query_codes=...` for training, `codes=...` for evaluation.
+2. The query-code universe — pass `query_codes=$PROCESSED` (a metadata root dir resolves to
+    `$PROCESSED/metadata/codes.parquet`), or override with an explicit list / file path. Same
+    `query_codes` knob for both training and evaluation.
 
 **Training-task outputs** land at `$TRAINING_TASKS_DIR/{split}/{shard}.parquet` — the final
 dataset is the union of the per-shard files, and that directory holds *nothing else* at rest.
@@ -95,8 +96,9 @@ process samples globally and fans Stage-4 labeling out itself. Key knobs (full l
     (distinct `(subject_id, time)` rows, not events) before a prediction time is eligible.
 - `min_duration`, `max_duration`, `duration_distribution` (`uniform | log-uniform`) — the
     Stage 1 duration draw; `duration_days` is a float (no day-rounding).
-- `query_codes` — `null` loads the full vocabulary from `$PROCESSED/metadata/codes.parquet`;
-    or pass an inline Hydra list (`query_codes=[HR,TEMP]`) or a YAML/parquet path.
+- `query_codes` — **required**: `query_codes=$PROCESSED` (a metadata root dir) loads the full
+    vocabulary from `$PROCESSED/metadata/codes.parquet`; or pass an inline Hydra list
+    (`query_codes=[HR,TEMP]`) or a YAML/parquet path.
 - `max_workers` — optional cap on the Stage 4 pool; `null` uses cores-on-node, an int caps that
     downward only. Set it when a run OOMs.
 - `seed`, `overwrite`, and optional path overrides `data_dir` / `out_dir`.

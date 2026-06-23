@@ -225,7 +225,7 @@ def eq_sampled_tasks_dir(eq_preprocessed_dataset: Path, tmp_path_factory: pytest
                 "EQ_generate_training_tasks",
                 f"data_dir={intermediate!s}",
                 f"out_dir={out_dir!s}",
-                f"codes_dir={eq_preprocessed_dataset!s}",
+                f"query_codes={eq_preprocessed_dataset!s}",
                 f"split={split}",
                 "num_queries=8",
                 "num_contexts_per_query=2",

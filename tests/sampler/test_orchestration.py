@@ -29,10 +29,10 @@ def _write_fake_cohort(
     """Write a minimal MEDS-shaped cohort the redesigned ``run()`` can read from.
 
     Mirrors the conventional layout where the data root (``data_dir``) and the metadata root
-    (``codes_dir``) are sibling directories rather than the same root, so the cohort uses:
+    (passed as ``query_codes``) are sibling directories rather than the same root, so the cohort uses:
 
         {data_dir}/data/{split}/{shard_name}.parquet     <- event shards (data_dir)
-        {processed_dir}/metadata/codes.parquet           <- query universe (codes_dir)
+        {processed_dir}/metadata/codes.parquet           <- query universe (query_codes)
 
     Returns ``(data_dir, processed_dir)`` as two distinct paths so tests can exercise the separation.
     """

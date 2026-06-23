@@ -44,13 +44,12 @@ def test_eq_generate_evaluation_tasks_end_to_end(
         [
             "EQ_generate_evaluation_tasks",
             f"data_dir={intermediate!s}",
-            f"codes_dir={eq_preprocessed_dataset!s}",
             f"out_dir={out_dir!s}",
             "split=tuning",
             "input_shard=0",
             f"prediction_times_per_subject={pt_per_subject}",
             "min_context_per_subject=1",
-            "codes=[HR,TEMP]",
+            "query_codes=[HR,TEMP]",
             "durations=[1,7,30]",
             "seed=42",
         ],
@@ -101,12 +100,11 @@ def test_eq_generate_evaluation_tasks_deterministic(
     intermediate = eq_preprocessed_dataset.parent / "intermediate"
     common_args: list[str] = [
         f"data_dir={intermediate!s}",
-        f"codes_dir={eq_preprocessed_dataset!s}",
         "split=tuning",
         "input_shard=0",
         "prediction_times_per_subject=3",
         "min_context_per_subject=1",
-        "codes=[HR,TEMP]",
+        "query_codes=[HR,TEMP]",
         "durations=[1,7,30]",
         "seed=7",
     ]
@@ -154,12 +152,11 @@ def test_eq_generate_evaluation_tasks_subject_subsample_deterministic(
     intermediate = eq_preprocessed_dataset.parent / "intermediate"
     common_args: list[str] = [
         f"data_dir={intermediate!s}",
-        f"codes_dir={eq_preprocessed_dataset!s}",
         "split=tuning",
         "input_shard=0",
         "prediction_times_per_subject=3",
         "min_context_per_subject=1",
-        "codes=[HR,TEMP]",
+        "query_codes=[HR,TEMP]",
         "durations=[1,7,30]",
         "seed=7",
         "subject_subsample_fraction=0.5",

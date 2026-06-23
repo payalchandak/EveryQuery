@@ -149,7 +149,7 @@ class QueryDistribution:
         Reads ``min_duration``, ``max_duration``, and ``duration_distribution`` from ``cfg``.  Code
         resolution via :func:`read_query_codes` stays outside this dataclass (no file I/O here).
         """
-        query_codes = read_query_codes(cfg.query_codes, cfg.get("codes_dir"))
+        query_codes = read_query_codes(cfg.query_codes)
 
         return cls(
             query_codes=query_codes,
@@ -481,15 +481,14 @@ def _read_event_shard(file_path: str | Path) -> pl.DataFrame:
 
 def read_query_codes(
     codes_or_path: list[str] | ListConfig | str | Path | None,
-    codes_dir: str | Path | None = None,
 ) -> list[str]:
-    """Resolve a query-code list — from default metadata, an explicit list, or a file path.
+    """Resolve a query-code list — from an explicit list, or a file/directory path.
 
     Accepts:
-    - ``None`` (load ``{codes_dir}/metadata/codes.parquet``; ``codes_dir`` must then be set),
     - an explicit list (from Hydra ``query_codes: [A, B, C]`` or a code-group YAML default),
-    - a metadata root directory (``codes.parquet`` is expected at ``{dir}/metadata/codes.parquet``), or
-    - a direct path to a ``codes.parquet`` file.
+    - a metadata root directory (``codes.parquet`` is expected at ``{dir}/metadata/codes.parquet``;
+      e.g. ``query_codes=$PROCESSED`` to load the full vocabulary), or
+    - a direct path to a ``codes.parquet``/YAML file.
 
     The ``.unique().sort()`` makes the returned list deterministic across workers reading
     the same metadata file (polars' default hash-based unique is order-unstable across
@@ -503,15 +502,13 @@ def read_query_codes(
         # parquet branch below already dedups via ``.unique().sort()``.
         seen: set[str] = set()
         return [c for c in codes_or_path if not (c in seen or seen.add(c))]
-    if codes_or_path is None:
-        if not codes_dir:
-            raise ValueError(
-                "query_codes is null and no codes_dir was given; pass query_codes=... or "
-                "codes_dir=... so the sampler can read {codes_dir}/metadata/codes.parquet."
-            )
-        p = Path(str(codes_dir))
-    else:
-        p = Path(str(codes_or_path))
+    if not codes_or_path:
+        raise ValueError(
+            "query_codes is unset; pass an explicit list (query_codes=[A,B]), a codes.parquet/YAML "
+            "path, or a metadata root directory (query_codes=$PROCESSED) to load the full vocabulary "
+            "from {dir}/metadata/codes.parquet."
+        )
+    p = Path(str(codes_or_path))
     if p.suffix in {".yaml", ".yml"}:
         import yaml
 
@@ -1381,7 +1378,7 @@ def run(cfg: DictConfig) -> None:
     triggering Hydra arg parsing; :func:`main` is the thin Hydra entry point that delegates here.
     Path roots come from :func:`resolve_training_task_paths` (``cfg.data_dir`` / ``cfg.out_dir``)
     plus the sibling ``_artifacts`` intermediate root; query codes via :func:`read_query_codes`
-    (reads ``{cfg.codes_dir}/metadata/codes.parquet`` when ``cfg.query_codes`` is null).
+    (``cfg.query_codes`` as a list, file path, or metadata root dir → ``{dir}/metadata/codes.parquet``).
 
     Stages 0-3 run sequentially in this driver process and produce the partitioned Stage 3 index;
     Stage 4 then fans out one :func:`label_one_shard` worker per shard via a ``ProcessPoolExecutor``

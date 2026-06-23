@@ -23,15 +23,11 @@ min_prediction_times_per_subject: 50
 # explicit int caps that result downward only.  Supersedes the legacy `num_workers` knob.
 max_workers: null
 
-# Query-code sampling universe.  Leave null to load the full vocabulary from
-# `{codes_dir}/metadata/codes.parquet` (codes_dir below must then be set), or pass an explicit
-# Hydra list (`query_codes=[HR,TEMP]`) or a YAML/parquet path.  Resolved by `read_query_codes`
-# outside `QueryDistribution`.
-query_codes: null
-
-# Metadata root for the default query universe (`{codes_dir}/metadata/codes.parquet`); typically
-# `codes_dir=$PROCESSED`.  Only consulted when `query_codes` is null.
-codes_dir: null
+# Query-code sampling universe (required).  Pass an explicit Hydra list (`query_codes=[HR,TEMP]`),
+# a YAML/parquet path, or a metadata root directory to load the full vocabulary from
+# `{dir}/metadata/codes.parquet` (typically `query_codes=$PROCESSED`).  Resolved by
+# `read_query_codes` outside `QueryDistribution`.
+query_codes: ???
 
 # Duration draw (Stage 1 / QueryDistribution).  `duration_days` is a float (no day-rounding).
 min_duration: 1

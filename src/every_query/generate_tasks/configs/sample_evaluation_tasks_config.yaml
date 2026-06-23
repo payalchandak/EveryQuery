@@ -14,11 +14,8 @@
 #   data_dir  (event shards live under `{data_dir}/data/{split}/*.parquet`)
 #   out_dir   (labeled shards land at {out_dir}/eval/{split}/*.parquet — separate `eval/` subdir
 #             so they don't collide with `sample_tasks`'s pretraining outputs at {out_dir}/{split}/*)
-#   codes_dir (query universe under `{codes_dir}/metadata/codes.parquet`, e.g. codes_dir=$PROCESSED;
-#             only consulted when `codes:` is null)
 
 data_dir: ???
-codes_dir: null
 out_dir: ???
 
 split: held_out # typical inference split; use `tuning` for intermediate validation.
@@ -34,9 +31,10 @@ prediction_times_per_subject: 1
 # `min_prediction_times_per_subject`.)
 min_context_per_subject: 50
 
-# Codes to evaluate.  Either an explicit list (`codes: [HR, TEMP]`), or leave as
-# null to load the full query vocabulary from `{codes_dir}/metadata/codes.parquet`.
-codes: null
+# Codes to evaluate (required).  Either an explicit list (`query_codes=[HR, TEMP]`), a YAML/parquet
+# path, or a metadata root directory to load the full vocabulary from `{dir}/metadata/codes.parquet`
+# (typically `query_codes=$PROCESSED`).
+query_codes: ???
 
 # Duration-day horizons to evaluate at every prediction time.  Must be a list of
 # ints; no log-uniform sampling here (unlike `sample_tasks`) — evaluation wants a

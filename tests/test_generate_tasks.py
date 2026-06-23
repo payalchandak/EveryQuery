@@ -184,7 +184,7 @@ def test_reproducible_with_same_seed(
             "EQ_generate_training_tasks",
             f"data_dir={intermediate!s}",
             f"out_dir={rerun_out!s}",
-            f"codes_dir={eq_preprocessed_dataset!s}",
+            f"query_codes={eq_preprocessed_dataset!s}",
             "split=train",
             "num_queries=8",
             "num_contexts_per_query=2",
@@ -240,7 +240,7 @@ def test_n_tasks_knob_is_honored(
             "EQ_generate_training_tasks",
             f"data_dir={intermediate!s}",
             f"out_dir={big_out!s}",
-            f"codes_dir={eq_preprocessed_dataset!s}",
+            f"query_codes={eq_preprocessed_dataset!s}",
             "split=train",
             "num_queries=16",  # 2x the fixture's num_queries=8
             "num_contexts_per_query=2",
