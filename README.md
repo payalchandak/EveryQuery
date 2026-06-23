@@ -123,7 +123,7 @@ EQ_generate_training_tasks \
 	max_workers=1 \
 	data_dir="$INTERMEDIATE" \
 	out_dir="$TRAINING_TASKS_DIR" \
-	codes_dir="$PROCESSED"
+	query_codes="$PROCESSED"
 ```
 
 `data_dir` is the MEDS dataset root (event shards read from `{data_dir}/data/{split}/*.parquet`) and `out_dir` is the final-dataset root. Both are required Hydra args (no `.env` fallback — see [#235](https://github.com/payalchandak/EveryQuery/issues/235)); pass them as shell-expanded vars after `source env.sh`.
@@ -134,10 +134,10 @@ One command runs the whole 5-stage sampler in a single process (Stages 0–3 inl
 
 > **Note:** The total number of training samples generated will be `num_queries * num_contexts_per_query`
 
-`query_codes=` is optional for training. Leave it unset/null to sample query codes from
-`{codes_dir}/metadata/codes.parquet` (so `codes_dir=$PROCESSED` must be set), or set it to an
-inline list / YAML path to restrict which codes can be sampled as queries. YAML files may be a
-flat list or a mapping with a `codes:` key. This does not remove codes from patient histories.
+`query_codes=` is required for training. Set it to a metadata root (`query_codes=$PROCESSED`) to
+sample from `{dir}/metadata/codes.parquet`, or to an inline list / YAML path to restrict which codes
+can be sampled as queries. YAML files may be a flat list or a mapping with a `codes:` key. This does
+not remove codes from patient histories.
 
 ```bash
 EQ_generate_training_tasks query_codes=/path/to/train_query_codes.yaml …
@@ -157,10 +157,9 @@ EQ_generate_evaluation_tasks \
 	split=held_out \
 	input_shard=0 \
 	prediction_times_per_subject=5 \
-	'codes=[HR, TEMP]' \
+	'query_codes=[HR, TEMP]' \
 	'durations=[1, 7, 30, 90, 365]' \
 	data_dir="$INTERMEDIATE" \
-	codes_dir=/path/to/processed \
 	out_dir=$TASK_DIR
 ```
 
@@ -180,7 +179,7 @@ EQ_generate_evaluation_tasks -m \
 	input_shard=range(0,16) \
 	split=held_out \
 	prediction_times_per_subject=5 \
-	'codes=[HR, TEMP]' \
+	'query_codes=[HR, TEMP]' \
 	'durations=[1, 7, 30, 90, 365]'
 
 # Parallel on SLURM (submitit launcher — already a dependency):
@@ -192,9 +191,9 @@ EQ_generate_evaluation_tasks -m \
 
 A comma list (`input_shard=0,1,2`) works too; `range(0,16)` is just shorthand for `0..15`. The prediction-time sampler is deterministic in `(seed, input_shard, split)`, so a swept run and the equivalent per-shard runs produce identical output.
 
-As with training, `data_dir` / `out_dir` are required Hydra args (pass them as shell-expanded vars). `codes_dir` (the `{codes_dir}/metadata/codes.parquet` query universe) is only needed when `codes=` is not passed explicitly.
+As with training, `data_dir` / `out_dir` are required Hydra args (pass them as shell-expanded vars). `query_codes` is also required — it is the evaluation query universe.
 
-`codes=` accepts an inline list (as above), a metadata root / `codes.parquet` path, or — for reproducible pre-sampled code universes kept out of git — a path to a YAML file. The YAML is either a bare list or a mapping with a `codes:` key:
+`query_codes=` accepts an inline list (as above), a metadata root / `codes.parquet` path (`query_codes=$PROCESSED` reads `{dir}/metadata/codes.parquet`), or — for reproducible pre-sampled code universes kept out of git — a path to a YAML file. The YAML is either a bare list or a mapping with a `codes:` key:
 
 ```yaml
 # sampled_codes.yaml
@@ -268,7 +267,7 @@ pipeline (`ACES_SHARDS_DIR`) also use `${oc.env:...}` — see those submodules.
 | Var                  | Used as                                                                            |
 | -------------------- | ---------------------------------------------------------------------------------- |
 | `INTERMEDIATE`       | `data_dir=` for the samplers (MEDS event shards)                                   |
-| `PROCESSED`          | `codes_dir=` for the samplers (query-universe metadata)                            |
+| `PROCESSED`          | `query_codes=` for the samplers (query-universe metadata)                          |
 | `FINAL_DATA_DIR`     | `datamodule.config.tensorized_cohort_dir=` for `EQ_train`                          |
 | `TRAINING_TASKS_DIR` | `out_dir=` for training tasks; `datamodule.config.task_labels_dir=` for `EQ_train` |
 | `TASK_DIR`           | `out_dir=` for evaluation tasks (`$TASK_DIR/eval/...`)                             |
