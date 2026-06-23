@@ -264,9 +264,9 @@ def validate_training_config(cfg: DictConfig) -> None:
 
 def _init_env() -> None:
     """Load ``.env`` and configure thread counts for polars/OMP."""
-    from every_query.utils._env import ensure_env
+    from dotenv import load_dotenv
 
-    ensure_env()
+    load_dotenv()  # so ${oc.env:...} interpolations resolve
     num_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
     threads_per_file = max(1, num_cpus // 10)
     os.environ["POLARS_MAX_THREADS"] = str(threads_per_file)

@@ -1,10 +1,5 @@
 import hashlib
 import re
-from typing import Any
-
-
-def values_as_list(**kwargs) -> list[Any]:
-    return list(kwargs.values())
 
 
 def code_slug(code: str, n_hash: int = 10, prefix_len: int = 24) -> str:

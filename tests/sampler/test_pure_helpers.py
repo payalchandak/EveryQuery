@@ -1,7 +1,6 @@
 """Pure leaf helpers shared across the pipeline (not tied to a single stage).
 
-- ``TestPrimitives`` — ``derive_seed`` axis separation, ``read_query_codes`` resolution branches,
-  ``compute_max_time_per_subject``.
+- ``TestPrimitives`` — ``derive_seed`` axis separation, ``read_query_codes`` resolution branches.
 - ``TestResolvePath`` / ``TestResolveTrainingTaskPaths`` — the ``override > env > raise`` path
   contract (the wrapper is trimmed to the cases that add information beyond the primitive).
 - ``TestArtifactLayout`` — the two-root *safety* invariants (the trivial path-string equalities
@@ -22,7 +21,6 @@ from omegaconf import OmegaConf
 
 from every_query.generate_tasks import sample_tasks as st
 from every_query.generate_tasks.sample_tasks import (
-    compute_max_time_per_subject,
     default_artifacts_dir,
     final_output_path,
     index_path,
@@ -89,15 +87,6 @@ class TestPrimitives:
 
     def test_read_query_codes_deduplicates_inline_list(self):
         assert st.read_query_codes(["A", "B", "A"]) == ["A", "B"]
-
-    def test_compute_max_time_per_subject(self, synthetic_events):
-        max_df = compute_max_time_per_subject(synthetic_events)
-        assert set(max_df.columns) == {"subject_id", "max_time"}
-        # Every subject has 30 events; max_time is the 30th event time per subject.
-        for subj in [1, 2, 3]:
-            subj_max = synthetic_events.filter(pl.col("subject_id") == subj)["time"].max()
-            row = max_df.filter(pl.col("subject_id") == subj).row(0, named=True)
-            assert row["max_time"] == subj_max
 
 
 class TestResolvePath:

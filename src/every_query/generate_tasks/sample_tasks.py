@@ -339,17 +339,6 @@ def sample_patient_contexts(
 # ---------------------------------------------------------------------------
 
 
-def compute_max_time_per_subject(events_df: pl.DataFrame) -> pl.DataFrame:
-    """Return a ``(subject_id, max_time)`` DataFrame.
-
-    Implementation detail of ``evaluate_index_df``'s censoring check (kept module-level for
-    direct unit testing).
-    """
-    return events_df.group_by(DataSchema.subject_id_name).agg(
-        pl.col(DataSchema.time_name).max().alias("max_time")
-    )
-
-
 def evaluate_index_df(
     index_df: pl.DataFrame,
     events_df: pl.DataFrame,
@@ -397,7 +386,9 @@ def evaluate_index_df(
     if index_df.height == 0:
         return empty_task_query_df().select(out_cols)
 
-    max_time_per_subject = compute_max_time_per_subject(events_df)
+    max_time_per_subject = events_df.group_by(DataSchema.subject_id_name).agg(
+        pl.col(DataSchema.time_name).max().alias("max_time")
+    )
 
     # Left side: index rows with a +1µs-shifted prediction_time for the strict-> asof key.
     left = index_df.with_columns(
