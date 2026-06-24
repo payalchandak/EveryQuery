@@ -271,35 +271,35 @@ def main(cfg: DictConfig) -> float | None:
     # The per-run/per-job dir Hydra resolved (run.dir for a single run, sweep.dir/subdir for a sweep
     # job) — *not* cfg.output_dir, which is only the shared base.  Reading the resolved dir keeps
     # sweep jobs from rmtree-ing/writing to the common base and colliding.
-    output_dir = Path(cfg.trainer.default_root_dir)
-    if output_dir.is_file():
-        raise NotADirectoryError(f"Output directory {output_dir} is a file, not a directory.")
+    run_dir = Path(cfg.trainer.default_root_dir)
+    if run_dir.is_file():
+        raise NotADirectoryError(f"Run directory {run_dir} is a file, not a directory.")
 
-    cfg_path = output_dir / "config.yaml"
+    cfg_path = run_dir / "config.yaml"
     ckpt_path = None
     if cfg_path.exists():
         if cfg.do_overwrite:
-            logger.info(f"Overwriting existing output directory {output_dir}.")
-            shutil.rmtree(output_dir, ignore_errors=True)
+            logger.info(f"Overwriting existing run directory {run_dir}.")
+            shutil.rmtree(run_dir, ignore_errors=True)
         elif cfg.do_resume:
-            logger.info(f"Resuming training in existing output directory {output_dir}.")
-            validate_resume_directory(output_dir, cfg)
-            ckpt_path = find_checkpoint_path(output_dir)
+            logger.info(f"Resuming training in existing run directory {run_dir}.")
+            validate_resume_directory(run_dir, cfg)
+            ckpt_path = find_checkpoint_path(run_dir)
         else:
             raise FileExistsError(
-                f"Output directory {output_dir} already exists and is populated. "
+                f"Run directory {run_dir} already exists and is populated. "
                 "Use `do_overwrite` or `do_resume` to proceed."
             )
 
-    # Ensure output_dir exists *after* any overwrite rmtree above, then write the config for this
+    # Ensure run_dir exists *after* any overwrite rmtree above, then write the config for this
     # run.  On resume (without overwrite) we keep the original run's config untouched so the
     # resumed run stays bit-identical to the first.  On overwrite the previous rmtree wiped the
     # old config; writing it here restores reproducibility for downstream tools that load
     # ``resolved_config.yaml`` from the run dir.  Fixes #31.
-    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(run_dir, exist_ok=True)
     if not cfg.do_resume or cfg.do_overwrite:
-        OmegaConf.save(cfg, output_dir / "config.yaml")
-        save_resolved_config(cfg, output_dir / "resolved_config.yaml")
+        OmegaConf.save(cfg, run_dir / "config.yaml")
+        save_resolved_config(cfg, run_dir / "resolved_config.yaml")
 
     logger.info("Setting torch float32 matmul precision to 'medium'.")
     torch.set_float32_matmul_precision("medium")
@@ -327,7 +327,7 @@ def main(cfg: DictConfig) -> float | None:
     # Log the run dir up front so every run (even crashed/in-flight) is matchable from the wandb UI
     # back to its folder on disk — best_ckpt_path below is only logged after fit() completes.
     for log in trainer.loggers:
-        log.log_hyperparams({"run_dir": str(output_dir)})
+        log.log_hyperparams({"run_dir": str(run_dir)})
 
     trainer_kwargs = {"model": M, "datamodule": D}
     if ckpt_path:
@@ -343,7 +343,7 @@ def main(cfg: DictConfig) -> float | None:
         for log in trainer.loggers:
             log.log_hyperparams({"best_ckpt_path": best_ckpt_path})
 
-    output_fp = output_dir / "best_model.ckpt"
+    output_fp = run_dir / "best_model.ckpt"
     shutil.copyfile(best_ckpt_path, output_fp)
 
     best_score = trainer.checkpoint_callback.best_model_score
