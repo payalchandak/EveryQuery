@@ -29,7 +29,7 @@ def _make_cfg(
                     "task_labels_dir": task_labels_dir,
                 }
             },
-            "trainer": {"logger": logger},
+            "trainer": {"logger": logger, "default_root_dir": output_dir},
         }
     )
 

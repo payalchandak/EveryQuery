@@ -238,6 +238,12 @@ def validate_training_config(cfg: DictConfig) -> None:
     if not cfg.get("output_dir"):
         raise ValueError("output_dir is unset. Pass output_dir=/path.")
 
+    # main() writes to trainer.default_root_dir (the Hydra-resolved per-run/per-job dir), not
+    # output_dir directly.  Validate the dir actually used so a stray default_root_dir= override
+    # can't pass this gate while artifacts land somewhere unintended.
+    if not cfg.trainer.get("default_root_dir"):
+        raise ValueError("trainer.default_root_dir is unset.")
+
     if _is_wandb_logger(cfg.trainer.get("logger")) and not cfg.trainer.logger.get("entity"):
         raise ValueError(
             "trainer.logger.entity is unset for a wandb logger. Pass "
