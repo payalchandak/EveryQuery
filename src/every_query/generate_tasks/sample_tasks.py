@@ -1371,6 +1371,39 @@ def _log_coverage_summary(out_files: list[Path], written: int) -> None:
     )
 
 
+def label_shards(
+    cfg: DictConfig,
+    path_to_data: Path,
+    training_tasks_dir: Path,
+    training_task_artifacts_dir: Path,
+    total_rows: int,
+) -> int:
+    """Stage 4: fan one labeling worker out per Stage 3 index shard; return rows written.
+
+    Shards are exactly the Stage 3 index partitions; workers receive ids/paths (never
+    DataFrames) and write their own atomic output.  The driver creates ``out_dir`` once,
+    before the pool.
+    """
+    index_dir = training_task_artifacts_dir / cfg.split / INDEX_DIRNAME
+    labeled_dir = training_task_artifacts_dir / cfg.split / LABELED_DIRNAME
+    data_dir = path_to_data / "data" / cfg.split
+    out_dir = training_tasks_dir / cfg.split
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    shards = sorted(p.stem for p in index_dir.glob("*.parquet"))
+    _prune_stale_outputs(out_dir, labeled_dir, set(shards))
+
+    n_workers = resolve_workers(cfg.max_workers)
+    logger.info("Stage 4: labeling %s shard(s) across %s worker(s).", f"{len(shards):,}", f"{n_workers:,}")
+    _label_shards(shards, index_dir, data_dir, out_dir, cfg.overwrite, n_workers)
+
+    out_files = sorted(out_dir.glob("*.parquet"))
+    written = _validate_row_count(out_files, total_rows, cfg)
+    logger.info("Pipeline complete: wrote %s labeled rows to %s.", f"{written:,}", out_dir)
+    _log_coverage_summary(out_files, written)
+    return written
+
+
 def run(cfg: DictConfig) -> None:
     """Execute the 5-stage pipeline for a fully-resolved config (no Hydra side effects).
 
@@ -1455,25 +1488,8 @@ def run(cfg: DictConfig) -> None:
         f"{n_index_shards:,}",
     )
 
-    # Stage 4: fan one labeling worker out per shard.  Shards are exactly the Stage 3 index
-    # partitions; workers receive ids/paths (never DataFrames) and write their own atomic output.
-    index_dir = training_task_artifacts_dir / cfg.split / INDEX_DIRNAME
-    data_dir = path_to_data / "data" / cfg.split
-    out_dir = training_tasks_dir / cfg.split
-    out_dir.mkdir(parents=True, exist_ok=True)  # driver creates out_dir once, before the pool
-
-    shards = sorted(p.stem for p in index_dir.glob("*.parquet"))
-    labeled_dir = training_task_artifacts_dir / cfg.split / LABELED_DIRNAME
-    _prune_stale_outputs(out_dir, labeled_dir, set(shards))
-
-    n_workers = resolve_workers(cfg.max_workers)
-    logger.info("Stage 4: labeling %s shard(s) across %s worker(s).", f"{len(shards):,}", f"{n_workers:,}")
-    _label_shards(shards, index_dir, data_dir, out_dir, cfg.overwrite, n_workers)
-
-    out_files = sorted(out_dir.glob("*.parquet"))
-    written = _validate_row_count(out_files, total_rows, cfg)
-    logger.info("Pipeline complete: wrote %s labeled rows to %s.", f"{written:,}", out_dir)
-    _log_coverage_summary(out_files, written)
+    # Stage 4: fan one labeling worker out per shard (one Stage 3 index partition each).
+    label_shards(cfg, path_to_data, training_tasks_dir, training_task_artifacts_dir, total_rows)
 
 
 @hydra.main(version_base=None, config_path=CONFIGS, config_name="sample_training_tasks_config")
