@@ -324,6 +324,11 @@ def main(cfg: DictConfig) -> float | None:
 
     trainer = instantiate(cfg.trainer)
 
+    # Log the run dir up front so every run (even crashed/in-flight) is matchable from the wandb UI
+    # back to its folder on disk — best_ckpt_path below is only logged after fit() completes.
+    for log in trainer.loggers:
+        log.log_hyperparams({"run_dir": str(output_dir)})
+
     trainer_kwargs = {"model": M, "datamodule": D}
     if ckpt_path:
         logger.info(f"Trying to resume training from checkpoint {ckpt_path}.")
