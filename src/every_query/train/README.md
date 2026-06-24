@@ -37,14 +37,16 @@ EQ_process_data       EQ_generate_training_tasks         EQ_train       EQ_predi
     writes these to `$TRAINING_TASKS_DIR`; pass that path as the required
     `datamodule.config.task_labels_dir` Hydra arg (typically `=$TRAINING_TASKS_DIR`).
 
-`train/` produces a run directory at
-`$TRAINING_OUTPUT_DIR/outputs/<YYYY-MM-DD>/<HH-MM-SS>/` containing `best_model.ckpt`,
-`config.yaml` (used config), `resolved_config.yaml` (used config with all
-interpolations resolved — consumed by downstream loaders), and a
-`checkpoints/` dir with epoch-indexed checkpoints.
+`train/` produces a run directory at `<output_dir>/<YYYY-MM-DD>/<HH-MM-SS>/` (you supply the
+required `output_dir=` base; Hydra appends the timestamp via its native `run.dir`/`sweep.dir`)
+containing `best_model.ckpt`, `config.yaml` (used config), `resolved_config.yaml` (used config
+with all interpolations resolved — consumed by downstream loaders), and a `checkpoints/` dir with
+epoch-indexed checkpoints. Sweeps (`EQ_train -m ...`) land one `override_dirname` subdir per job
+under the same timestamped folder.
 
 ## Resume behavior
 
-`do_resume=True` in the config reuses the `output_dir`'s existing checkpoints and
-`config.yaml`. See #91 for the work to add a structural-drift check between the
-resumed-from config and the new-invocation config.
+`do_resume=True` reuses an existing run dir's checkpoints and `config.yaml`. Because each launch
+gets a fresh timestamp, resume the *specific* run by pinning its path:
+`hydra.run.dir=<output_dir>/<YYYY-MM-DD>/<HH-MM-SS> do_resume=True`. See #91 for the
+structural-drift check between the resumed-from config and the new-invocation config.

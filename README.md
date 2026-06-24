@@ -215,7 +215,7 @@ EQ_train \
 	datamodule.config.task_labels_dir="$TRAINING_TASKS_DIR"
 ```
 
-`tensorized_cohort_dir` and `task_labels_dir` are required Hydra args (no `.env` fallback — see [#235](https://github.com/payalchandak/EveryQuery/issues/235)); `task_labels_dir` is where `EQ_generate_training_tasks` writes. `output_dir` defaults to `${oc.env:TRAINING_OUTPUT_DIR}/${run_id:}/`, so export `TRAINING_OUTPUT_DIR` (via `env.sh`) or override `output_dir=` directly. `EQ_train` reads the long-format labels written by `EQ_generate_training_tasks` directly — the inline collation step that lived in `train.py` was removed in [#76](https://github.com/payalchandak/EveryQuery/pull/76).
+`tensorized_cohort_dir` and `task_labels_dir` are required Hydra args (no `.env` fallback — see [#235](https://github.com/payalchandak/EveryQuery/issues/235)); `task_labels_dir` is where `EQ_generate_training_tasks` writes. `output_dir` is a required Hydra arg (a base path you supply with `output_dir=`, e.g. `=$TRAINING_OUTPUT_DIR`); Hydra appends `<YYYY-MM-DD>/<HH-MM-SS>` for per-run uniqueness via its native `run.dir`/`sweep.dir` (see [#251](https://github.com/payalchandak/EveryQuery/issues/251)). `EQ_train` reads the long-format labels written by `EQ_generate_training_tasks` directly — the inline collation step that lived in `train.py` was removed in [#76](https://github.com/payalchandak/EveryQuery/pull/76).
 
 Seeding: `cfg.seed` (default `140799`) is passed through `lightning.seed_everything` *before* model + datamodule instantiation (fix landed in [#124](https://github.com/payalchandak/EveryQuery/pull/124)), so model weight initialization is byte-reproducible across Python versions and platforms for a given seed.
 
@@ -223,7 +223,7 @@ Seeding: `cfg.seed` (default `140799`) is passed through `lightning.seed_everyth
 
 ```bash
 EQ_predict \
-	model_run_dir="$TRAINING_OUTPUT_DIR/outputs/YYYY-MM-DD/HH-MM-SS" \
+	model_run_dir="$TRAINING_OUTPUT_DIR/YYYY-MM-DD/HH-MM-SS" \
 	tasks_dir="$EVAL_TASKS_DIR/eval/held_out" \
 	output_parquet="$TRAINING_OUTPUT_DIR/predictions.parquet" \
 	split=held_out
@@ -258,9 +258,9 @@ machines (SLURM scripts `source` the same file). `EQ_train` validates only the v
 resolves — `validate_training_config()` in `train.py` checks the resolved cohort/task dirs exist and
 that `WANDB_ENTITY` is set *only* when a wandb logger is enabled.
 
-The genuine env reads that remain in the **train** config: `TRAINING_OUTPUT_DIR` (backs
-`${oc.env:TRAINING_OUTPUT_DIR,null}` in `output_dir`) and `WANDB_ENTITY` (read natively by `wandb`, backs
-`${oc.env:WANDB_ENTITY,null}`). The **preprocessing** subprocess bridge (`RAW_MEDS_DIR`,
+The genuine env read that remains in the **train** config: `WANDB_ENTITY` (read natively by `wandb`,
+backs `${oc.env:WANDB_ENTITY,null}`). `output_dir` is now a required arg with no env fallback
+(pass `output_dir=$TRAINING_OUTPUT_DIR` if you keep that var in `env.sh`). The **preprocessing** subprocess bridge (`RAW_MEDS_DIR`,
 `MTD_INPUT_DIR`, `MIN_SUBJECTS_PER_CODE`, `MIN_EVENTS_PER_SUBJECT`) and the optional `aces_to_eq`
 pipeline (`ACES_SHARDS_DIR`) also use `${oc.env:...}` — see those submodules.
 
@@ -270,7 +270,7 @@ pipeline (`ACES_SHARDS_DIR`) also use `${oc.env:...}` — see those submodules.
 | `TENSORIZED_COHORT_DIR` | `output_dir=` (preprocess); `datamodule.config.tensorized_cohort_dir=` (`EQ_train`); `query_codes=` for the samplers (its `metadata/codes.parquet` is the query universe) |
 | `TRAINING_TASKS_DIR`    | `out_dir=` for training tasks; `datamodule.config.task_labels_dir=` for `EQ_train`                                                                                        |
 | `EVAL_TASKS_DIR`        | `out_dir=` for evaluation tasks (`$EVAL_TASKS_DIR/eval/...`)                                                                                                              |
-| `TRAINING_OUTPUT_DIR`   | `${oc.env:TRAINING_OUTPUT_DIR}` in the train config's `output_dir`                                                                                                        |
+| `TRAINING_OUTPUT_DIR`   | passed as the `output_dir=` base for `EQ_train` (no longer auto-read; Hydra appends `<date>/<time>`)                                                                      |
 | `WANDB_ENTITY`          | W&B entity (read natively by `wandb`; only when the logger is enabled)                                                                                                    |
 
 `env.example.sh` is the reference — copy to `env.sh`, edit, and `source` it.
@@ -308,7 +308,6 @@ tests/
 ├── test_dataset_logic.py           (unit: EveryQueryPytorchDataset + EveryQueryBatch)
 ├── test_lightning_logic.py         (unit: LightningModule loss wiring, mask semantics)
 ├── test_model_logic.py             (unit: model heads, censored/occurs loss flip sensitivity)
-├── test_run_id.py                  (unit: run_id resolver determinism)
 └── training_validity/              (E2E @pytest.mark.slow: model actually learns; runs the full EQ_predict → EQ_evaluate chain; see its README)
     ├── __init__.py
     ├── conftest.py

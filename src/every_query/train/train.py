@@ -2,7 +2,6 @@ import builtins
 import logging
 import os
 import shutil
-from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -17,16 +16,6 @@ from omegaconf import DictConfig, OmegaConf
 from every_query.train.resume_check import validate_resume_directory
 
 logger = logging.getLogger(__name__)
-
-_RUN_ID = None
-
-
-@OmegaConfResolver(replace=True)
-def run_id():
-    global _RUN_ID
-    if _RUN_ID is None:
-        _RUN_ID = datetime.now(UTC).strftime("%Y-%m-%d/%H-%M-%S")
-    return _RUN_ID
 
 
 @OmegaConfResolver(replace=True)
@@ -243,16 +232,11 @@ def validate_training_config(cfg: DictConfig) -> None:
                 f"datamodule.config.{node} ({value!r}, from ${env_var}) is not an existing directory."
             )
 
-    # An unset $TRAINING_OUTPUT_DIR resolves the shipped ``${oc.env:TRAINING_OUTPUT_DIR,null}/${run_id:}/``
-    # interpolation to the *truthy* string ``'None/<run_id>/'`` (the null default is
-    # stringified into the surrounding path), so a bare falsy check is not enough — reject a
-    # leading ``None/`` / ``null/`` segment too, lest the run write to a literal ``None/...`` dir.
-    output_dir = cfg.get("output_dir")
-    if not output_dir or str(output_dir).startswith(("None/", "null/")):
-        raise ValueError(
-            "output_dir is unset (is $TRAINING_OUTPUT_DIR exported?). "
-            "Pass output_dir=/path or export $TRAINING_OUTPUT_DIR."
-        )
+    # ``output_dir`` is a required base (``???``); supply it with ``output_dir=/path``.  An unset
+    # value surfaces as Hydra's "Missing mandatory value" error on access, but guard explicitly too
+    # for callers that build the config without Hydra (e.g. the tests).
+    if not cfg.get("output_dir"):
+        raise ValueError("output_dir is unset. Pass output_dir=/path.")
 
     if _is_wandb_logger(cfg.trainer.get("logger")) and not cfg.trainer.logger.get("entity"):
         raise ValueError(
@@ -284,7 +268,10 @@ def main(cfg: DictConfig) -> float | None:
             "Only `do_overwrite` will be used, and the output directory will be cleared."
         )
 
-    output_dir = Path(cfg.output_dir)
+    # The per-run/per-job dir Hydra resolved (run.dir for a single run, sweep.dir/subdir for a sweep
+    # job) — *not* cfg.output_dir, which is only the shared base.  Reading the resolved dir keeps
+    # sweep jobs from rmtree-ing/writing to the common base and colliding.
+    output_dir = Path(cfg.trainer.default_root_dir)
     if output_dir.is_file():
         raise NotADirectoryError(f"Output directory {output_dir} is a file, not a directory.")
 
@@ -351,7 +338,7 @@ def main(cfg: DictConfig) -> float | None:
         for log in trainer.loggers:
             log.log_hyperparams({"best_ckpt_path": best_ckpt_path})
 
-    output_fp = Path(cfg.output_dir) / "best_model.ckpt"
+    output_fp = output_dir / "best_model.ckpt"
     shutil.copyfile(best_ckpt_path, output_fp)
 
     best_score = trainer.checkpoint_callback.best_model_score

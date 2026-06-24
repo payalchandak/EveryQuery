@@ -2,7 +2,7 @@ defaults:
   - _self_
 
 # inputs
-model_run_dir: ${oc.env:TRAINING_OUTPUT_DIR}/outputs/2026-01-03/15-43-49/
+model_run_dir: ${oc.env:TRAINING_OUTPUT_DIR}/2026-01-03/15-43-49/
 task_df_fp: ${oc.env:EVAL_TASKS_DIR}/eval/aces/readmiss_30d/held_out
 preds_df_fp: ${model_run_dir}/eval/readmiss_30d/readmiss_30d.csv
 
