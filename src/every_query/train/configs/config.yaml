@@ -60,7 +60,7 @@ trainer:
   _target_: lightning.pytorch.trainer.Trainer
   logger:
     _target_: pytorch_lightning.loggers.wandb.WandbLogger
-    name: "${now:%Y-%m-%d}/${now:%H-%M-%S}" # == run-dir name; for sweeps override to ${hydra.job.override_dirname}
+    name: null # standard wandb auto-naming; runs are told apart by auto-logged hyperparameters
     save_dir: "${trainer.default_root_dir}/loggers"
     offline: False
     id: null # pass correct id to resume experiment!
