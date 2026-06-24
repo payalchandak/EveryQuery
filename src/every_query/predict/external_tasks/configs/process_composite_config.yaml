@@ -1,5 +1,5 @@
 do_overwrite: False
-model_path: /users/gbk2114/EveryQuery/results/outputs/2026-01-03/15-43-49
+model_path: /users/gbk2114/EveryQuery/results/2026-01-03/15-43-49
 task_name: readmiss_30d
 split_name: held_out
 

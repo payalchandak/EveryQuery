@@ -24,7 +24,7 @@ export TOKENIZED_EVENTS_DIR="${DATA_DIR}/intermediate"        # data_dir= for th
 export TENSORIZED_COHORT_DIR="${DATA_DIR}/processed"          # output_dir= (preprocess); tensorized_cohort_dir= (train); query_codes= (samplers)
 export EVAL_TASKS_DIR="/path/to/eq_stuff/tasks"              # out_dir= for evaluation tasks
 export TRAINING_TASKS_DIR="/path/to/eq_stuff/training_tasks" # out_dir= for training tasks
-export TRAINING_OUTPUT_DIR="/path/to/EveryQuery/results"     # ${oc.env:TRAINING_OUTPUT_DIR} in the train config's output_dir
+export TRAINING_OUTPUT_DIR="/path/to/EveryQuery/results"     # pass as EQ_train output_dir= base; Hydra appends <date>/<time>
 
 # Only for the `aces_to_eq` conversion pipeline (predict/external_tasks), read via
 # ${oc.env:ACES_SHARDS_DIR}. Leave unset/commented otherwise.
