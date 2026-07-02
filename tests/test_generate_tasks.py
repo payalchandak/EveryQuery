@@ -136,9 +136,9 @@ def test_labels_match_ground_truth(
             expected_censored = max_time is None or window_end > max_time
 
             # Ground-truth event_fires: any event of the matching code in
-            # (prediction_time, prediction_time + duration_days].  Sampler uses strict-> via a
-            # 1µs-shifted join_asof key, so we mirror with a strict > lower bound and an
-            # inclusive <= upper bound here.
+            # (prediction_time, prediction_time + duration_days].  Sampler uses strict-> via
+            # join_asof(..., allow_exact_matches=False), so we mirror with a strict > lower bound
+            # and an inclusive <= upper bound here.
             subj_events = events.filter(pl.col("subject_id") == subj)
             event_fires = not subj_events.filter(
                 (pl.col("code") == row["query"])

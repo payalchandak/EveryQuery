@@ -30,7 +30,7 @@ flowchart TD
     S3 -- "Shardwise Labeling" --> S4
 
     subgraph workers["Parallelized across workers — Stage 4"]
-        S4["<b>S4 — Labeling (one worker per shard)</b><br/>load shard events + index partition<br/>compute max_time[subject_id]<br/>label via join_asof (+1µs strict-after)<br/>→ {split}/{shard}.parquet"]
+        S4["<b>S4 — Labeling (one worker per shard)</b><br/>load shard events + index partition<br/>compute max_time[subject_id]<br/>label via join_asof (allow_exact_matches=False, strict-after)<br/>→ {split}/{shard}.parquet"]
     end
 
     meds[("MEDS dataset<br/>data/{split}/{i}.parquet")]
@@ -61,8 +61,9 @@ These hold throughout the design; later sections reference them rather than rest
 5. **Determinism.** Distinct `(subject_id, time)` rows have no within-subject ties, so the dense rank is
     unique and a given `seed`/`prediction_time_index` always maps to the same `prediction_time`. All draws
     derive from `seed` with a fixed RNG consumption order (see *Determinism*).
-6. **Labels use `(prediction_time, prediction_time + duration]`** — strict lower bound (`+1µs`
-    asof), inclusive upper bound. This keeps labels leakage-safe against the loader (see Stage 4).
+6. **Labels use `(prediction_time, prediction_time + duration]`** — strict lower bound
+    (`join_asof(..., allow_exact_matches=False)`), inclusive upper bound. This keeps labels
+    leakage-safe against the loader (see Stage 4).
 7. **Separate directory trees.** Final outputs (`training_tasks_dir`) and intermediate artifacts
     (`training_task_artifacts_dir`) live in disjoint, never-nested roots (see *Artifact layout*).
 8. **Atomic writes guarantee restartability.** Stage 4 writes via temp file + `os.replace`, so a present
@@ -298,7 +299,7 @@ A patient context is a `(subject_idx, prediction_time_index)` pair; the timestam
 #### Labeling rule
 
 For each `(subject_id, prediction_time)` row, examine the window `(prediction_time, prediction_time + duration_days]`
-(invariant 6: open lower bound via the `+1µs` asof shift, closed upper bound). Resolve occurrence first;
+(invariant 6: open lower bound via `join_asof(..., allow_exact_matches=False)`, closed upper bound). Resolve occurrence first;
 censoring applies only when the event did **not** occur in the observed window:
 
 | occurs in observed window | censored | `boolean_value` |
@@ -318,8 +319,8 @@ censoring applies only when the event did **not** occur in the observed window:
 **Float-duration implementation note.** `polars.duration(days=...)` expects integer day expressions, so a
 float `duration_days` window must be added as e.g.
 `prediction_time + pl.duration(seconds = duration_days * 86_400)` (or nanoseconds), not
-`pl.duration(days=duration_days)`. Keep microsecond datetime precision so the `+1µs` strict-after shift
-works.
+`pl.duration(days=duration_days)`. Datetimes across the pipeline are kept at consistent
+microsecond precision so `join_asof`'s `left_on`/`right_on` dtypes match.
 
 > **Atomic writes & skip-on-success (restartability, invariant 8).** Stage 4 has no global cache, so a
 > crashed run must resume without redoing finished shards or trusting half-written files:
