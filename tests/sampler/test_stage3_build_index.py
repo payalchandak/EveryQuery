@@ -154,6 +154,22 @@ class TestStage3:
         build_index([], contexts, artifacts_dir, "train", num_contexts_per_query=3)
         assert not index_path(artifacts_dir, "train", "0").exists()
 
+    def test_num_queries_zero_rerun_wipes_stale_index(self, stage0_env):
+        """A ``num_queries=0`` rerun after a real run must not leave stale ``_index/`` partitions (#255 #1)"""
+        _, artifacts_dir = stage0_env
+        queries = [QuerySpec("ICD//A", 5.0)]
+        contexts = self._make_contexts([1], ["0"], [3])
+        build_index(queries, contexts, artifacts_dir, "train", num_contexts_per_query=1)
+        assert index_path(artifacts_dir, "train", "0").exists()
+
+        empty_contexts = pl.DataFrame(
+            schema={"subject_id": pl.Int64, "shard": pl.Utf8, "prediction_time_index": pl.Int64}
+        )
+        build_index([], empty_contexts, artifacts_dir, "train", num_contexts_per_query=1)
+
+        assert not (artifacts_dir / "train" / "_index").exists()
+        assert not index_path(artifacts_dir, "train", "0").exists()
+
     def test_height_mismatch_raises(self, stage0_env):
         _, artifacts_dir = stage0_env
         queries = [QuerySpec("ICD//A", 5.0), QuerySpec("ICD//B", 10.0)]

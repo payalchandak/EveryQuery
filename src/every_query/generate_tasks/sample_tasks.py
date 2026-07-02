@@ -1141,6 +1141,13 @@ def build_index(
             f"len(queries) * num_contexts_per_query ({n_queries} * {num_contexts_per_query} = {expected})"
         )
 
+    # Wipe ``_index/`` before the empty-input early return (not after) so a ``num_queries=0``
+    # rerun following a real run leaves no stale partitions behind (see #255 finding #1); the
+    # early return below must not short-circuit past this cleanup.
+    index_dir = training_task_artifacts_dir / split / INDEX_DIRNAME
+    if index_dir.exists():
+        shutil.rmtree(index_dir)
+
     if n_queries == 0 or contexts.height == 0:
         return 0
 
@@ -1156,10 +1163,6 @@ def build_index(
     )
 
     combined = contexts.with_columns(query_col, duration_col)
-
-    index_dir = training_task_artifacts_dir / split / INDEX_DIRNAME
-    if index_dir.exists():
-        shutil.rmtree(index_dir)
 
     output_cols = [
         TaskQuerySchema.subject_id_name,
