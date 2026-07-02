@@ -42,7 +42,7 @@ def test_single_run_creates_one_timestamped_subdir(tmp_path):
     assert len(times[0].name) == len("14-03-09")
 
 
-def test_sweep_creates_one_subdir_per_param_with_paths_excluded(tmp_path):
+def test_sweep_creates_one_numbered_subdir_per_job(tmp_path):
     base = tmp_path / "sweep"
     _run_real_config(base, "lightning_module.optimizer.lr=1e-5,1e-4", multirun=True)
 
@@ -53,10 +53,5 @@ def test_sweep_creates_one_subdir_per_param_with_paths_excluded(tmp_path):
     assert len(times) == 1, f"sweep should share one <time> dir, got {[t.name for t in times]}"
 
     subdirs = [p.name for p in times[0].iterdir() if p.is_dir()]
-    assert len(subdirs) == 2, f"expected one subdir per swept lr, got {subdirs}"
-    # named only by the swept hyperparameter — the excluded path args must not appear (and so cannot
-    # nest the folders via their '/').
-    for name in subdirs:
-        assert "lr=" in name, f"subdir {name!r} should be named by the swept lr"
-        for excluded in ("output_dir", "task_labels_dir", "tensorized_cohort_dir"):
-            assert excluded not in name, f"excluded key {excluded!r} leaked into subdir name {name!r}"
+    # subdir is ${hydra.job.num}: one numbered dir per sweep job, no override args in the name.
+    assert sorted(subdirs) == ["0", "1"], f"expected one job.num subdir per swept lr, got {subdirs}"

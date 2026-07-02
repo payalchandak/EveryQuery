@@ -93,7 +93,7 @@ class TestQueryDistribution:
             QueryDistribution(synthetic_query_codes, 1.0, 365.0, "normal")
 
     def test_sample_raises_if_distribution_drifts_from_valid_set(self, synthetic_query_codes):
-        """``sample`` must not silently default to ``uniform`` if its branch drifts out of sync
+        """``sample`` must not silently default to ``uniform`` if its branch drifts out of sync.
 
         with ``_VALID_DISTRIBUTIONS``. Simulates that drift via the frozen-dataclass escape hatch,
         since ``__post_init__`` already blocks constructing an invalid value normally.
