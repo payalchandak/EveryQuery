@@ -407,21 +407,38 @@ def evaluate_index_df(
         .sort([TaskQuerySchema.subject_id_name, TaskQuerySchema.query_name, DataSchema.time_name])
     )
 
-    # Each ``left`` row is a task instance asking "when does query ``q`` next occur for subject
-    # ``s`` after ``prediction_time``?".  ``join_asof`` answers that for every task instance in
-    # one pass (a per-row filter + min over ``events_df`` would be quadratic). Parameters:
-    #   - ``by``: match only events with the same ``(subject_id, query)`` as the task instance —
-    #     equivalent to grouping both frames on these columns before the asof search.
-    #   - ``left_on`` / ``right_on``: the asof key — ``prediction_time`` vs. event ``time``. Both
-    #     sides must be sorted ascending on it within each ``by`` group (done above).
-    #   - ``strategy="forward"``: take the earliest event with time ``>=`` ``prediction_time``,
-    #     i.e. search forward for the *next* occurrence. Labels care about what happens after the
-    #     prediction, so "backward" (latest prior event) or "nearest" would be wrong here.
-    #   - ``allow_exact_matches=False``: excludes an event at exactly ``prediction_time``, turning
-    #     that ``>=`` into a strict ``>`` — labels are defined on the open interval
-    #     ``(prediction_time, ...]``, so a simultaneous event shouldn't count. Replaces the old
-    #     ``+1µs`` key-shift trick.
-    #   - No qualifying event → ``time=null``, handled below as no event in the observed window.
+    # What we need, in sampler terms: each ``left`` row is one task instance — "does query ``q``
+    # occur for subject ``s`` after ``prediction_time``?" — and answering that (and the later
+    # censoring check) requires the timestamp of the *first* occurrence of ``q`` for ``s`` after
+    # ``prediction_time``, if any. ``join_asof`` finds that "next occurrence" timestamp for every
+    # task instance in one pass; the alternative (filtering ``events_df`` down to matching
+    # ``(s, q)`` rows after ``prediction_time`` and taking the min, per task instance) would be
+    # quadratic in the number of task instances. Mechanically, ``join_asof`` is a "nearest-key"
+    # join: for each row on ``left`` it finds at most one row on ``right`` whose key is close to
+    # the left row's key, rather than every row that matches exactly (a normal equality join).
+    # What each parameter below does, and why it's set that way here:
+    #   - ``by``: exact-equality columns checked *before* the asof search — a task instance for
+    #     ``(s, q)`` can only match events for that same ``(s, q)``, never another subject's
+    #     events or a different query code's events.  Equivalent to grouping both frames by
+    #     ``(subject_id, query)`` and asof-joining independently within each group.
+    #   - ``left_on`` / ``right_on``: the ordered ("asof") key compared inexactly — here
+    #     ``prediction_time`` on the left vs. the event ``time`` on the right. Both sides must
+    #     already be sorted ascending on this key within each ``by`` group (see above).
+    #   - ``strategy="forward"``: for each task instance, match the *earliest* event whose time is
+    #     ``>=`` ``prediction_time`` — i.e. the next time ``q`` happens for ``s``, searching
+    #     forward from the prediction time.  ``"backward"`` would instead take the latest prior
+    #     event (``<=``, most recent history); ``"nearest"`` whichever is closer either direction.
+    #     We need "forward" because a label is about what happens *after* the prediction, not
+    #     what already happened before it.
+    #   - ``allow_exact_matches=False``: excludes an event landing at exactly ``prediction_time``
+    #     from that forward search, turning the default ``>=`` into a strict ``>``.  Labels are
+    #     defined on the open interval ``(prediction_time, prediction_time + duration_days]`` — an
+    #     event simultaneous with the prediction time isn't "in the future" relative to it — so
+    #     this is how that open lower bound is enforced directly, instead of faking it by shifting
+    #     the join key by ``+1µs`` before searching.
+    #   - Task instances with no qualifying event (``q`` never occurs for ``s``, or only occurs
+    #     at/before ``prediction_time``) get ``time=null`` in the
+    #     result — handled below as "no matching event in the observed window".
     joined = left.join_asof(
         right,
         by=[TaskQuerySchema.subject_id_name, TaskQuerySchema.query_name],
