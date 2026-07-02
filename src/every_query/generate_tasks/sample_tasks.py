@@ -168,8 +168,15 @@ class QueryDistribution:
         ``np.random.default_rng(derive_seed(seed, "queries"))``.  Draws happen in a fixed order (codes
         then durations) so output is deterministic for a fixed ``rng``.
 
+        The distribution branch below is exhaustive over ``_VALID_DISTRIBUTIONS``; ``__post_init__``
+        is what actually enforces that invariant on construction, so the trailing ``else`` here should
+        be unreachable and only guards against that invariant drifting out of sync with this method.
+
         Raises:
             ValueError: If ``num_queries < 0``.
+            AssertionError: If ``duration_distribution`` is outside ``_VALID_DISTRIBUTIONS`` — this
+                indicates ``_VALID_DISTRIBUTIONS`` and this method have drifted out of sync, since
+                ``__post_init__`` should already have rejected any other value.
         """
         if num_queries < 0:
             raise ValueError(f"num_queries must be >= 0 (got {num_queries})")
@@ -181,8 +188,14 @@ class QueryDistribution:
             durations = np.exp(
                 rng.uniform(np.log(self.min_duration), np.log(self.max_duration), size=num_queries)
             )
-        else:  # "uniform"
+        elif self.duration_distribution == "uniform":
             durations = rng.uniform(self.min_duration, self.max_duration, size=num_queries)
+        else:
+            raise AssertionError(
+                f"duration_distribution={self.duration_distribution!r} is outside "
+                f"_VALID_DISTRIBUTIONS={self._VALID_DISTRIBUTIONS}; __post_init__ should have "
+                "rejected this already"
+            )
 
         codes = np.array(self.query_codes, dtype=object)
         selected_codes = codes[code_indices]

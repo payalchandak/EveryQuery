@@ -92,6 +92,17 @@ class TestQueryDistribution:
         with pytest.raises(ValueError, match="duration_distribution"):
             QueryDistribution(synthetic_query_codes, 1.0, 365.0, "normal")
 
+    def test_sample_raises_if_distribution_drifts_from_valid_set(self, synthetic_query_codes):
+        """``sample`` must not silently default to ``uniform`` if its branch drifts out of sync
+
+        with ``_VALID_DISTRIBUTIONS``. Simulates that drift via the frozen-dataclass escape hatch,
+        since ``__post_init__`` already blocks constructing an invalid value normally.
+        """
+        dist = QueryDistribution(synthetic_query_codes, 1.0, 365.0, "uniform")
+        object.__setattr__(dist, "duration_distribution", "bogus")
+        with pytest.raises(AssertionError, match="duration_distribution"):
+            dist.sample(1, self._rng(0))
+
     # -- Distribution-shape gap tests (plain pytest, fixed seed, generous bounds) --------------
 
     def test_log_uniform_skews_shorter_than_uniform(self, synthetic_query_codes):
