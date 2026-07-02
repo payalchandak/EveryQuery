@@ -352,6 +352,23 @@ def sample_patient_contexts(
 # ---------------------------------------------------------------------------
 
 
+def _truncate_at_death(events_df: pl.DataFrame) -> pl.DataFrame:
+    """Drop rows strictly after each subject's earliest ``MEDS_DEATH`` row (#257/#265).
+
+    ``<=`` keeps the death row itself, so ``MEDS_DEATH`` remains answerable as a query code and the
+    death timestamp remains a valid prediction time.  Subjects with no death row are unaffected.
+    Shared by Stage 4 labeling (:func:`evaluate_index_df`) and Stage 0
+    (:func:`_read_prediction_time_shard`) so the two stages can't drift on the death rule.
+    """
+    death_time = (
+        pl.col(DataSchema.time_name)
+        .filter(pl.col(DataSchema.code_name) == death_code)
+        .min()
+        .over(DataSchema.subject_id_name)
+    )
+    return events_df.filter(death_time.is_null() | (pl.col(DataSchema.time_name) <= death_time))
+
+
 def evaluate_index_df(
     index_df: pl.DataFrame,
     events_df: pl.DataFrame,
@@ -416,14 +433,8 @@ def evaluate_index_df(
 
     # Truncate each subject's record at death (see docstring, #257).  Must happen before *both*
     # consumers of events_df below — max_time_per_subject and the join_asof right side — or a
-    # post-death event could still asof-match into an occurrence.  ``<=`` keeps the death row.
-    death_time = (
-        pl.col(DataSchema.time_name)
-        .filter(pl.col(DataSchema.code_name) == death_code)
-        .min()
-        .over(DataSchema.subject_id_name)
-    )
-    events_df = events_df.filter(death_time.is_null() | (pl.col(DataSchema.time_name) <= death_time))
+    # post-death event could still asof-match into an occurrence.
+    events_df = _truncate_at_death(events_df)
 
     max_time_per_subject = events_df.group_by(DataSchema.subject_id_name).agg(
         pl.col(DataSchema.time_name).max().alias("max_time")
@@ -956,21 +967,26 @@ def label_one_shard(
 def _read_prediction_time_shard(file_path: str | Path, shard: str) -> pl.DataFrame:
     """Read one shard's distinct ``(subject_id, time)`` rows, tagged with ``shard``.
 
-    Reads only ``subject_id``/``time`` (Stage 0 never needs event payloads).  Null-``time`` rows (e.g.
-    MEDS static measurements like demographics) are dropped: they are not valid prediction times for
-    the downstream strict-after asof rule (``evaluate_index_df``'s
-    ``join_asof(..., allow_exact_matches=False)``), and — because ``sort(["subject_id", "time"])``
-    places nulls first — an unfiltered null would otherwise claim ``prediction_time_index = 0`` and
-    inflate ``n_prediction_times`` past the eligibility boundary.  ``time`` is cast to
-    ``pl.Datetime("us")`` for the same reason as :func:`_read_event_shard`: it must share a dtype
-    with the events frame's ``time`` column for ``join_asof`` to match against.  Dedups to distinct
-    ``(subject_id, time)`` so the per-subject row count is a count of *prediction times*, not
-    events.
+    Reads ``subject_id``/``time`` plus ``code`` — the latter solely so :func:`_truncate_at_death`
+    can drop post-death rows (#265): a timestamp strictly after a subject's ``MEDS_DEATH`` row is
+    unobservable under Stage 4's death rule (every window from it is censored), so it must not be a
+    prediction time nor count toward eligibility.  Truncation runs before the ``code`` column is
+    dropped and before the dedup.  Null-``time`` rows (e.g. MEDS static measurements like
+    demographics) are dropped: they are not valid prediction times for the downstream strict-after
+    asof rule (``evaluate_index_df``'s ``join_asof(..., allow_exact_matches=False)``), and —
+    because ``sort(["subject_id", "time"])`` places nulls first — an unfiltered null would
+    otherwise claim ``prediction_time_index = 0`` and inflate ``n_prediction_times`` past the
+    eligibility boundary.  ``time`` is cast to ``pl.Datetime("us")`` for the same reason as
+    :func:`_read_event_shard`: it must share a dtype with the events frame's ``time`` column for
+    ``join_asof`` to match against.  Dedups to distinct ``(subject_id, time)`` so the per-subject
+    row count is a count of *prediction times*, not events.
     """
     return (
-        pl.read_parquet(file_path, columns=["subject_id", "time"])
+        pl.read_parquet(file_path, columns=["subject_id", "time", "code"])
         .filter(pl.col("time").is_not_null())
         .with_columns(pl.col("time").cast(pl.Datetime("us")))
+        .pipe(_truncate_at_death)
+        .select(["subject_id", "time"])
         .unique()
         .with_columns(pl.lit(shard).alias("shard"))
     )
@@ -998,6 +1014,8 @@ def _prediction_time_cache_valid(
 
     Reuse requires *all* of:
     - the sidecar exists, parses, and its recorded ``min`` matches the requested ``min``;
+    - the sidecar records ``death_truncation: true`` — pre-#265 caches lack the field and were
+      built without post-death filtering, so they are stale;
     - the counts parquet exists and every map partition named in the sidecar exists;
     - the counts parquet agrees with the sidecar totals: ``counts.height == meta["n_subjects"]`` and
       ``sum(n_prediction_times) == meta["n_prediction_time_rows"]``.
@@ -1015,6 +1033,8 @@ def _prediction_time_cache_valid(
     except (json.JSONDecodeError, OSError):
         return False
     if meta.get("min_prediction_times_per_subject") != min_prediction_times_per_subject:
+        return False
+    if meta.get("death_truncation") is not True:
         return False
 
     shards = meta.get("shards")
@@ -1160,6 +1180,9 @@ def build_prediction_times(
     _atomic_write_json(
         {
             "min_prediction_times_per_subject": min_prediction_times_per_subject,
+            # Records that post-death rows were truncated (#265); its absence marks a pre-fix cache
+            # so _prediction_time_cache_valid forces a rebuild rather than silently reusing it.
+            "death_truncation": True,
             "split": split,
             "shards": written_shards,
             "n_subjects": eligible.height,

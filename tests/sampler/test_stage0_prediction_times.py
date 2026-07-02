@@ -5,7 +5,8 @@ has subject 1 (5 distinct times, eligible), subject 2 (3, eligible at the bounda
 (2, dropped) — so the ``+1`` boundary and the eligibility filter are both exercised.
 
 Covers the gapless+dedup index (invariant 2), eligibility, invariant 4 (no subject spans shards),
-shard partitioning, null-time dropping, and the cache reuse / invalidation / overwrite paths.
+shard partitioning, null-time dropping, death truncation (#265), and the cache reuse /
+invalidation / overwrite paths.
 """
 
 import json
@@ -14,6 +15,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from meds import death_code
 
 from every_query.generate_tasks import sample_tasks as st
 from every_query.generate_tasks.sample_tasks import (
@@ -212,3 +214,54 @@ class TestStage0:
 
         counts = pl.read_parquet(prediction_time_counts_path(artifacts_dir, "train"))
         assert dict(zip(counts["subject_id"], counts["n_prediction_times"], strict=True)) == {1: 3}
+
+    def test_post_death_times_are_dropped_and_dont_count_toward_eligibility(
+        self, tmp_path, artifacts_dir, subject_events, write_split_shards
+    ):
+        # Subject 1: 5 distinct times, MEDS_DEATH at day 2 ⇒ days 3-4 truncated, 3 remain (still
+        # eligible; the death timestamp itself is kept as a prediction time). Subject 2: 3 distinct
+        # times, MEDS_DEATH at day 1 ⇒ 2 remain — without truncation it would clear the
+        # eligibility bar on post-death timestamps alone (#265's inflation case).
+        events = pl.concat(
+            [
+                subject_events(1, 5, base=self.BASE),
+                pl.DataFrame(
+                    {"subject_id": [1], "time": [self.BASE + timedelta(days=2)], "code": [death_code]}
+                ),
+                subject_events(2, 3, base=self.BASE),
+                pl.DataFrame(
+                    {"subject_id": [2], "time": [self.BASE + timedelta(days=1)], "code": [death_code]}
+                ),
+            ]
+        )
+        path_to_data = write_split_shards(tmp_path, {"0": events})
+        n = build_prediction_times(path_to_data, artifacts_dir, "train", self.MIN)
+        assert n == 1
+
+        pmap = pl.read_parquet(prediction_times_path(artifacts_dir, "train", "0"))
+        assert pmap["subject_id"].unique().to_list() == [1]
+        s1 = pmap.filter(pl.col("subject_id") == 1).sort("prediction_time_index")
+        assert s1["time"].to_list() == [self.BASE + timedelta(days=i) for i in range(3)]
+
+        counts = pl.read_parquet(prediction_time_counts_path(artifacts_dir, "train"))
+        assert dict(zip(counts["subject_id"], counts["n_prediction_times"], strict=True)) == {1: 3}
+
+    def test_pre_death_truncation_cache_is_rebuilt(self, path_to_data, artifacts_dir, monkeypatch):
+        build_prediction_times(path_to_data, artifacts_dir, "train", self.MIN)
+        # Simulate a pre-#265 cache: sidecar without the death_truncation field.
+        meta_fp = prediction_times_meta_path(artifacts_dir, "train")
+        meta = json.loads(meta_fp.read_text())
+        del meta["death_truncation"]
+        meta_fp.write_text(json.dumps(meta))
+
+        calls = {"n": 0}
+        real = st._read_prediction_time_shard
+
+        def _spy(*args, **kwargs):
+            calls["n"] += 1
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(st, "_read_prediction_time_shard", _spy)
+        n = build_prediction_times(path_to_data, artifacts_dir, "train", self.MIN)
+        assert n == 2
+        assert calls["n"] == 1  # stale sidecar ⇒ rebuild, not silent reuse
