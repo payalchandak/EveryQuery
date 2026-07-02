@@ -300,11 +300,11 @@ def sample_patient_contexts(
         )
 
     # Step A — subject indices (consumed first), with replacement.  One row-gather over the table
-    # (same indices for every column) instead of three per-column gathers.  Drawn via `rng.integers`
-    # rather than `prediction_time_counts.sample(..., with_replacement=True)` — both do the same
-    # index-then-gather, but `pl.DataFrame.sample` takes only an int seed, not the caller-owned numpy
-    # Generator.  Using it would fork RNG state away from Step B, breaking the single-generator
-    # fixed-order determinism contract (spec invariant 5).
+    # (same indices for every column) instead of three per-column gathers.
+    # Do NOT replace `rng.integers` with `prediction_time_counts.sample(..., with_replacement=True)`:
+    # `pl.DataFrame.sample` takes only an int seed, not the caller-owned numpy Generator, so it would
+    # fork RNG state away from Step B and break the single-generator fixed-order determinism contract
+    # (spec invariant 5).
     subject_idx = rng.integers(0, patient_universe_size, size=n)
     sampled = prediction_time_counts[subject_idx]
     subject_id = sampled["subject_id"]
@@ -1025,6 +1025,10 @@ def build_prediction_times(
     # Gapless zero-based index over each subject's ascending distinct times.  No within-subject ties
     # (step above deduped), so int_range is identical to a dense rank and cheaper (invariant 2).
     # prediction_times columns: (subject_id, time, shard, prediction_time_index).
+    # This depends on `_read_prediction_time_shard` having already dropped null-`time` rows before
+    # `distinct` reaches this sort/rank — nulls sort first, so an unfiltered null would claim
+    # `prediction_time_index = 0` and inflate `n_prediction_times`. Do not reorder dedup/rank ahead of
+    # that filter.
     prediction_times = distinct.sort(["subject_id", "time"]).with_columns(
         pl.int_range(pl.len()).over("subject_id").alias("prediction_time_index")
     )
@@ -1034,6 +1038,10 @@ def build_prediction_times(
         pl.col("shard").first(),
         pl.len().alias("n_prediction_times"),
     )
+    # Strict `>` (not `>=`) is load-bearing: Stage 2 draws `rng.integers(low=min, high=n)`, which is a
+    # valid (non-empty) range only when `n > min`. `>=` would let a subject with
+    # `n_prediction_times == min_prediction_times_per_subject` reach Stage 2 and raise on an illegal
+    # empty draw range.
     eligible = counts.filter(pl.col("n_prediction_times") > min_prediction_times_per_subject).sort(
         "subject_id"
     )
