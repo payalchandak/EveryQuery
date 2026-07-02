@@ -41,7 +41,7 @@ from pathlib import Path
 import hydra
 import numpy as np
 import polars as pl
-from meds import DataSchema
+from meds import DataSchema, death_code
 from omegaconf import DictConfig, ListConfig
 
 from every_query.data.schema import TaskQuerySchema, empty_task_query_df
@@ -372,6 +372,12 @@ def evaluate_index_df(
     excludes exact-key matches from ``strategy="forward"``'s default ``>=`` search, leaving a
     strict ``>``.
 
+    Death is terminal (#257): events timestamped strictly after a subject's ``MEDS_DEATH`` row
+    (the earliest one, if duplicated) are dropped before labeling, so they neither extend
+    ``max_time`` nor satisfy an occurrence match.  The death row itself is kept, so
+    ``MEDS_DEATH`` remains answerable as a query code; subjects with no death row are
+    unaffected.  This is a no-op when ``MEDS_DEATH`` is already the last recorded event.
+
     Args:
         index_df: Output of ``build_index_df``. Must have columns ``subject_id``, ``prediction_time``,
             ``query``, ``duration_days``. If ``task_id`` is present it is ignored and dropped from
@@ -407,6 +413,17 @@ def evaluate_index_df(
     # dtypes, guaranteed to pass ``TaskQuerySchema.align()`` downstream.
     if index_df.height == 0:
         return empty_task_query_df().select(out_cols)
+
+    # Truncate each subject's record at death (see docstring, #257).  Must happen before *both*
+    # consumers of events_df below — max_time_per_subject and the join_asof right side — or a
+    # post-death event could still asof-match into an occurrence.  ``<=`` keeps the death row.
+    death_time = (
+        pl.col(DataSchema.time_name)
+        .filter(pl.col(DataSchema.code_name) == death_code)
+        .min()
+        .over(DataSchema.subject_id_name)
+    )
+    events_df = events_df.filter(death_time.is_null() | (pl.col(DataSchema.time_name) <= death_time))
 
     max_time_per_subject = events_df.group_by(DataSchema.subject_id_name).agg(
         pl.col(DataSchema.time_name).max().alias("max_time")

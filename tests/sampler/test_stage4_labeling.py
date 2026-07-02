@@ -11,6 +11,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from meds import death_code
 
 from every_query.generate_tasks import sample_tasks as st
 from every_query.generate_tasks.sample_tasks import (
@@ -227,6 +228,108 @@ class TestEvaluateIndexDfEdgeCases:
         result = evaluate_index_df(index_df, events)
         assert result.height == 1
         assert result["boolean_value"].to_list() == [True]
+
+
+class TestDeathTruncation:
+    """Death is terminal (#257): events after a subject's ``MEDS_DEATH`` row are unobservable.
+
+    Truncation happens inside ``evaluate_index_df`` on ``events_df`` itself, so it affects both
+    ``max_time`` (censoring boundary) and occurrence matching, while the death row itself stays
+    queryable.
+    """
+
+    BASE = datetime(2020, 1, 1)
+
+    def _label(self, events: pl.DataFrame, query: str, duration_days: float) -> bool | None:
+        events = events.with_columns(pl.col("time").cast(pl.Datetime("us"))).sort(["subject_id", "time"])
+        index_df = pl.DataFrame(
+            {
+                "subject_id": [1],
+                "prediction_time": [self.BASE],
+                "query": [query],
+                "duration_days": [duration_days],
+            }
+        ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
+        result = evaluate_index_df(index_df, events)
+        assert result.height == 1
+        return result["boolean_value"].to_list()[0]
+
+    def test_death_as_last_event_is_a_noop(self):
+        """Regression guard: ``MEDS_DEATH`` already last → identical to pre-#257 behavior.
+
+        ``max_time = death (day 10)``; the 30d window runs past it with no matching event → null.
+        """
+        events = pl.DataFrame(
+            {
+                "subject_id": [1, 1],
+                "time": [self.BASE + timedelta(days=3), self.BASE + timedelta(days=10)],
+                "code": ["B", death_code],
+            }
+        )
+        assert self._label(events, query="A", duration_days=30.0) is None
+
+    def test_event_after_death_neither_matches_nor_extends_max_time(self):
+        """The drift case: a post-death event (day 20) must be invisible.
+
+        - query "A" (the post-death code, in the 30d window): must not match → and because
+          ``max_time`` is now the death time (day 10) < window end (day 30), the label is
+          null (censored), not True and not False.
+        - query "B" with a 5d window fully observed before death: still False (truncation
+          doesn't disturb pre-death labeling).
+        """
+        events = pl.DataFrame(
+            {
+                "subject_id": [1, 1, 1],
+                "time": [
+                    self.BASE + timedelta(days=3),
+                    self.BASE + timedelta(days=10),
+                    self.BASE + timedelta(days=20),  # post-death drift row
+                ],
+                "code": ["C", death_code, "A"],
+            }
+        )
+        assert self._label(events, query="A", duration_days=30.0) is None
+        assert self._label(events, query="B", duration_days=5.0) is False
+
+    def test_death_code_itself_is_still_queryable(self):
+        """A query on ``MEDS_DEATH`` occurring in-window resolves True: the death row is kept (``<=``, not
+        ``<``) and occurrence takes priority over censoring."""
+        events = pl.DataFrame(
+            {
+                "subject_id": [1, 1],
+                "time": [self.BASE + timedelta(days=3), self.BASE + timedelta(days=10)],
+                "code": ["B", death_code],
+            }
+        )
+        assert self._label(events, query=death_code, duration_days=30.0) is True
+
+    def test_no_death_row_is_unaffected(self):
+        """No ``MEDS_DEATH`` for the subject → truncation is a no-op; day-100 event keeps the 7d window fully
+        observed → False."""
+        events = pl.DataFrame(
+            {
+                "subject_id": [1],
+                "time": [self.BASE + timedelta(days=100)],
+                "code": ["B"],
+            }
+        )
+        assert self._label(events, query="A", duration_days=7.0) is False
+
+    def test_duplicate_death_rows_use_earliest(self):
+        """Two ``MEDS_DEATH`` rows (data-quality edge) truncate at the *earlier* one: the "A" event between
+        the two death times must not match → censored null."""
+        events = pl.DataFrame(
+            {
+                "subject_id": [1, 1, 1],
+                "time": [
+                    self.BASE + timedelta(days=10),
+                    self.BASE + timedelta(days=15),  # between the two death rows → dropped
+                    self.BASE + timedelta(days=20),
+                ],
+                "code": [death_code, "A", death_code],
+            }
+        )
+        assert self._label(events, query="A", duration_days=30.0) is None
 
 
 class TestBooleanValueTruthTable:
