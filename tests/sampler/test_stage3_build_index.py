@@ -146,13 +146,14 @@ class TestStage3:
         with pytest.raises(ValueError, match="dtype mismatch"):
             build_index(queries, contexts, artifacts_dir, "train", num_contexts_per_query=1)
 
-    def test_empty_queries(self, stage0_env):
+    def test_empty_queries_raises(self, stage0_env):
+        """There is no supported empty-budget path: an empty ``queries``/``contexts`` must fail loudly."""
         _, artifacts_dir = stage0_env
         contexts = pl.DataFrame(
             schema={"subject_id": pl.Int64, "shard": pl.Utf8, "prediction_time_index": pl.Int64}
         )
-        build_index([], contexts, artifacts_dir, "train", num_contexts_per_query=3)
-        assert not index_path(artifacts_dir, "train", "0").exists()
+        with pytest.raises(AssertionError):
+            build_index([], contexts, artifacts_dir, "train", num_contexts_per_query=3)
 
     def test_height_mismatch_raises(self, stage0_env):
         _, artifacts_dir = stage0_env

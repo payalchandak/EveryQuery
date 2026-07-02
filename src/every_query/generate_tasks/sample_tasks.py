@@ -1126,11 +1126,13 @@ def build_index(
         num_contexts_per_query: Number of patient contexts per query (the ``M`` multiplier).
 
     Returns:
-        ``n_shards`` — the number of index partitions written (0 when there are no queries/contexts).
+        ``n_shards`` — the number of index partitions written.
 
     Raises:
         ValueError: If ``contexts.height != len(queries) * num_contexts_per_query``, or if
             any context fails to resolve a prediction time (null after join).
+        AssertionError: If ``queries`` or ``contexts`` is empty — there is no supported empty-budget
+            path through this pipeline.
     """
     n_queries = len(queries)
     expected = n_queries * num_contexts_per_query
@@ -1141,8 +1143,8 @@ def build_index(
             f"len(queries) * num_contexts_per_query ({n_queries} * {num_contexts_per_query} = {expected})"
         )
 
-    if n_queries == 0 or contexts.height == 0:
-        return 0
+    assert n_queries > 0, "queries must be non-empty"
+    assert contexts.height > 0, "contexts must be non-empty"
 
     query_col = pl.Series(
         TaskQuerySchema.query_name,
