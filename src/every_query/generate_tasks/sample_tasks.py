@@ -363,11 +363,19 @@ def evaluate_index_df(
         index_df: Output of ``build_index_df``. Must have columns ``subject_id``, ``prediction_time``,
             ``query``, ``duration_days``. If ``task_id`` is present it is ignored and dropped from
             the output.
-        events_df: Shard events with columns ``subject_id``, ``time``, ``code``.
+        events_df: Shard events with columns ``subject_id``, ``time``, ``code``.  Every subject
+            in ``index_df`` must have at least one non-null-``time`` event here (guaranteed when
+            ``index_df`` derives from the same shard read via :func:`_read_event_shard`).
 
     Returns:
         DataFrame with columns ``(subject_id, prediction_time, boolean_value, query,
         duration_days)``.  ``boolean_value`` is nullable (``null`` = censored).
+
+    Raises:
+        ValueError: If any ``index_df`` row references a subject with no events in ``events_df``.
+            Both pipelines build ``index_df`` from the same shard as ``events_df``, so an unknown
+            subject means the inputs are mismatched (e.g. a stale ``_prediction_times`` cache) —
+            labeling would silently proceed on the wrong data.
     """
     # Output column set lives on ``TaskQuerySchema`` — the 4 required columns plus the
     # inherited (optional) ``boolean_value`` for the collapsed label.  Defining it once
@@ -449,24 +457,21 @@ def evaluate_index_df(
     )
     joined = joined.join(max_time_per_subject, on=TaskQuerySchema.subject_id_name, how="left")
 
-    # Rows whose subject is not present in max_time_per_subject (typically a pre-seeded or
-    # hand-edited index_df referencing subjects outside this shard) come out of the left join
-    # with max_time=null.  A naïve comparison would produce null booleans, which is the
-    # correct "censored" signal under the collapsed label semantics — so we just log a
-    # warning for visibility and let the `(window_end > max_time).fill_null(True)` below
-    # resolve the missing-subject case to censored.
+    # Rows whose subject is not present in max_time_per_subject come out of the left join with
+    # max_time=null.  Both pipelines build index_df and events_df from the same shard, so this
+    # can only mean mismatched inputs (e.g. a stale _prediction_times cache) — raise rather than
+    # launder the mismatch into censored labels (see docstring Raises).
     n_unknown = joined.filter(pl.col("max_time").is_null()).height
     if n_unknown > 0:
-        logger.warning(
-            "%d index_df row(s) reference subjects not present in events_df; "
-            "they will be labeled as censored (boolean_value=null).",
-            n_unknown,
+        raise ValueError(
+            f"{n_unknown} index_df row(s) reference subjects with no events in events_df; "
+            "index_df and events_df must come from the same shard — this indicates mismatched "
+            "inputs (e.g. a stale _prediction_times cache)."
         )
 
     duration_expr = pl.duration(seconds=pl.col(TaskQuerySchema.duration_days_name) * 86_400)
     window_end = pl.col(TaskQuerySchema.prediction_time_name) + duration_expr
-    # `(window_end > max_time).fill_null(True)` resolves the missing-subject case to censored.
-    censored = (window_end > pl.col("max_time")).fill_null(True)
+    censored = window_end > pl.col("max_time")
     event_in_window = pl.col(DataSchema.time_name).is_not_null() & (
         pl.col(DataSchema.time_name) <= window_end
     )

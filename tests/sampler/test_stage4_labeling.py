@@ -1,7 +1,7 @@
 """Stage 4: per-shard labeling — ``evaluate_index_df`` (pure core) + ``label_one_shard`` (worker).
 
 Covers the three-valued label (True / False / null-censored), strict-``>`` at prediction_time,
-inclusive window-end, missing-subject censoring, dtype normalization on the event-shard read path,
+inclusive window-end, the unknown-subject raise, dtype normalization on the event-shard read path,
 the worker's skip/overwrite/atomicity behavior, and stale-temp cleanup.  Gap tests pin the
 forward-only asof direction (past events don't count) and query-code isolation.
 """
@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from every_query.generate_tasks import sample_tasks as st
 from every_query.generate_tasks.sample_tasks import (
@@ -120,9 +121,9 @@ class TestEvaluateIndexDfEdgeCases:
         labels = {row["subject_id"]: row["boolean_value"] for row in result.iter_rows(named=True)}
         assert labels == {1: True, 2: False}
 
-    def test_unknown_subject_is_treated_as_censored(self, caplog):
-        """An index_df row referencing a subject absent from events_df resolves to censored (``boolean_value =
-        null``) under the collapsed schema, and emits a warning."""
+    def test_unknown_subject_raises(self):
+        """An index_df row referencing a subject absent from events_df raises: index_df and events_df
+        must come from the same shard, so an unknown subject means mismatched inputs."""
         events = pl.DataFrame(
             {
                 "subject_id": [1],
@@ -141,17 +142,8 @@ class TestEvaluateIndexDfEdgeCases:
             }
         ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
 
-        with caplog.at_level("WARNING", logger="every_query.generate_tasks.sample_tasks"):
-            result = evaluate_index_df(index_df, events)
-
-        # Subject 2 (unknown) → censored → null boolean_value.
-        unknown = result.filter(pl.col("subject_id") == 2)
-        assert unknown["boolean_value"].to_list() == [None]
-
-        # Warning was emitted with a count.
-        assert any("not present in events_df" in record.message for record in caplog.records), (
-            f"expected unknown-subject warning, got: {[r.message for r in caplog.records]}"
-        )
+        with pytest.raises(ValueError, match="no events in events_df"):
+            evaluate_index_df(index_df, events)
 
     # -- Gap tests: asof direction + query-code isolation -----------------------------------------
 
