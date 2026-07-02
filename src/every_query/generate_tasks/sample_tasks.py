@@ -502,10 +502,14 @@ def _read_event_shard(file_path: str | Path) -> pl.DataFrame:
     - ``time`` is cast to ``pl.Datetime("us")`` to match the dtype ``evaluate_index_df`` uses for
       ``index_df``'s ``prediction_time`` (see :func:`_read_prediction_time_shard`); ``join_asof``
       requires its ``left_on``/``right_on`` columns to share a dtype.
+    - Null-``time`` rows (MEDS static measurements, e.g. demographics) are dropped, mirroring
+      :func:`_read_prediction_time_shard`: they are not events in time, and their handling by
+      ``join_asof``'s key search is unspecified rather than guaranteed-skipped.
     """
     return (
         pl.read_parquet(file_path)
         .select(["subject_id", "time", "code"])
+        .filter(pl.col("time").is_not_null())
         .with_columns(
             pl.col("time").cast(pl.Datetime("us")),
             pl.col("code").cast(pl.Utf8),
