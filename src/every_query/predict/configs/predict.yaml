@@ -55,6 +55,13 @@ save_embeddings: false
 # the saved training ``resolved_config.yaml``.
 batch_size: null
 
+# Optional: override the dataloader worker count for inference.  Defaults to null,
+# which reuses the training run's ``datamodule.num_workers`` (typically 1).  With
+# large task frames a single worker starves the GPU building per-row sequences;
+# raising this (e.g. to the SLURM cpus-per-task) is usually the biggest throughput
+# win.  Does not touch the saved training ``resolved_config.yaml``.
+num_workers: null
+
 hydra:
   output_subdir: null
   job:

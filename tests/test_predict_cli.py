@@ -220,6 +220,50 @@ def test_eq_predict_batch_size_override(
     assert set(df["query"].to_list()) == set(_QUERY_CODES)
 
 
+def test_eq_predict_num_workers_override(
+    eq_trained_model_dir: Path,
+    predict_tasks_dir: Path,
+    tmp_path: Path,
+) -> None:
+    """``num_workers=N`` overrides the inherited training ``datamodule.num_workers``.
+
+    Runs predict with ``num_workers=2`` (multi-worker dataloading) against the same
+    fixture as the baseline test and asserts the output is still
+    ``PredictionSchema``-conformant with the expected row count and bounded
+    probabilities.  The override path mutates ``train_cfg`` in memory only;
+    ``resolved_config.yaml`` on disk is untouched.
+    """
+    output_parquet = tmp_path / "predictions.parquet"
+
+    env = os.environ.copy()
+    env["PATH"] = _VENV_BIN + os.pathsep + env.get("PATH", "")
+
+    cmd = [
+        "EQ_predict",
+        f"model_run_dir={eq_trained_model_dir}",
+        f"tasks_dir={predict_tasks_dir}",
+        f"output_parquet={output_parquet}",
+        "num_workers=2",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+    assert result.returncode == 0, (
+        f"EQ_predict failed (rc={result.returncode})\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert output_parquet.exists(), "EQ_predict did not produce the output parquet"
+
+    table = pq.read_table(output_parquet)
+    PredictionSchema.align(table)
+
+    df = pl.from_arrow(table)
+    assert df.height == len(_QUERY_CODES), (
+        f"Expected {len(_QUERY_CODES)} prediction rows (one per query), got {df.height}"
+    )
+    for col in ("censor_prob", "occurs_prob"):
+        col_min = float(df[col].min())
+        col_max = float(df[col].max())
+        assert 0.0 <= col_min <= col_max <= 1.0, f"{col} not in [0,1]: min={col_min} max={col_max}"
+
+
 def test_eq_predict_save_embeddings(
     eq_trained_model_dir: Path,
     predict_tasks_dir: Path,

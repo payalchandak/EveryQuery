@@ -520,6 +520,9 @@ def main(cfg: DictConfig) -> None:
     batch_size_override = cfg.get("batch_size")
     if batch_size_override is not None:
         train_cfg.datamodule.batch_size = int(batch_size_override)
+    num_workers_override = cfg.get("num_workers")
+    if num_workers_override is not None:
+        train_cfg.datamodule.num_workers = int(num_workers_override)
     train_cfg.datamodule.config.task_labels_dir = str(tasks_dir)
     D = instantiate(train_cfg.datamodule)
 
