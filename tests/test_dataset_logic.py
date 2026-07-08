@@ -231,3 +231,55 @@ class TestDifferentQueryStringProducesDifferentIndex:
             f"Position 0 for sample 1 should carry encoded {query_b!r} ({enc_b}), "
             f"got {batch.code[1, 0].item()}"
         )
+
+
+class TestTuningLabelsShuffled:
+    """``labels_df`` must deterministically shuffle rows for the tuning split only.
+
+    The sampler writes label shards sorted by ``(subject_id, query, prediction_time)`` and the
+    val dataloader doesn't shuffle, so without this ``limit_val_batches`` would only ever see
+    the first shard's lowest subject_ids.  Train/held_out keep file order (train shuffles at the
+    sampler level; ``EQ_predict`` relies on order-preserving iteration).
+    """
+
+    def _dataset(self, tensorized_cohort_dir, task_labels_dir, split):
+        from meds_torchdata.config import MEDSTorchDataConfig
+
+        cfg = MEDSTorchDataConfig(
+            tensorized_cohort_dir=str(tensorized_cohort_dir),
+            task_labels_dir=str(task_labels_dir),
+            max_seq_len=64,
+            seq_sampling_strategy="to_end",
+            static_inclusion_mode="omit",
+            batch_mode="SM",
+        )
+        return EveryQueryPytorchDataset(cfg, split=split)
+
+    def test_tuning_shuffled_train_not(self, tensorized_cohort_dir, task_labels_dir):
+        import polars as pl
+        from meds import train_split, tuning_split
+
+        file_order = pl.concat(
+            [
+                pl.read_parquet(fp, columns=["subject_id", "prediction_time", "query"])
+                for fp in sorted(task_labels_dir.rglob("*.parquet"))
+            ]
+        )
+        key_cols = file_order.columns
+
+        train_ds = self._dataset(tensorized_cohort_dir, task_labels_dir, train_split)
+        assert train_ds.labels_df.select(key_cols).equals(file_order), (
+            "train labels_df must preserve file order"
+        )
+
+        tuning_ds = self._dataset(tensorized_cohort_dir, task_labels_dir, tuning_split)
+        tuning_labels = tuning_ds.labels_df.select(key_cols)
+        assert not tuning_labels.equals(file_order), "tuning labels_df must be shuffled"
+        assert tuning_labels.sort(key_cols).equals(file_order.sort(key_cols)), (
+            "shuffle must be a permutation — same rows, different order"
+        )
+
+        again = self._dataset(tensorized_cohort_dir, task_labels_dir, tuning_split)
+        assert again.labels_df.select(key_cols).equals(tuning_labels), (
+            "tuning shuffle must be deterministic (fixed seed)"
+        )

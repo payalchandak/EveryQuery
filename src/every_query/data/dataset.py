@@ -7,7 +7,7 @@ import numpy as np
 import polars as pl
 import pyarrow.parquet as pq
 import torch
-from meds import DataSchema, LabelSchema
+from meds import DataSchema, LabelSchema, tuning_split
 from meds_torchdata import MEDSPytorchDataset
 from meds_torchdata.config import MEDSTorchDataConfig
 from meds_torchdata.types import BatchMode, MEDSTorchBatch
@@ -392,7 +392,15 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
             return pl.read_parquet(fp, columns=label_cols, use_pyarrow=True)
 
         logger.info(f"Reading tasks from {self.config.task_labels_fps}")
-        return pl.concat([read_df(fp) for fp in self.config.task_labels_fps], how="vertical")
+        df = pl.concat([read_df(fp) for fp in self.config.task_labels_fps], how="vertical")
+        if self.split == tuning_split:
+            # The label shards are sorted by (subject_id, query, prediction_time) and the val
+            # dataloader doesn't shuffle, so `limit_val_batches` would otherwise only ever see the
+            # first shard's lowest subject_ids.  Fixed seed keeps tuning/loss comparable across
+            # runs and resumes.  Note: EQ_predict split=tuning output inherits this shuffled row
+            # order (still correct — identifiers travel with each row).
+            df = df.sample(fraction=1.0, shuffle=True, seed=0)
+        return df
 
     def encode_query(self, code_name: str) -> int:
         """Encode query using the canonical code vocabulary mapping."""
