@@ -6,9 +6,13 @@ and the relationship between raw logits and predicted probabilities.
 """
 
 from functools import partial
+from unittest.mock import patch
 
+import pytest
 import torch
 
+from every_query.data.dataset import EveryQueryBatch
+from every_query.model import EveryQueryOutput
 from every_query.model.lightning_module import EveryQueryLightningModule
 
 _CONFIGURED_WD = 0.01
@@ -117,3 +121,105 @@ class TestPredictProbsEqualSigmoidOfLogits:
         assert torch.allclose(preds["censor_probs"], expected), (
             f"censor_probs mismatch:\n  predict_step: {preds['censor_probs']}\n  sigmoid(logits): {expected}"
         )
+
+
+class _StubOccursModel(torch.nn.Module):
+    """Fake model returning ``EveryQueryOutput`` built from a queue of caller-pinned occurs logits.
+
+    Ignores the batch's actual sequence data entirely — each ``forward`` call consumes
+    ``batch.query.shape[0]`` logits off the front of the queue (in the order the test
+    enqueued them) so tests can pin exact per-row probabilities without a real transformer.
+    """
+
+    def __init__(self, logits: list[float]):
+        super().__init__()
+        self._dummy_param = torch.nn.Parameter(torch.zeros(1))
+        self._logits = list(logits)
+
+    def forward(self, batch: EveryQueryBatch):
+        n = batch.query.shape[0]
+        row_logits = torch.tensor(self._logits[:n], dtype=torch.float32).unsqueeze(1)
+        self._logits = self._logits[n:]
+        outputs = EveryQueryOutput(last_hidden_state=None, occurs_logits=row_logits)
+        return torch.tensor(0.0), outputs
+
+
+def _make_tracking_batch(queries: list[int], durations: list[float], occurs: list[int]) -> EveryQueryBatch:
+    n = len(queries)
+    seq_len = 2
+    return EveryQueryBatch(
+        code=torch.zeros(n, seq_len, dtype=torch.long),
+        numeric_value=torch.zeros(n, seq_len),
+        numeric_value_mask=torch.zeros(n, seq_len, dtype=torch.bool),
+        time_delta_days=torch.zeros(n, seq_len),
+        occurs=torch.tensor(occurs, dtype=torch.long),
+        query=torch.tensor(queries, dtype=torch.long),
+        duration_days=torch.tensor(durations, dtype=torch.float32),
+    )
+
+
+class TestSampledTaskAurocTracking:
+    """``_compute_sampled_task_auroc`` — macro win/tie/loss AUROC over precomputed pairs.
+
+    Each task in the tracking set contributes exactly one positive and one negative row;
+    per-task AUROC collapses to an indicator on which of the two scored higher.
+    """
+
+    def test_no_op_when_tracking_not_configured(self, demo_model):
+        module = EveryQueryLightningModule(model=demo_model)
+        assert module._task_tracking_loader is None
+
+        with patch.object(module, "log") as mock_log:
+            module._compute_sampled_task_auroc()
+
+        mock_log.assert_not_called()
+
+    def test_macro_average_win_tie_loss(self):
+        # Task 10: neg logit -10 (~0 prob), pos logit +10 (~1 prob) -> win  (indicator 1.0)
+        # Task 20: neg logit +10 (~1 prob), pos logit -10 (~0 prob) -> loss (indicator 0.0)
+        # Task 30: neg logit  0.0,          pos logit  0.0 (tie)    -> tie  (indicator 0.5)
+        queries = [10, 10, 20, 20, 30, 30]
+        durations = [7.0] * 6
+        occurs = [0, 1, 0, 1, 0, 1]
+        logits = [-10.0, 10.0, 10.0, -10.0, 0.0, 0.0]
+
+        module = EveryQueryLightningModule(model=_StubOccursModel(logits))
+        module._task_tracking_loader = [_make_tracking_batch(queries, durations, occurs)]
+
+        logged = {}
+        with patch.object(
+            module, "log", side_effect=lambda name, value, **kw: logged.__setitem__(name, value)
+        ):
+            module._compute_sampled_task_auroc()
+
+        assert logged["tuning/occurs_auroc_macro_sampled_n_tasks"] == 3.0
+        assert logged["tuning/occurs_auroc_macro_sampled"] == pytest.approx((1.0 + 0.0 + 0.5) / 3)
+
+    def test_tasks_missing_a_class_are_dropped(self):
+        # Task 10 has both classes (win); task 20 only has a positive row and is dropped.
+        queries = [10, 10, 20]
+        durations = [7.0, 7.0, 7.0]
+        occurs = [0, 1, 1]
+        logits = [-10.0, 10.0, 0.0]
+
+        module = EveryQueryLightningModule(model=_StubOccursModel(logits))
+        module._task_tracking_loader = [_make_tracking_batch(queries, durations, occurs)]
+
+        logged = {}
+        with patch.object(
+            module, "log", side_effect=lambda name, value, **kw: logged.__setitem__(name, value)
+        ):
+            module._compute_sampled_task_auroc()
+
+        assert logged["tuning/occurs_auroc_macro_sampled_n_tasks"] == 1.0
+        assert logged["tuning/occurs_auroc_macro_sampled"] == pytest.approx(1.0)
+
+    def test_restores_model_train_mode(self):
+        module = EveryQueryLightningModule(model=_StubOccursModel([0.0, 0.0]))
+        module.model.train()
+        module._task_tracking_loader = [_make_tracking_batch([10, 10], [7.0, 7.0], [0, 1])]
+
+        with patch.object(module, "log"):
+            module._compute_sampled_task_auroc()
+
+        assert module.model.training is True

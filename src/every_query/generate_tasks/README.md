@@ -37,7 +37,17 @@ different row distributions:
     `EQ_generate_evaluation_tasks` and runnable as
     `python -m every_query.generate_tasks.sample_evaluation_tasks`.
 
+- **`sample_task_tracking_pairs.py`** — compact per-task AUROC-tracking sampler.
+    Consumes `EQ_generate_evaluation_tasks`'s labeled output (typically `split=tuning`)
+    and, per `(query, duration_days)` task, samples exactly one positive + one negative
+    row into a single small parquet (2 rows/task). Registered as
+    `EQ_sample_task_tracking_pairs` and runnable as
+    `python -m every_query.generate_tasks.sample_task_tracking_pairs`. Feeds
+    `EveryQueryLightningModule`'s optional in-training task-tracking dataloader — see
+    `lightning_module.task_auroc_tracking` in `train/configs/config.yaml`.
+
 - **`configs/sample_training_tasks_config.yaml`** / **`configs/sample_evaluation_tasks_config.yaml`**
+    / **`configs/sample_task_tracking_pairs_config.yaml`**
     — shipped Hydra configs. Path roots (`data_dir`, `out_dir`, and `query_codes` — pass the
     metadata root dir to load the full universe) are **required Hydra args** — no `.env`/env-var
     fallback (see [#235](https://github.com/payalchandak/EveryQuery/issues/235)). Pass them as
@@ -50,6 +60,8 @@ different row distributions:
 preprocessing/     →  generate_tasks/                   →  train/      →  predict/   →  evaluate/
 EQ_process_data       EQ_generate_training_tasks           EQ_train       EQ_predict     EQ_evaluate
                       EQ_generate_evaluation_tasks ────────────────────►  (inference input)
+                      EQ_generate_evaluation_tasks(split=tuning)
+                        → EQ_sample_task_tracking_pairs ──►  (in-training tracking input)
 ```
 
 Both endpoints consume:
@@ -110,6 +122,25 @@ EQ_generate_evaluation_tasks -m \
 	input_shard=0,1,2,... split=held_out
 ```
 
+### Task-tracking pairs — one compact parquet for in-training AUROC monitoring
+
+```bash
+# First, generate dense tuning-split labels the same way as above (note split=tuning):
+EQ_generate_evaluation_tasks -m \
+	input_shard=0,1,2,... split=tuning \
+	query_codes=$TENSORIZED_COHORT_DIR durations=[30,90,180,365,731]
+
+# Then sample one pos/neg pair per task from that output:
+EQ_sample_task_tracking_pairs \
+	eval_labels_dir=$EVAL_TASKS_DIR/eval out_dir=$TASK_TRACKING_DIR split=tuning
+```
+
+This is a one-time offline step; the resulting `$TASK_TRACKING_DIR/tuning/0.parquet` is
+small (2 rows per task) and fixed for the duration of a training run — point
+`lightning_module.task_auroc_tracking.config.task_labels_dir` at `$TASK_TRACKING_DIR` to
+have `EQ_train` log a macro-averaged, per-task-sampled AUROC (`tuning/occurs_auroc_macro_sampled`)
+every validation pass, without paying the cost of scoring the full tuning split.
+
 ## Determinism & restartability
 
 All training draws derive from `seed` via `utils.seeds.derive_seed`, splitting the **query
@@ -118,7 +149,10 @@ so they reproduce independently for a fixed seed. Stage 4 writes each shard via 
 `os.replace`, so a present `{shard}.parquet` is always complete; reruns skip finished shards
 (idempotent), and `overwrite=true` forces relabeling. The evaluation generator has only a
 prediction-time axis (codes and durations are caller-specified), so its seed derives on
-`(seed, split, input_shard)` and each worker writes idempotently.
+`(seed, split, input_shard)` and each worker writes idempotently. The task-tracking
+sampler derives its per-(task, class) sample key on `(seed, "task_tracking_pairs", split)`
+and writes its single output file atomically the same way; it skips work if the output
+already exists unless `overwrite=true`.
 
 ## Related
 

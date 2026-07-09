@@ -74,6 +74,7 @@ every_query = ["**/*.yaml"]
 EQ_process_data = "every_query.preprocessing.__main__:main"
 EQ_generate_training_tasks = "every_query.generate_tasks.sample_tasks:main"
 EQ_generate_evaluation_tasks = "every_query.generate_tasks.sample_evaluation_tasks:main"
+EQ_sample_task_tracking_pairs = "every_query.generate_tasks.sample_task_tracking_pairs:main"
 EQ_train = "every_query.train.train:main"
 EQ_predict = "every_query.predict.predict:main"
 # EQ_evaluate points at the single-stage evaluator (consumes a PredictionSchema

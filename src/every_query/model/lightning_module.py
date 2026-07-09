@@ -1,4 +1,5 @@
 import copy
+import dataclasses
 import logging
 import re
 from collections.abc import Callable, Iterator
@@ -12,7 +13,7 @@ import torch.nn.parameter
 from meds import held_out_split, train_split, tuning_split
 from torchmetrics.classification import BinaryAUROC
 
-from every_query.data.dataset import EveryQueryBatch
+from every_query.data.dataset import EveryQueryBatch, EveryQueryPytorchDataset
 
 from .model import EveryQueryModel, EveryQueryOutput
 
@@ -122,11 +123,19 @@ class EveryQueryLightningModule(L.LightningModule):
         model: EveryQueryModel,
         optimizer: Callable[[Iterator[torch.nn.parameter.Parameter]], torch.optim.Optimizer] | None = None,
         LR_scheduler: Callable[[torch.optim.Optimizer], torch.optim.lr_scheduler._LRScheduler] | None = None,
+        task_auroc_tracking: dict[str, Any] | None = None,
     ):
         super().__init__()
         self.model = model
         self.optimizer_factory = optimizer
         self.LR_scheduler_factory = LR_scheduler
+
+        # Optional cheap per-task AUROC tracking (see `_compute_sampled_task_auroc`).
+        # Expected shape: {"config": <instantiated meds_torchdata.MEDSTorchDataConfig
+        # whose task_labels_dir points at every_query.generate_tasks.sample_task_tracking_pairs
+        # output>, "batch_size": int}. None disables the feature entirely (default).
+        self.task_tracking_cfg = task_auroc_tracking
+        self._task_tracking_loader: torch.utils.data.DataLoader | None = None
 
         self.metrics = {
             train_split: {},
@@ -153,6 +162,23 @@ class EveryQueryLightningModule(L.LightningModule):
         for split in (tuning_split, held_out_split, "predict"):
             for m in self.metrics.get(split, {}).values():
                 m.to("cpu")
+
+        if (
+            self.task_tracking_cfg is not None
+            and stage in ("fit", "validate")
+            and self._task_tracking_loader is None
+        ):
+            # Built once — the tracking labels are a fixed, offline-generated file (see
+            # every_query.generate_tasks.sample_task_tracking_pairs), so there's no need to
+            # re-read/re-instantiate it every validation epoch.
+            dataset = EveryQueryPytorchDataset(self.task_tracking_cfg["config"], split=tuning_split)
+            self._task_tracking_loader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=self.task_tracking_cfg.get("batch_size", 256),
+                shuffle=False,
+                collate_fn=dataset.collate,
+                num_workers=0,
+            )
 
     def _update_metric(self, name: str, split: str, **kwargs):
         metric = self.metrics.get(split, {}).get(name)
@@ -192,8 +218,84 @@ class EveryQueryLightningModule(L.LightningModule):
 
             metric.reset()
 
+    @staticmethod
+    def _move_batch_to_device(batch: EveryQueryBatch, device: torch.device) -> EveryQueryBatch:
+        """Move every tensor field of a dataclass batch to ``device``, leaving non-tensor fields as-is.
+
+        Generic over ``EveryQueryBatch``'s (and its ``MEDSTorchBatch`` base's) exact field set, so it
+        doesn't need to be kept in sync with upstream ``meds_torchdata`` changes.
+        """
+        updates = {
+            f.name: value.to(device)
+            for f in dataclasses.fields(batch)
+            if isinstance(value := getattr(batch, f.name), torch.Tensor)
+        }
+        return dataclasses.replace(batch, **updates)
+
+    @torch.no_grad()
+    def _compute_sampled_task_auroc(self):
+        """Log a cheap, macro-averaged per-task AUROC estimate from precomputed pos/neg pairs.
+
+        Scores the fixed task-tracking dataloader built in ``setup()`` (one positive + one
+        negative row per ``(query, duration_days)`` task — see
+        ``every_query.generate_tasks.sample_task_tracking_pairs``). For each task with both
+        rows present, computes the win/tie/loss indicator
+        ``1(prob_pos > prob_neg) + 0.5 * 1(prob_pos == prob_neg)`` — an unbiased single-sample
+        estimate of that task's true AUROC (``AUROC = P(score(pos) > score(neg))``).
+        Macro-averaging those indicators across tasks estimates the per-task-averaged AUROC
+        computed offline in ``evaluate/metrics.py`` at a cost of ``O(n_tasks)`` forward
+        examples instead of ``O(tuning-split size)``. No-op if tracking isn't configured.
+        """
+        loader = self._task_tracking_loader
+        if loader is None:
+            return
+
+        was_training = self.model.training
+        self.model.eval()
+
+        probs_by_task: dict[tuple[int, float], dict[int, float]] = {}
+        try:
+            for batch in loader:
+                batch = self._move_batch_to_device(batch, self.device)
+                _, outputs = self.model(batch)
+                # Squeeze only dim 1 (not `outputs.occurs_probs`'s bare `.squeeze()`), so a
+                # trailing partial batch of size 1 doesn't collapse to a 0-d scalar — same
+                # guard `_log_metrics` applies above.
+                probs = outputs.occurs_logits.detach().cpu().squeeze(1).sigmoid().float().tolist()
+                queries = batch.query.detach().cpu().tolist()
+                durations = batch.duration_days.detach().cpu().tolist()
+                labels = batch.occurs.detach().cpu().tolist()
+                for query, duration, label, prob in zip(queries, durations, labels, probs, strict=True):
+                    probs_by_task.setdefault((query, duration), {})[int(label)] = prob
+        finally:
+            if was_training:
+                self.model.train()
+
+        indicators = []
+        for task_probs in probs_by_task.values():
+            if 1 not in task_probs or 0 not in task_probs:
+                continue
+            pos_prob, neg_prob = task_probs[1], task_probs[0]
+            if pos_prob > neg_prob:
+                indicators.append(1.0)
+            elif pos_prob < neg_prob:
+                indicators.append(0.0)
+            else:
+                indicators.append(0.5)
+
+        if not indicators:
+            return
+
+        self.log(
+            "tuning/occurs_auroc_macro_sampled",
+            sum(indicators) / len(indicators),
+            sync_dist=True,
+        )
+        self.log("tuning/occurs_auroc_macro_sampled_n_tasks", float(len(indicators)), sync_dist=True)
+
     def on_validation_epoch_end(self):
         self._on_epoch_end(tuning_split)
+        self._compute_sampled_task_auroc()
 
     def on_test_epoch_end(self):
         self._on_epoch_end(held_out_split)
