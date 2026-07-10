@@ -41,6 +41,7 @@ datamodule:
 
 lightning_module:
   _target_: every_query.model.lightning_module.EveryQueryLightningModule
+  grad_norm_log_every_n_steps: 1000 # log per-task encoder grad norms every N optimizer steps
   model:
     _target_: every_query.model.EveryQueryModel
     precision: "16-mixed"

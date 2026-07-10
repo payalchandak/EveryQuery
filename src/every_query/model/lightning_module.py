@@ -122,11 +122,15 @@ class EveryQueryLightningModule(L.LightningModule):
         model: EveryQueryModel,
         optimizer: Callable[[Iterator[torch.nn.parameter.Parameter]], torch.optim.Optimizer] | None = None,
         LR_scheduler: Callable[[torch.optim.Optimizer], torch.optim.lr_scheduler._LRScheduler] | None = None,
+        grad_norm_log_every_n_steps: int = 1000,
     ):
         super().__init__()
         self.model = model
         self.optimizer_factory = optimizer
         self.LR_scheduler_factory = LR_scheduler
+        # Logging knob only — intentionally kept out of save_hyperparameters so old
+        # checkpoints load unchanged and load_from_checkpoint needs no edits.
+        self.grad_norm_log_every_n_steps = grad_norm_log_every_n_steps
 
         self.metrics = {
             train_split: {},
@@ -264,10 +268,90 @@ class EveryQueryLightningModule(L.LightningModule):
                 if preds.numel() > 0:
                     self._update_metric(name="occurs_auc", split=split, preds=preds, target=target)
 
+    def _encoder_grad_norm(self, task_loss: torch.Tensor) -> torch.Tensor:
+        """Global L2 norm of d(task_loss)/d(encoder), over ``self.model.HF_model`` params only.
+
+        Examples:
+            >>> loss, outputs = demo_lightning_module.model(sample_batch)
+            >>> n = demo_lightning_module._encoder_grad_norm(outputs.censor_loss)
+            >>> n.ndim, bool(n.isfinite()), bool(n >= 0)
+            (0, True, True)
+
+            ``torch.autograd.grad`` never writes into ``.grad``, so optimization state
+            is untouched:
+
+            >>> all(p.grad is None for p in demo_lightning_module.model.HF_model.parameters())
+            True
+
+            The graph is retained, so the total loss can still be backpropagated
+            afterwards (as Lightning does after training_step):
+
+            >>> loss.backward()
+        """
+        # ponytail: reentrant grad-ckpt breaks autograd.grad; pass
+        # gradient_checkpointing_kwargs={"use_reentrant": False} in model.py if
+        # do_grad_ckpt runs ever need these norms.
+        encoder_params = [p for p in self.model.HF_model.parameters() if p.requires_grad]
+        # torch.autograd.grad (not .backward()) returns grads as a tuple and never
+        # writes into p.grad, so this cannot pollute the optimizer step or trip
+        # DDP's reducer (its allreduce hooks only fire on .grad accumulation during
+        # .backward(), so these norms are per-rank/local — fine for logging).
+        #
+        # retain_graph=True: Lightning runs the real backward on the total loss
+        # *after* training_step returns, and we call this twice (once per task
+        # loss) on the same graph — the graph must survive all of that.
+        #
+        # allow_unused=True: on an all-censored batch, occurs_loss is the
+        # differentiable zero `logits.sum() * 0.0` (see model._get_loss); its graph
+        # may not reach every encoder parameter, and unused params come back as
+        # None — we skip those (norm contribution 0).
+        #
+        # create_graph is left False (default): grads are not part of a new graph,
+        # so there is no second-order autograd cost or memory retention.
+        #
+        # Under AMP this differentiates the *unscaled* loss (bypassing Lightning's
+        # GradScaler), giving true norms; with "16-mixed" tiny intermediate fp16
+        # grads can underflow so norms may slightly under-report, which doesn't
+        # matter for comparing the two tasks' relative magnitude.
+        grads = torch.autograd.grad(task_loss, encoder_params, retain_graph=True, allow_unused=True)
+        # Accumulate the squared norm in float32 regardless of AMP dtype for a
+        # numerically stable global norm: sqrt(sum_p ||g_p||^2).
+        sq = torch.zeros((), device=task_loss.device)
+        for g in grads:
+            if g is not None:
+                sq = sq + g.detach().float().pow(2).sum()
+        return sq.sqrt()
+
     def training_step(self, batch: EveryQueryBatch) -> torch.Tensor:
         """Forward pass and metric logging for a single training batch."""
         loss, outputs = self.model(batch)
         self._log_metrics(loss, outputs, batch, train_split)
+        # self.global_step counts optimizer steps in Lightning, so this fires once
+        # every N optimizer steps (including step 0, giving an early baseline).
+        if torch.is_grad_enabled() and self.global_step % self.grad_norm_log_every_n_steps == 0:
+            occurs_norm = self._encoder_grad_norm(outputs.occurs_loss)
+            censor_norm = self._encoder_grad_norm(outputs.censor_loss)
+            # The optimizer minimizes w * occurs_loss + (1 - w) * censor_loss, and
+            # scalar weights factor out of the norm (||w ∇L|| = w ||∇L||), so the
+            # weighted contributions reuse the norms above — no extra autograd.grad.
+            w = self.model.occurs_loss_weight
+            # >1 means the task pulls harder on the shared encoder than the other.
+            scalars = {
+                "occurs_encoder_grad_norm": occurs_norm,
+                "censor_encoder_grad_norm": censor_norm,
+                "encoder_grad_ratio": occurs_norm / (censor_norm + 1e-8),
+                "weighted_occurs_encoder_grad_norm": w * occurs_norm,
+                "weighted_censor_encoder_grad_norm": (1 - w) * censor_norm,
+                "weighted_encoder_grad_ratio": (w * occurs_norm) / ((1 - w) * censor_norm + 1e-8),
+            }
+            for name, value in scalars.items():
+                self.log(
+                    f"train/{name}",
+                    value,
+                    on_step=True,
+                    on_epoch=False,
+                    batch_size=batch.batch_size,
+                )
         return loss
 
     @torch.no_grad()
