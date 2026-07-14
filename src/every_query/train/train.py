@@ -39,7 +39,9 @@ def int_prod(x: int, y: int) -> int:
 
 
 def values_as_list(**kwargs) -> list[Any]:
-    return list(kwargs.values())
+    # Drop None so an optional callback can be toggled off with `<name>: null` instead of
+    # deleting/commenting its config block.
+    return [v for v in kwargs.values() if v is not None]
 
 
 def save_resolved_config(cfg: DictConfig, fp: Path) -> bool:

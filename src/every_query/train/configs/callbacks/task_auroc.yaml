@@ -1,0 +1,17 @@
+# @package trainer.callbacks
+#
+# Opt-in cheap in-training macro-AUROC tracking. Enable with `EQ_train +callbacks=task_auroc`
+# and set the tracking-pairs location, e.g.:
+#   EQ_train +callbacks=task_auroc \
+#     ++trainer.callbacks.task_auroc_tracking.config.task_labels_dir=$TASK_TRACKING_DIR
+# See EQ_sample_task_tracking_pairs for producing the pairs (split=tuning).
+task_auroc_tracking:
+  _target_: every_query.model.task_auroc_callback.TaskAurocTrackingCallback
+  batch_size: 256
+  config:
+    _target_: meds_torchdata.MEDSTorchDataConfig
+    tensorized_cohort_dir: ${datamodule.config.tensorized_cohort_dir}
+    task_labels_dir: ??? # output of EQ_sample_task_tracking_pairs
+    static_inclusion_mode: ${datamodule.config.static_inclusion_mode}
+    seq_sampling_strategy: ${datamodule.config.seq_sampling_strategy}
+    max_seq_len: ${datamodule.config.max_seq_len}

@@ -235,9 +235,18 @@ EQ_sample_task_tracking_pairs \
 # pairs land at $TASK_TRACKING_DIR/tuning/0.parquet
 ```
 
-Then uncomment the `task_auroc_tracking` callback block in
-`src/every_query/train/configs/config.yaml` and point its `task_labels_dir` at
-`$TASK_TRACKING_DIR` (or override on the CLI). Notes:
+Then enable the callback via its Hydra config group and point `task_labels_dir` at
+`$TASK_TRACKING_DIR`:
+
+```bash
+EQ_train +callbacks=task_auroc \
+	++trainer.callbacks.task_auroc_tracking.config.task_labels_dir="$TASK_TRACKING_DIR"
+```
+
+`+callbacks=task_auroc` composes `configs/callbacks/task_auroc.yaml` into the callbacks list.
+It is off by default — `config.yaml` ships `task_auroc_tracking: null`, and `values_as_list`
+drops `None` entries, so a plain `EQ_train` (e.g. when EveryQuery is used as a dependency) runs
+without it and without needing any tracking pairs. Notes:
 
 - The split is locked to `tuning` on purpose — tracking mirrors `tuning/loss` checkpointing, so
     it is not configurable. Sample the pairs with `split=tuning`.
@@ -246,7 +255,8 @@ Then uncomment the `task_auroc_tracking` callback block in
     never logs the metric (training is unaffected).
 - Under DDP it scores on rank 0 only (the tracking set is identical on every rank), and the
     parquet is read once at setup — re-sampling mid-run requires a restart.
-- To disable it entirely, leave the callback block commented out (the default).
+- To disable it entirely, just omit `+callbacks=task_auroc` (the default). The mandatory
+    `task_labels_dir: ???` only errors when the group is actually enabled.
 
 ### 4. Predict
 
