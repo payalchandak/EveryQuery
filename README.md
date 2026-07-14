@@ -29,7 +29,7 @@ Every production module lives under a submodule that reflects its role:
 ```
 src/every_query/
 ├── preprocessing/      → EQ_process_data        (raw MEDS → tensorized cohort)
-├── generate_tasks/     → EQ_generate_training_tasks + EQ_generate_evaluation_tasks (TaskQuerySchema parquets: scattered for PT, dense for eval)
+├── generate_tasks/     → EQ_generate_training_tasks + EQ_generate_evaluation_tasks + EQ_sample_task_tracking_pairs (TaskQuerySchema parquets: scattered for PT, dense for eval, pos/neg pairs for in-training AUROC)
 ├── train/              → EQ_train               (train the model)
 ├── predict/            → EQ_predict             (inference; consumes TaskQuerySchema, emits PredictionSchema)
 │   └── external_tasks/                         (ACES + composite aggregation — currently `python -m` only;
@@ -56,14 +56,15 @@ that lands with each CLI on `dev` today — unit tests (fast, `tests/test_<name>
 or `tests/test_<module>.py`), CLI smoke tests (`tests/test_cli_smoke.py`, `--help`-exits-0),
 and end-to-end subprocess tests that run the real script against a fixture cohort.
 
-| Script                         | Stage            | Purpose                                                                                                                 | Tests                                                                                                                    |
-| ------------------------------ | ---------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `EQ_process_data`              | preprocessing    | Orchestrate MEDS-transforms + `meds-torch-data` tensorization                                                           | smoke; E2E via `test_process_data.py` + `test_e2e_foundation.py`                                                         |
-| `EQ_generate_training_tasks`   | PT task labels   | Sample `N` tasks × `M` contexts (scattered `(query, duration_days)`), label via single-pass asof                        | smoke; unit `tests/sampler/`; E2E `test_generate_tasks.py`                                                               |
-| `EQ_generate_evaluation_tasks` | eval task labels | Sample `K` prediction times per subject, cross-join with `(codes × durations)` grid for dense evaluation shape          | smoke; E2E `test_generate_evaluation_tasks_cli.py`                                                                       |
-| `EQ_train`                     | training         | Train the ModernBERT encoder on the labeled tasks                                                                       | smoke; unit `test_training.py`; E2E `test_train_cli.py` + `test_train.py`; signal test `tests/training_validity/` (slow) |
-| `EQ_predict`                   | inference        | Consume a `TaskQuerySchema` parquet dir + checkpoint, emit a `PredictionSchema` parquet (`censor_prob`, `occurs_prob`)  | smoke; E2E `test_predict_cli.py` (row-order preserved); exercised by `tests/training_validity/` (slow)                   |
-| `EQ_evaluate`                  | metrics          | Consume a `PredictionSchema` parquet, write per-`(query, duration_days)` metrics (`occurs_auroc`, `censor_auroc`, etc.) | smoke; E2E `test_evaluate_cli.py`; exercised by `tests/training_validity/` (slow)                                        |
+| Script                          | Stage            | Purpose                                                                                                                 | Tests                                                                                                                    |
+| ------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `EQ_process_data`               | preprocessing    | Orchestrate MEDS-transforms + `meds-torch-data` tensorization                                                           | smoke; E2E via `test_process_data.py` + `test_e2e_foundation.py`                                                         |
+| `EQ_generate_training_tasks`    | PT task labels   | Sample `N` tasks × `M` contexts (scattered `(query, duration_days)`), label via single-pass asof                        | smoke; unit `tests/sampler/`; E2E `test_generate_tasks.py`                                                               |
+| `EQ_generate_evaluation_tasks`  | eval task labels | Sample `K` prediction times per subject, cross-join with `(codes × durations)` grid for dense evaluation shape          | smoke; E2E `test_generate_evaluation_tasks_cli.py`                                                                       |
+| `EQ_sample_task_tracking_pairs` | AUROC tracking   | Sample one pos + one neg row per `(query, duration_days)` from the dense eval labels for cheap in-training AUROC        | smoke; E2E `test_sample_task_tracking_pairs_cli.py`                                                                      |
+| `EQ_train`                      | training         | Train the ModernBERT encoder on the labeled tasks                                                                       | smoke; unit `test_training.py`; E2E `test_train_cli.py` + `test_train.py`; signal test `tests/training_validity/` (slow) |
+| `EQ_predict`                    | inference        | Consume a `TaskQuerySchema` parquet dir + checkpoint, emit a `PredictionSchema` parquet (`censor_prob`, `occurs_prob`)  | smoke; E2E `test_predict_cli.py` (row-order preserved); exercised by `tests/training_validity/` (slow)                   |
+| `EQ_evaluate`                   | metrics          | Consume a `PredictionSchema` parquet, write per-`(query, duration_days)` metrics (`occurs_auroc`, `censor_auroc`, etc.) | smoke; E2E `test_evaluate_cli.py`; exercised by `tests/training_validity/` (slow)                                        |
 
 The legacy four-stage evaluator (`every_query.evaluate.eval`, with `gen_index_times`, `gen_task`, `select_model` siblings) has been deleted; recover from git history if needed. [#83](https://github.com/payalchandak/EveryQuery/issues/83) tracks the cross-model leaderboard, which now lives in the `EveryQueryExperiments` repo.
 
@@ -211,6 +212,41 @@ EQ_train \
 
 - `output_dir` is a required Hydra arg that is a base path you supply with `output_dir=`, e.g. `=$TRAINING_OUTPUT_DIR`. Hydra appends `<YYYY-MM-DD>/<HH-MM-SS>` for per-run uniqueness.
 - If you want to override more parameters for training refer to `src/every_query/train/configs/config.yaml`
+
+#### Optional: in-training macro-AUROC tracking
+
+`EQ_train` can log a cheap, macro-averaged per-task AUROC estimate every validation pass
+(`tuning/occurs_auroc_macro_sampled`, plus `..._n_tasks` for how many tasks contributed) via
+`TaskAurocTrackingCallback`. Instead of scoring the whole tuning split, it scores a fixed,
+offline-sampled parquet of exactly one positive + one negative row per `(query, duration_days)`
+task. Because a task's AUROC equals `P(score(pos) > score(neg))` for a random pos/neg pair, the
+win/tie/loss on that one pair is an unbiased (high-variance) estimate; macro-averaging across
+tasks gives macro AUROC at `O(n_tasks)` forward examples. It is **tracking-only** — it does not
+affect `tuning/loss`-driven checkpointing or early stopping.
+
+First sample the tracking pairs once from the dense **tuning**-split eval labels (output of
+`EQ_generate_evaluation_tasks`):
+
+```bash
+EQ_sample_task_tracking_pairs \
+	eval_labels_dir="$EVAL_TASKS_DIR/eval" \
+	out_dir="$TASK_TRACKING_DIR" \
+	split=tuning
+# pairs land at $TASK_TRACKING_DIR/tuning/0.parquet
+```
+
+Then uncomment the `task_auroc_tracking` callback block in
+`src/every_query/train/configs/config.yaml` and point its `task_labels_dir` at
+`$TASK_TRACKING_DIR` (or override on the CLI). Notes:
+
+- The split is locked to `tuning` on purpose — tracking mirrors `tuning/loss` checkpointing, so
+    it is not configurable. Sample the pairs with `split=tuning`.
+- Out-of-vocab query codes (not in the model vocab) are skipped at scoring; the callback warns at
+    setup and you'll see a smaller `..._n_tasks`. An empty tracking set logs a warning and simply
+    never logs the metric (training is unaffected).
+- Under DDP it scores on rank 0 only (the tracking set is identical on every rank), and the
+    parquet is read once at setup — re-sampling mid-run requires a restart.
+- To disable it entirely, leave the callback block commented out (the default).
 
 ### 4. Predict
 
