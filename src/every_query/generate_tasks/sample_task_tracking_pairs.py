@@ -158,7 +158,7 @@ def _read_eval_labels(eval_labels_dir: Path, split: str) -> pl.DataFrame:
     parquets = sorted(split_dir.glob("*.parquet"))
     if not parquets:
         raise FileNotFoundError(f"No parquet files found under {split_dir}")
-    return pl.concat([pl.read_parquet(fp) for fp in parquets], how="vertical")
+    return pl.scan_parquet(parquets).collect()
 
 
 def _out_fp(out_dir: Path, split: str) -> Path:
@@ -188,6 +188,12 @@ def run(
     sample_seed = derive_seed(seed, "task_tracking_pairs", split)
     pairs = sample_task_tracking_pairs(labels_df, seed=sample_seed)
     n_tasks = pairs.height // 2
+    if n_tasks == 0:
+        logger.warning(
+            "No task survived tracking-pair sampling (every task lacked a positive or negative "
+            "example); writing an empty file to %s — in-training AUROC tracking will be a no-op.",
+            _out_fp(out_dir, split),
+        )
     logger.info("Sampled %d pos/neg pairs (%d tasks) for tracking.", pairs.height, n_tasks)
 
     aligned = TaskQuerySchema.align(pairs.to_arrow())

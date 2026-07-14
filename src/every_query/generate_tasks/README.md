@@ -43,8 +43,8 @@ different row distributions:
     row into a single small parquet (2 rows/task). Registered as
     `EQ_sample_task_tracking_pairs` and runnable as
     `python -m every_query.generate_tasks.sample_task_tracking_pairs`. Feeds
-    `EveryQueryLightningModule`'s optional in-training task-tracking dataloader — see
-    `lightning_module.task_auroc_tracking` in `train/configs/config.yaml`.
+    the optional in-training `TaskAurocTrackingCallback` — see
+    `trainer.callbacks.task_auroc_tracking` in `train/configs/config.yaml`.
 
 - **`configs/sample_training_tasks_config.yaml`** / **`configs/sample_evaluation_tasks_config.yaml`**
     / **`configs/sample_task_tracking_pairs_config.yaml`**
@@ -137,7 +137,7 @@ EQ_sample_task_tracking_pairs \
 
 This is a one-time offline step; the resulting `$TASK_TRACKING_DIR/tuning/0.parquet` is
 small (2 rows per task) and fixed for the duration of a training run — point
-`lightning_module.task_auroc_tracking.config.task_labels_dir` at `$TASK_TRACKING_DIR` to
+`trainer.callbacks.task_auroc_tracking.config.task_labels_dir` at `$TASK_TRACKING_DIR` to
 have `EQ_train` log a macro-averaged, per-task-sampled AUROC (`tuning/occurs_auroc_macro_sampled`)
 every validation pass, without paying the cost of scoring the full tuning split.
 

@@ -6,7 +6,6 @@ and the relationship between raw logits and predicted probabilities.
 """
 
 from functools import partial
-from unittest.mock import patch
 
 import pytest
 import torch
@@ -14,6 +13,7 @@ import torch
 from every_query.data.dataset import EveryQueryBatch
 from every_query.model import EveryQueryOutput
 from every_query.model.lightning_module import EveryQueryLightningModule
+from every_query.model.task_auroc_callback import TaskAurocTrackingCallback
 
 _CONFIGURED_WD = 0.01
 
@@ -159,67 +159,54 @@ def _make_tracking_batch(queries: list[int], durations: list[float], occurs: lis
 
 
 class TestSampledTaskAurocTracking:
-    """``_compute_sampled_task_auroc`` — macro win/tie/loss AUROC over precomputed pairs.
+    """``TaskAurocTrackingCallback._compute_and_log`` — macro win/tie/loss AUROC over pairs.
 
-    Each task in the tracking set contributes exactly one positive and one negative row;
-    per-task AUROC collapses to an indicator on which of the two scored higher.
+    Each task in the tracking set contributes exactly one positive and one negative row; per-task AUROC
+    collapses to an indicator on which of the two scored higher.
     """
 
-    def test_no_op_when_tracking_not_configured(self, demo_model):
-        module = EveryQueryLightningModule(model=demo_model)
-        assert module._task_tracking_loader is None
+    @staticmethod
+    def _run(model, batches):
+        """Score ``batches`` with ``model`` via the callback, returning the logged metrics dict."""
+        cb = TaskAurocTrackingCallback(config=None)
+        cb._loader = batches
+        logged = {}
+        cb._compute_and_log(
+            model,
+            torch.device("cpu"),
+            lambda name, value, **kw: logged.__setitem__(name, value),
+        )
+        return logged
 
-        with patch.object(module, "log") as mock_log:
-            module._compute_sampled_task_auroc()
-
-        mock_log.assert_not_called()
+    def test_no_op_when_loader_empty(self):
+        assert self._run(_StubOccursModel([]), []) == {}
 
     def test_macro_average_win_tie_loss(self):
         # Task 10: neg logit -10 (~0 prob), pos logit +10 (~1 prob) -> win  (indicator 1.0)
         # Task 20: neg logit +10 (~1 prob), pos logit -10 (~0 prob) -> loss (indicator 0.0)
         # Task 30: neg logit  0.0,          pos logit  0.0 (tie)    -> tie  (indicator 0.5)
-        queries = [10, 10, 20, 20, 30, 30]
-        durations = [7.0] * 6
-        occurs = [0, 1, 0, 1, 0, 1]
+        batch = _make_tracking_batch([10, 10, 20, 20, 30, 30], [7.0] * 6, [0, 1, 0, 1, 0, 1])
         logits = [-10.0, 10.0, 10.0, -10.0, 0.0, 0.0]
 
-        module = EveryQueryLightningModule(model=_StubOccursModel(logits))
-        module._task_tracking_loader = [_make_tracking_batch(queries, durations, occurs)]
-
-        logged = {}
-        with patch.object(
-            module, "log", side_effect=lambda name, value, **kw: logged.__setitem__(name, value)
-        ):
-            module._compute_sampled_task_auroc()
+        logged = self._run(_StubOccursModel(logits), [batch])
 
         assert logged["tuning/occurs_auroc_macro_sampled_n_tasks"] == 3.0
         assert logged["tuning/occurs_auroc_macro_sampled"] == pytest.approx((1.0 + 0.0 + 0.5) / 3)
 
     def test_tasks_missing_a_class_are_dropped(self):
         # Task 10 has both classes (win); task 20 only has a positive row and is dropped.
-        queries = [10, 10, 20]
-        durations = [7.0, 7.0, 7.0]
-        occurs = [0, 1, 1]
+        batch = _make_tracking_batch([10, 10, 20], [7.0, 7.0, 7.0], [0, 1, 1])
         logits = [-10.0, 10.0, 0.0]
 
-        module = EveryQueryLightningModule(model=_StubOccursModel(logits))
-        module._task_tracking_loader = [_make_tracking_batch(queries, durations, occurs)]
-
-        logged = {}
-        with patch.object(
-            module, "log", side_effect=lambda name, value, **kw: logged.__setitem__(name, value)
-        ):
-            module._compute_sampled_task_auroc()
+        logged = self._run(_StubOccursModel(logits), [batch])
 
         assert logged["tuning/occurs_auroc_macro_sampled_n_tasks"] == 1.0
         assert logged["tuning/occurs_auroc_macro_sampled"] == pytest.approx(1.0)
 
-    def test_restores_model_train_mode(self):
-        module = EveryQueryLightningModule(model=_StubOccursModel([0.0, 0.0]))
-        module.model.train()
-        module._task_tracking_loader = [_make_tracking_batch([10, 10], [7.0, 7.0], [0, 1])]
+    def test_oov_query_rows_are_skipped(self):
+        # Both tasks are out-of-vocab (query == PAD_INDEX 0); without the guard their pos/neg
+        # probs collide into one bogus (0, 7.0) task. They must be dropped, leaving no metric.
+        batch = _make_tracking_batch([0, 0, 0, 0], [7.0] * 4, [0, 1, 0, 1])
+        logits = [-10.0, 10.0, 10.0, -10.0]
 
-        with patch.object(module, "log"):
-            module._compute_sampled_task_auroc()
-
-        assert module.model.training is True
+        assert self._run(_StubOccursModel(logits), [batch]) == {}

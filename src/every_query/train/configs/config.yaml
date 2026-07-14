@@ -65,20 +65,6 @@ lightning_module:
     num_warmup_steps: ${int_prod:0.05,${.num_training_steps}} # ~10% of training steps
     num_training_steps: ${trainer.max_steps}
     num_cycles: 0.5
-  # Optional: cheap, macro-averaged per-task AUROC tracking. Scores a fixed, offline-
-  # sampled parquet of one positive + one negative row per (query, duration_days) task
-  # (see EQ_sample_task_tracking_pairs) every validation pass, logging
-  # tuning/occurs_auroc_macro_sampled. Leave the whole block unset/null to disable — it
-  # does not affect tuning/loss-driven checkpointing or early stopping either way.
-  # task_auroc_tracking:
-  #   config:
-  #     _target_: meds_torchdata.MEDSTorchDataConfig
-  #     tensorized_cohort_dir: ${datamodule.config.tensorized_cohort_dir}
-  #     task_labels_dir: ??? # output of EQ_sample_task_tracking_pairs
-  #     static_inclusion_mode: ${datamodule.config.static_inclusion_mode}
-  #     seq_sampling_strategy: ${datamodule.config.seq_sampling_strategy}
-  #     max_seq_len: ${datamodule.config.max_seq_len}
-  #   batch_size: 256
 
 trainer:
   _target_: lightning.pytorch.trainer.Trainer
@@ -119,6 +105,22 @@ trainer:
       stopping_threshold: null # stop training immediately once the monitored quantity reaches this
       divergence_threshold: null # stop training as soon as the monitored quantity becomes worse than this
       check_on_train_epoch_end: false # set to false so that early stopping is checked after each validation loop
+    # Optional: cheap, macro-averaged per-task AUROC tracking. Scores a fixed, offline-sampled
+    # parquet of one positive + one negative row per (query, duration_days) task (see
+    # EQ_sample_task_tracking_pairs) every validation pass, logging
+    # tuning/occurs_auroc_macro_sampled. Comment out the whole block to disable — it does not
+    # affect tuning/loss-driven checkpointing or early stopping either way.
+    # task_auroc_tracking:
+    #   _target_: every_query.model.task_auroc_callback.TaskAurocTrackingCallback
+    #   batch_size: 256
+    #   split: tuning # must match the split EQ_sample_task_tracking_pairs wrote
+    #   config:
+    #     _target_: meds_torchdata.MEDSTorchDataConfig
+    #     tensorized_cohort_dir: ${datamodule.config.tensorized_cohort_dir}
+    #     task_labels_dir: ??? # output of EQ_sample_task_tracking_pairs
+    #     static_inclusion_mode: ${datamodule.config.static_inclusion_mode}
+    #     seq_sampling_strategy: ${datamodule.config.seq_sampling_strategy}
+    #     max_seq_len: ${datamodule.config.max_seq_len}
   default_root_dir: ${hydra:runtime.output_dir} # single source of truth: run.dir OR sweep.dir/subdir
   min_epochs: 0 # prevents early stopping
   max_epochs: null # We don't control the max epochs, we control the max steps.
