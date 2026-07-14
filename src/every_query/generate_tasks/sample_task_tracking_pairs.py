@@ -108,6 +108,8 @@ def sample_task_tracking_pairs(labels_df: pl.DataFrame, seed: int) -> pl.DataFra
     # (subject_id, prediction_time, query, duration_days, seed), rank within each
     # (task, class) group by that key, and keep rank 0 — same deterministic-without-
     # positional-bias trick as sample_evaluation_tasks.sample_prediction_times_per_subject.
+    # (Not df.sample(): that's positional, so re-sharding/reordering the input changes the
+    # pick for the same seed; hashing row identity is stable across both.)
     ranked = (
         labeled.with_columns(
             pl.concat_str(
