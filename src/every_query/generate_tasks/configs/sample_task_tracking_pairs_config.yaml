@@ -4,9 +4,9 @@
 # (point `eval_labels_dir` at that command's `{out_dir}/eval` root, typically generated
 # with `split=tuning`) and samples exactly one positive + one negative labeled row per
 # `(query, duration_days)` task into a single compact parquet. That parquet is small
-# enough (2 rows per task) to be read every validation pass by
-# `EveryQueryLightningModule`'s task-tracking dataloader, giving a cheap unbiased-but-
-# high-variance estimate of per-task AUROC without scoring the whole tuning split.
+# enough (2 rows per task) to be read every validation pass by the training-time
+# `TaskAurocTrackingCallback`, giving a cheap unbiased-but-high-variance estimate of
+# per-task AUROC without scoring the whole tuning split.
 #
 # Usage:
 #   EQ_sample_task_tracking_pairs \

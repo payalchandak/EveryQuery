@@ -7,7 +7,7 @@ missing either class are dropped (AUROC is undefined for a single-class task; mi
 ``evaluate/metrics.py``'s ``_auroc_or_none``).
 
 The output is a single small parquet — two rows per surviving task — meant to be read by
-``EveryQueryLightningModule``'s task-tracking dataloader every validation pass.  Because
+the training-time ``TaskAurocTrackingCallback`` every validation pass.  Because
 AUROC for a task equals ``P(score(positive) > score(negative))`` for a random positive/
 negative pair, scoring this one pair per task gives an unbiased (if high-variance)
 per-task AUROC estimate; macro-averaging the resulting win/tie/loss indicators across
@@ -192,7 +192,7 @@ def run(
         logger.warning(
             "No task survived tracking-pair sampling (every task lacked a positive or negative "
             "example); writing an empty file to %s — in-training AUROC tracking will be a no-op.",
-            _out_fp(out_dir, split),
+            out_fp,
         )
     logger.info("Sampled %d pos/neg pairs (%d tasks) for tracking.", pairs.height, n_tasks)
 

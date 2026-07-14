@@ -9,6 +9,7 @@ from functools import partial
 
 import pytest
 import torch
+from meds_torchdata import MEDSTorchDataConfig
 
 from every_query.data.dataset import EveryQueryBatch
 from every_query.model import EveryQueryOutput
@@ -210,3 +211,40 @@ class TestSampledTaskAurocTracking:
         logits = [-10.0, 10.0, 10.0, -10.0]
 
         assert self._run(_StubOccursModel(logits), [batch]) == {}
+
+
+class TestCallbackHydraWiring:
+    """The ``trainer.callbacks.task_auroc_tracking`` block ships commented out, so nothing else ever resolves
+    its ``_target_`` paths or constructor args.
+
+    This mirrors that block and instantiates it so a renamed arg, typo'd import path, or MEDSTorchDataConfig
+    drift fails a test instead of silently passing CI.
+    """
+
+    def test_instantiates_callback_and_nested_config(self, tmp_path):
+        import hydra
+
+        # MEDSTorchDataConfig validates that both dirs exist.
+        cohort_dir = tmp_path / "cohort"
+        cohort_dir.mkdir()
+        tracking_dir = tmp_path / "tracking"
+        tracking_dir.mkdir()
+
+        cfg = {
+            "_target_": "every_query.model.task_auroc_callback.TaskAurocTrackingCallback",
+            "batch_size": 256,
+            "config": {
+                "_target_": "meds_torchdata.MEDSTorchDataConfig",
+                "tensorized_cohort_dir": str(cohort_dir),
+                "task_labels_dir": str(tracking_dir),
+                "static_inclusion_mode": "omit",
+                "seq_sampling_strategy": "to_end",
+                "max_seq_len": 256,
+            },
+        }
+
+        callback = hydra.utils.instantiate(cfg)
+
+        assert isinstance(callback, TaskAurocTrackingCallback)
+        assert callback.batch_size == 256
+        assert isinstance(callback.config, MEDSTorchDataConfig)

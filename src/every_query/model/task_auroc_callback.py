@@ -18,6 +18,7 @@ import logging
 import torch
 from lightning.pytorch import Callback
 from lightning.pytorch.utilities import move_data_to_device
+from meds import tuning_split
 from meds_torchdata import MEDSTorchDataConfig
 from torch.utils.data import DataLoader
 
@@ -29,18 +30,20 @@ logger = logging.getLogger(__name__)
 class TaskAurocTrackingCallback(Callback):
     """Log ``tuning/occurs_auroc_macro_sampled`` from a fixed pos/neg pair set each val epoch.
 
+    Always scores the ``tuning`` split — tracking mirrors ``tuning/loss`` checkpointing, so the
+    split is intentionally fixed and not configurable (the tracking pairs must be sampled into
+    ``{task_labels_dir}/tuning/`` via ``EQ_sample_task_tracking_pairs split=tuning``).
+
     Args:
         config: an instantiated ``MEDSTorchDataConfig`` whose ``task_labels_dir`` points at
             the output of ``EQ_sample_task_tracking_pairs``.
         batch_size: dataloader batch size for the (small) tracking set.
-        split: split subdir the pairs were sampled into — must match the sampler's ``split``.
     """
 
-    def __init__(self, config: MEDSTorchDataConfig, batch_size: int = 256, split: str = "tuning"):
+    def __init__(self, config: MEDSTorchDataConfig, batch_size: int = 256):
         super().__init__()
         self.config = config
         self.batch_size = batch_size
-        self.split = split
         self._loader: DataLoader | None = None
 
     def setup(self, trainer, pl_module, stage=None):
@@ -49,7 +52,7 @@ class TaskAurocTrackingCallback(Callback):
         if stage not in ("fit", "validate") or self._loader is not None:
             return
 
-        dataset = EveryQueryPytorchDataset(self.config, split=self.split)
+        dataset = EveryQueryPytorchDataset(self.config, split=tuning_split)
 
         # Out-of-vocab query codes encode to PAD_INDEX (0); distinct OOV tasks would otherwise
         # collide there and corrupt the estimate, so they're skipped at scoring — warn here so
@@ -66,8 +69,7 @@ class TaskAurocTrackingCallback(Callback):
 
         if len(dataset) == 0:
             logger.warning(
-                "Task-tracking dataset for split=%r is empty; %r will not be logged.",
-                self.split,
+                "Task-tracking dataset (tuning split) is empty; %r will not be logged.",
                 "tuning/occurs_auroc_macro_sampled",
             )
             return

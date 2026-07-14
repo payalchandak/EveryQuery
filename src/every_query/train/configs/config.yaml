@@ -113,7 +113,6 @@ trainer:
     # task_auroc_tracking:
     #   _target_: every_query.model.task_auroc_callback.TaskAurocTrackingCallback
     #   batch_size: 256
-    #   split: tuning # must match the split EQ_sample_task_tracking_pairs wrote
     #   config:
     #     _target_: meds_torchdata.MEDSTorchDataConfig
     #     tensorized_cohort_dir: ${datamodule.config.tensorized_cohort_dir}
