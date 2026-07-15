@@ -106,27 +106,30 @@ class TaskAurocTrackingCallback(Callback):
                     batch = move_data_to_device(batch, device)
                     _, outputs = model(batch)
                     # Squeeze only dim 1 so a trailing size-1 batch doesn't collapse to a 0-d scalar.
-                    probs = outputs.occurs_logits.detach().squeeze(1).sigmoid().float()
+                    # Rank on logits, not sigmoid(logits): AUROC only compares scores, and sigmoid
+                    # saturates to exactly 1.0 (logit >= 17 in fp32, >= 6.5 in bf16), which turns a
+                    # correctly-ranked pair into a spurious tie and drags the estimate toward 0.5.
+                    scores = outputs.occurs_logits.detach().squeeze(1).float()
                     self.metric.update(
                         query=batch.query.detach(),
                         duration_days=batch.duration_days.detach(),
                         occurs=batch.occurs.detach(),
-                        occurs_probs=probs,
+                        occurs_scores=scores,
                     )
 
-            scores = self.metric.compute()
-            if scores["n_tasks"] == 0:
+            result = self.metric.compute()
+            if result["n_tasks"] == 0:
                 return
 
             log_fn(
                 "tuning/occurs_auroc_macro_sampled",
-                float(scores["auroc"]),
+                float(result["auroc"]),
                 rank_zero_only=True,
                 sync_dist=False,
             )
             log_fn(
                 "tuning/occurs_auroc_macro_sampled_n_tasks",
-                float(scores["n_tasks"]),
+                float(result["n_tasks"]),
                 rank_zero_only=True,
                 sync_dist=False,
             )

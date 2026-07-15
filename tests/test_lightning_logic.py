@@ -133,14 +133,15 @@ class _StubOccursModel(torch.nn.Module):
     enqueued them) so tests can pin exact per-row probabilities without a real transformer.
     """
 
-    def __init__(self, logits: list[float]):
+    def __init__(self, logits: list[float], dtype: torch.dtype = torch.float32):
         super().__init__()
         self._dummy_param = torch.nn.Parameter(torch.zeros(1))
         self._logits = list(logits)
+        self._dtype = dtype
 
     def forward(self, batch: EveryQueryBatch):
         n = batch.query.shape[0]
-        row_logits = torch.tensor(self._logits[:n], dtype=torch.float32).unsqueeze(1)
+        row_logits = torch.tensor(self._logits[:n], dtype=self._dtype).unsqueeze(1)
         self._logits = self._logits[n:]
         outputs = EveryQueryOutput(last_hidden_state=None, occurs_logits=row_logits)
         return torch.tensor(0.0), outputs
@@ -168,14 +169,14 @@ class TestSampledMacroAUROC:
     """
 
     @staticmethod
-    def _scored(queries, durations, occurs, probs):
+    def _scored(queries, durations, occurs, scores):
         """Feed one batch of rows into a fresh metric and return its ``compute()`` dict."""
         m = SampledMacroAUROC()
         m.update(
             query=torch.tensor(queries, dtype=torch.long),
             duration_days=torch.tensor(durations, dtype=torch.float32),
             occurs=torch.tensor(occurs, dtype=torch.long),
-            occurs_probs=torch.tensor(probs, dtype=torch.float32),
+            occurs_scores=torch.tensor(scores, dtype=torch.float32),
         )
         return m.compute()
 
@@ -228,7 +229,7 @@ class TestSampledMacroAUROC:
                 query=torch.tensor([10], dtype=torch.long),
                 duration_days=torch.tensor([7.0]),
                 occurs=torch.tensor([occurs], dtype=torch.long),
-                occurs_probs=torch.tensor([prob]),
+                occurs_scores=torch.tensor([prob]),
             )
 
         out = m.compute()
@@ -243,7 +244,7 @@ class TestSampledMacroAUROC:
             query=torch.tensor([10, 10, 10, 10], dtype=torch.long),
             duration_days=torch.tensor([7.0, 7.0, 7.0, 7.0]),
             occurs=torch.tensor([0, 1, 0, 1], dtype=torch.long),
-            occurs_probs=torch.tensor([0.1, 0.9, 0.8, 0.2]),
+            occurs_scores=torch.tensor([0.1, 0.9, 0.8, 0.2]),
         )
         with pytest.raises(ValueError, match="more than one row"):
             m.compute()
@@ -254,7 +255,7 @@ class TestSampledMacroAUROC:
             query=torch.tensor([10, 10], dtype=torch.long),
             duration_days=torch.tensor([7.0, 7.0]),
             occurs=torch.tensor([0, 1], dtype=torch.long),
-            occurs_probs=torch.tensor([0.1, 0.9]),
+            occurs_scores=torch.tensor([0.1, 0.9]),
         )
         assert m.compute()["n_tasks"] == 1.0
 
@@ -291,6 +292,27 @@ class TestTaskAurocCallbackLogging:
 
         assert logged["tuning/occurs_auroc_macro_sampled_n_tasks"] == 2.0
         assert logged["tuning/occurs_auroc_macro_sampled"] == pytest.approx(0.5)
+
+    def test_ranks_on_logits_so_saturating_scores_are_not_tied(self):
+        # sigmoid(logit) hits exactly 1.0 at >=6.5 in bf16 and >=17 in fp32, so scoring on
+        # probabilities turns a correctly-ranked pair into a tie and reports 0.5 instead of 1.0.
+        # AUROC only ranks, so the callback must hand the metric raw logits.
+        for dtype, (neg_logit, pos_logit) in (
+            (torch.bfloat16, (9.0, 14.0)),
+            (torch.float32, (20.0, 25.0)),
+        ):
+            neg_p = torch.tensor(neg_logit, dtype=dtype).sigmoid()
+            pos_p = torch.tensor(pos_logit, dtype=dtype).sigmoid()
+            assert neg_p == pos_p, (
+                f"{dtype} logits {neg_logit}/{pos_logit} must collide under sigmoid for this test to bite"
+            )
+
+            batch = _make_tracking_batch([10, 10], [7.0, 7.0], [0, 1])
+            logged = self._run(_StubOccursModel([neg_logit, pos_logit], dtype=dtype), [batch])
+
+            assert logged["tuning/occurs_auroc_macro_sampled"] == pytest.approx(1.0), (
+                f"{dtype}: pos logit {pos_logit} outranks neg {neg_logit}, so this is a win, not a tie"
+            )
 
     def test_state_does_not_leak_across_calls(self):
         # Each pass scores a *different* task, so rows leaked from pass 1 would surface as
