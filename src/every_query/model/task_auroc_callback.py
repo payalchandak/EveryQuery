@@ -3,8 +3,8 @@
 Scores a fixed, offline-sampled parquet of one positive + one negative row per
 ``(query, duration_days)`` task (see
 ``every_query.generate_tasks.sample_task_tracking_pairs``) every validation pass and logs
-``tuning/occurs_auroc_macro_sampled``.  Because a task's AUROC equals
-``P(score(pos) > score(neg))`` for a random pos/neg pair, the win/tie/loss indicator on that
+``tuning/occurs_auroc_macro_sampled`` plus a 95% CI (``_ci_lo``/``_ci_hi``).  Because a task's
+AUROC equals ``P(score(pos) > score(neg))`` for a random pos/neg pair, the win/tie/loss indicator on that
 one pair is an unbiased (high-variance) estimate; macro-averaging across tasks estimates
 macro AUROC at ``O(n_tasks)`` forward examples instead of ``O(tuning-split size)``.
 
@@ -14,6 +14,8 @@ fails fast on a misconfigured hydra block — nothing here is checkpoint-relevan
 """
 
 import logging
+import math
+import statistics
 
 import torch
 from lightning.pytorch import Callback
@@ -122,12 +124,26 @@ class TaskAurocTrackingCallback(Callback):
         if not indicators:
             return
 
-        log_fn(
-            "tuning/occurs_auroc_macro_sampled",
-            sum(indicators) / len(indicators),
-            rank_zero_only=True,
-            sync_dist=False,
+        estimate = sum(indicators) / len(indicators)
+        # A plain mean of independent per-task indicators, so the bootstrap distribution of the
+        # estimate is just the normal approximation; resampling would only re-derive std/sqrt(n).
+        # If tracking ever samples multiple pairs per task the indicators stop being independent
+        # and this needs a task-level cluster bootstrap instead.
+        half_width = (
+            1.96 * statistics.stdev(indicators) / math.sqrt(len(indicators)) if len(indicators) > 1 else 0.0
         )
+
+        for suffix, value in (
+            ("", estimate),
+            ("_ci_lo", max(0.0, estimate - half_width)),
+            ("_ci_hi", min(1.0, estimate + half_width)),
+        ):
+            log_fn(
+                f"tuning/occurs_auroc_macro_sampled{suffix}",
+                value,
+                rank_zero_only=True,
+                sync_dist=False,
+            )
         log_fn(
             "tuning/occurs_auroc_macro_sampled_n_tasks",
             float(len(indicators)),
