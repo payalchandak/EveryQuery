@@ -114,7 +114,17 @@ class SampledMacroAUROC(Metric):
                 strict=True,
             )
             for q, duration, label, prob in rows:
-                probs_by_task.setdefault((q, duration), {})[int(label)] = prob
+                task_probs = probs_by_task.setdefault((q, duration), {})
+                if int(label) in task_probs:
+                    raise ValueError(
+                        f"Task {(q, duration)} saw more than one row with occurs={int(label)}. "
+                        "This metric keys one probability per (task, class), so extra rows would "
+                        "be silently dropped and the estimate would reflect only the last one. "
+                        "sample_task_tracking_pairs emits exactly one positive and one negative "
+                        "per task; if that changed to k pairs, group the probs into lists here "
+                        "and average the indicator over the pos x neg combinations."
+                    )
+                task_probs[int(label)] = prob
 
         indicators = []
         for task_probs in probs_by_task.values():

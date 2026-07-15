@@ -235,6 +235,19 @@ class TestSampledMacroAUROC:
         assert out["n_tasks"] == 1.0
         assert float(out["auroc"]) == pytest.approx(1.0)
 
+    def test_raises_on_duplicate_row_for_a_task_class(self):
+        # Guards the coupling to sample_task_tracking_pairs' one-pos-one-neg-per-task output:
+        # keying one prob per (task, class) would silently drop all but the last row.
+        m = SampledMacroAUROC()
+        m.update(
+            query=torch.tensor([10, 10, 10, 10], dtype=torch.long),
+            duration_days=torch.tensor([7.0, 7.0, 7.0, 7.0]),
+            occurs=torch.tensor([0, 1, 0, 1], dtype=torch.long),
+            occurs_probs=torch.tensor([0.1, 0.9, 0.8, 0.2]),
+        )
+        with pytest.raises(ValueError, match="more than one row"):
+            m.compute()
+
     def test_reset_clears_state(self):
         m = SampledMacroAUROC()
         m.update(
