@@ -3,10 +3,10 @@
 Scores a fixed, offline-sampled parquet of one positive + one negative row per
 ``(query, duration_days)`` task (see
 ``every_query.generate_tasks.sample_task_tracking_pairs``) every validation pass and logs
-``tuning/occurs_auroc_macro_sampled`` plus a 95% CI (``_ci_lo``/``_ci_hi``).  Because a task's
-AUROC equals ``P(score(pos) > score(neg))`` for a random pos/neg pair, the win/tie/loss indicator on that
-one pair is an unbiased (high-variance) estimate; macro-averaging across tasks estimates
-macro AUROC at ``O(n_tasks)`` forward examples instead of ``O(tuning-split size)``.
+``tuning/occurs_auroc_macro_sampled`` plus a 95% bootstrap CI (``_ci_lo``/``_ci_hi``).  Because a
+task's AUROC equals ``P(score(pos) > score(neg))`` for a random pos/neg pair, the win/tie/loss
+indicator on that one pair is an unbiased (high-variance) estimate; macro-averaging across tasks
+estimates macro AUROC at ``O(n_tasks)`` forward examples instead of ``O(tuning-split size)``.
 
 Lives as a ``Callback`` (not on the ``LightningModule``) so it wires in via
 ``trainer.callbacks`` like the other cross-cutting concerns, and so its typed ``__init__``
@@ -14,14 +14,14 @@ fails fast on a misconfigured hydra block — nothing here is checkpoint-relevan
 """
 
 import logging
-import math
-import statistics
 
+import numpy as np
 import torch
 from lightning.pytorch import Callback
 from lightning.pytorch.utilities import move_data_to_device
 from meds import tuning_split
 from meds_torchdata import MEDSTorchDataConfig
+from scipy.stats import bootstrap
 from torch.utils.data import DataLoader
 
 from every_query.data.dataset import EveryQueryBatch, EveryQueryPytorchDataset
@@ -125,18 +125,31 @@ class TaskAurocTrackingCallback(Callback):
             return
 
         estimate = sum(indicators) / len(indicators)
-        # A plain mean of independent per-task indicators, so the bootstrap distribution of the
-        # estimate is just the normal approximation; resampling would only re-derive std/sqrt(n).
-        # If tracking ever samples multiple pairs per task the indicators stop being independent
-        # and this needs a task-level cluster bootstrap instead.
-        half_width = (
-            1.96 * statistics.stdev(indicators) / math.sqrt(len(indicators)) if len(indicators) > 1 else 0.0
-        )
+        # `indicators` holds one score per *task*, so resampling it resamples tasks — i.e. this is
+        # already a task-level cluster bootstrap.  Keep that invariant: if tracking ever samples
+        # multiple pairs per task, average them into one entry per task rather than appending each
+        # pair, and the interval stays correct (pairs within a task are correlated; tasks are not).
+        # Seeded so a fixed set of scores gives a fixed interval and epoch-to-epoch moves are the
+        # model, not the resampler.
+        if len(indicators) > 1:
+            ci = bootstrap(
+                (np.asarray(indicators),),
+                np.mean,
+                n_resamples=1000,
+                confidence_level=0.95,
+                method="percentile",
+                rng=np.random.default_rng(0),
+            ).confidence_interval
+            ci_lo, ci_hi = float(ci.low), float(ci.high)
+        else:
+            ci_lo = ci_hi = estimate  # scipy rejects n=1; a single task carries no spread anyway
 
+        # No clamping: percentile bounds are means of the observed scores, so they're in [0, 1] by
+        # construction.
         for suffix, value in (
             ("", estimate),
-            ("_ci_lo", max(0.0, estimate - half_width)),
-            ("_ci_hi", min(1.0, estimate + half_width)),
+            ("_ci_lo", ci_lo),
+            ("_ci_hi", ci_hi),
         ):
             log_fn(
                 f"tuning/occurs_auroc_macro_sampled{suffix}",
