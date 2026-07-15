@@ -280,15 +280,14 @@ class TestTaskAurocCallbackLogging:
         assert logged["tuning/occurs_auroc_macro_sampled"] == pytest.approx(0.5)
 
     def test_state_does_not_leak_across_calls(self):
-        # The callback resets the metric each pass; a second identical pass must log the same
-        # n_tasks rather than double-counting.
-        batch = _make_tracking_batch([10, 10], [7.0, 7.0], [0, 1])
+        # Each pass scores a *different* task, so rows leaked from pass 1 would surface as
+        # n_tasks == 2 on pass 2.  (Re-scoring the same task would pass either way.)
         cb = TaskAurocTrackingCallback(config=None)
-        cb._loader = [batch]
         logged = {}
         log_fn = lambda name, value, **kw: logged.__setitem__(name, value)  # noqa: E731
 
-        for _ in range(2):
+        for query in (10, 20):
+            cb._loader = [_make_tracking_batch([query, query], [7.0, 7.0], [0, 1])]
             cb._compute_and_log(_StubOccursModel([-10.0, 10.0]), torch.device("cpu"), log_fn)
 
         assert logged["tuning/occurs_auroc_macro_sampled_n_tasks"] == 1.0

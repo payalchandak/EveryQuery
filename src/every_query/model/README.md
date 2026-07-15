@@ -12,6 +12,11 @@ shape, no Hydra entry points, no configs.
     PyTorch Lightning with `training_step` / `validation_step` / `predict_step`. Shared between
     training and inference — the same LightningModule's `predict_step` is what `predict/` will
     use at inference time.
+- **`task_auroc_callback.py`** — `TaskAurocTrackingCallback`. A Lightning `Callback` owning the
+    dataloader over the offline-sampled pos/neg tracking pairs, plus the forward pass that scores
+    them each validation epoch. Scores on rank 0 only.
+- **`sampled_macro_auroc.py`** — `SampledMacroAUROC`. The `torchmetrics.Metric` the callback feeds:
+    accumulates scored rows and macro-averages the per-task win/tie/loss indicator.
 
 Call through the package so stage submodules don't need to know the file layout:
 

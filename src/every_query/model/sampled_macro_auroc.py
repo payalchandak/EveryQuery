@@ -12,6 +12,7 @@ This class only owns the accumulate-and-score half.
 
 import torch
 from torchmetrics import Metric
+from torchmetrics.utilities.data import dim_zero_cat
 
 from every_query.data.dataset import EveryQueryBatch
 
@@ -52,6 +53,8 @@ class SampledMacroAUROC(Metric):
         super().__init__(sync_on_compute=False)
         # add_state defaults to persistent=False, so none of this lands in state_dict and
         # existing checkpoints are unaffected.
+        # dist_reduce_fx is declared for shape-correctness only — it never runs, because
+        # sync_on_compute=False above means this metric is never synced across ranks.
         self.add_state("query", default=[], dist_reduce_fx="cat")
         self.add_state("duration", default=[], dist_reduce_fx="cat")
         self.add_state("label", default=[], dist_reduce_fx="cat")
@@ -100,12 +103,14 @@ class SampledMacroAUROC(Metric):
             (1.0, 1)
         """
         probs_by_task: dict[tuple[int, float], dict[int, float]] = {}
-        if self.query:
+        # len() rather than truthiness: after a _sync_dist these states are tensors, not lists,
+        # and `if self.query:` on a multi-element tensor raises.
+        if len(self.query):
             rows = zip(
-                torch.cat(self.query).tolist(),
-                torch.cat(self.duration).tolist(),
-                torch.cat(self.label).tolist(),
-                torch.cat(self.prob).tolist(),
+                dim_zero_cat(self.query).tolist(),
+                dim_zero_cat(self.duration).tolist(),
+                dim_zero_cat(self.label).tolist(),
+                dim_zero_cat(self.prob).tolist(),
                 strict=True,
             )
             for q, duration, label, prob in rows:
