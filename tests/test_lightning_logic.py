@@ -14,6 +14,7 @@ from meds_torchdata import MEDSTorchDataConfig
 from every_query.data.dataset import EveryQueryBatch
 from every_query.model import EveryQueryOutput
 from every_query.model.lightning_module import EveryQueryLightningModule
+from every_query.model.sampled_macro_auroc import SampledMacroAUROC
 from every_query.model.task_auroc_callback import TaskAurocTrackingCallback
 
 _CONFIGURED_WD = 0.01
@@ -159,12 +160,98 @@ def _make_tracking_batch(queries: list[int], durations: list[float], occurs: lis
     )
 
 
-class TestSampledTaskAurocTracking:
-    """``TaskAurocTrackingCallback._compute_and_log`` — macro win/tie/loss AUROC over pairs.
+class TestSampledMacroAUROC:
+    """``SampledMacroAUROC`` — macro win/tie/loss AUROC over pos/neg pairs.
 
     Each task in the tracking set contributes exactly one positive and one negative row; per-task AUROC
     collapses to an indicator on which of the two scored higher.
     """
+
+    @staticmethod
+    def _scored(queries, durations, occurs, probs):
+        """Feed one batch of rows into a fresh metric and return its ``compute()`` dict."""
+        m = SampledMacroAUROC()
+        m.update(
+            query=torch.tensor(queries, dtype=torch.long),
+            duration_days=torch.tensor(durations, dtype=torch.float32),
+            occurs=torch.tensor(occurs, dtype=torch.long),
+            occurs_probs=torch.tensor(probs, dtype=torch.float32),
+        )
+        return m.compute()
+
+    def test_no_tasks_when_never_updated(self):
+        out = SampledMacroAUROC().compute()
+        assert out["n_tasks"] == 0
+        assert out["auroc"].isnan()
+
+    def test_macro_average_win_tie_loss(self):
+        # Task 10: neg ~0 prob, pos ~1 prob -> win  (indicator 1.0)
+        # Task 20: neg ~1 prob, pos ~0 prob -> loss (indicator 0.0)
+        # Task 30: neg and pos equal        -> tie  (indicator 0.5)
+        out = self._scored(
+            [10, 10, 20, 20, 30, 30],
+            [7.0] * 6,
+            [0, 1, 0, 1, 0, 1],
+            [0.1, 0.9, 0.9, 0.1, 0.5, 0.5],
+        )
+
+        assert out["n_tasks"] == 3.0
+        assert float(out["auroc"]) == pytest.approx((1.0 + 0.0 + 0.5) / 3)
+
+    def test_tasks_missing_a_class_are_dropped(self):
+        # Task 10 has both classes (win); task 20 only has a positive row and is dropped.
+        out = self._scored([10, 10, 20], [7.0, 7.0, 7.0], [0, 1, 1], [0.1, 0.9, 0.5])
+
+        assert out["n_tasks"] == 1.0
+        assert float(out["auroc"]) == pytest.approx(1.0)
+
+    def test_same_query_at_different_durations_are_distinct_tasks(self):
+        # (query, duration_days) is the task key — query 10 at 7d and at 30d must not merge.
+        out = self._scored([10, 10, 10, 10], [7.0, 7.0, 30.0, 30.0], [0, 1, 0, 1], [0.1, 0.9, 0.9, 0.1])
+
+        assert out["n_tasks"] == 2.0
+        assert float(out["auroc"]) == pytest.approx(0.5)  # one win, one loss
+
+    def test_oov_query_rows_are_skipped(self):
+        # Both tasks are out-of-vocab (query == PAD_INDEX 0); without the guard their pos/neg
+        # probs collide into one bogus (0, 7.0) task. They must be dropped, leaving no tasks.
+        out = self._scored([0, 0, 0, 0], [7.0] * 4, [0, 1, 0, 1], [0.1, 0.9, 0.9, 0.1])
+
+        assert out["n_tasks"] == 0
+        assert out["auroc"].isnan()
+
+    def test_accumulates_across_batches(self):
+        # A task's pos and neg rows can land in different batches; pairing happens at compute().
+        m = SampledMacroAUROC()
+        for occurs, prob in ((0, 0.1), (1, 0.9)):
+            m.update(
+                query=torch.tensor([10], dtype=torch.long),
+                duration_days=torch.tensor([7.0]),
+                occurs=torch.tensor([occurs], dtype=torch.long),
+                occurs_probs=torch.tensor([prob]),
+            )
+
+        out = m.compute()
+        assert out["n_tasks"] == 1.0
+        assert float(out["auroc"]) == pytest.approx(1.0)
+
+    def test_reset_clears_state(self):
+        m = SampledMacroAUROC()
+        m.update(
+            query=torch.tensor([10, 10], dtype=torch.long),
+            duration_days=torch.tensor([7.0, 7.0]),
+            occurs=torch.tensor([0, 1], dtype=torch.long),
+            occurs_probs=torch.tensor([0.1, 0.9]),
+        )
+        assert m.compute()["n_tasks"] == 1.0
+
+        m.reset()
+
+        assert m.compute()["n_tasks"] == 0
+
+
+class TestTaskAurocCallbackLogging:
+    """``TaskAurocTrackingCallback._compute_and_log`` — the loader/forward/log shell around the metric."""
 
     @staticmethod
     def _run(model, batches):
@@ -182,35 +269,29 @@ class TestSampledTaskAurocTracking:
     def test_no_op_when_loader_empty(self):
         assert self._run(_StubOccursModel([]), []) == {}
 
-    def test_macro_average_win_tie_loss(self):
-        # Task 10: neg logit -10 (~0 prob), pos logit +10 (~1 prob) -> win  (indicator 1.0)
-        # Task 20: neg logit +10 (~1 prob), pos logit -10 (~0 prob) -> loss (indicator 0.0)
-        # Task 30: neg logit  0.0,          pos logit  0.0 (tie)    -> tie  (indicator 0.5)
-        batch = _make_tracking_batch([10, 10, 20, 20, 30, 30], [7.0] * 6, [0, 1, 0, 1, 0, 1])
-        logits = [-10.0, 10.0, 10.0, -10.0, 0.0, 0.0]
-
-        logged = self._run(_StubOccursModel(logits), [batch])
-
-        assert logged["tuning/occurs_auroc_macro_sampled_n_tasks"] == 3.0
-        assert logged["tuning/occurs_auroc_macro_sampled"] == pytest.approx((1.0 + 0.0 + 0.5) / 3)
-
-    def test_tasks_missing_a_class_are_dropped(self):
-        # Task 10 has both classes (win); task 20 only has a positive row and is dropped.
-        batch = _make_tracking_batch([10, 10, 20], [7.0, 7.0, 7.0], [0, 1, 1])
-        logits = [-10.0, 10.0, 0.0]
-
-        logged = self._run(_StubOccursModel(logits), [batch])
-
-        assert logged["tuning/occurs_auroc_macro_sampled_n_tasks"] == 1.0
-        assert logged["tuning/occurs_auroc_macro_sampled"] == pytest.approx(1.0)
-
-    def test_oov_query_rows_are_skipped(self):
-        # Both tasks are out-of-vocab (query == PAD_INDEX 0); without the guard their pos/neg
-        # probs collide into one bogus (0, 7.0) task. They must be dropped, leaving no metric.
-        batch = _make_tracking_batch([0, 0, 0, 0], [7.0] * 4, [0, 1, 0, 1])
+    def test_logs_metric_from_scored_batch(self):
+        # Task 10: neg logit -10 (~0 prob) vs pos logit +10 (~1 prob) -> win; task 20 -> loss.
+        batch = _make_tracking_batch([10, 10, 20, 20], [7.0] * 4, [0, 1, 0, 1])
         logits = [-10.0, 10.0, 10.0, -10.0]
 
-        assert self._run(_StubOccursModel(logits), [batch]) == {}
+        logged = self._run(_StubOccursModel(logits), [batch])
+
+        assert logged["tuning/occurs_auroc_macro_sampled_n_tasks"] == 2.0
+        assert logged["tuning/occurs_auroc_macro_sampled"] == pytest.approx(0.5)
+
+    def test_state_does_not_leak_across_calls(self):
+        # The callback resets the metric each pass; a second identical pass must log the same
+        # n_tasks rather than double-counting.
+        batch = _make_tracking_batch([10, 10], [7.0, 7.0], [0, 1])
+        cb = TaskAurocTrackingCallback(config=None)
+        cb._loader = [batch]
+        logged = {}
+        log_fn = lambda name, value, **kw: logged.__setitem__(name, value)  # noqa: E731
+
+        for _ in range(2):
+            cb._compute_and_log(_StubOccursModel([-10.0, 10.0]), torch.device("cpu"), log_fn)
+
+        assert logged["tuning/occurs_auroc_macro_sampled_n_tasks"] == 1.0
 
 
 class TestCallbackHydraWiring:

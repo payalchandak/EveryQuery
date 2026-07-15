@@ -3,14 +3,15 @@
 Scores a fixed, offline-sampled parquet of one positive + one negative row per
 ``(query, duration_days)`` task (see
 ``every_query.generate_tasks.sample_task_tracking_pairs``) every validation pass and logs
-``tuning/occurs_auroc_macro_sampled``.  Because a task's AUROC equals
-``P(score(pos) > score(neg))`` for a random pos/neg pair, the win/tie/loss indicator on that
-one pair is an unbiased (high-variance) estimate; macro-averaging across tasks estimates
-macro AUROC at ``O(n_tasks)`` forward examples instead of ``O(tuning-split size)``.
+``tuning/occurs_auroc_macro_sampled``.  The scoring itself lives in
+``every_query.model.sampled_macro_auroc.SampledMacroAUROC``; this callback owns the
+dataloader over the pair set and the forward pass that feeds it.
 
 Lives as a ``Callback`` (not on the ``LightningModule``) so it wires in via
-``trainer.callbacks`` like the other cross-cutting concerns, and so its typed ``__init__``
-fails fast on a misconfigured hydra block — nothing here is checkpoint-relevant.
+``trainer.callbacks`` like the other cross-cutting concerns, and because the pairs are a
+separate dataset over a separate ``task_labels_dir`` — a ``LightningModule`` restored by
+``load_from_checkpoint`` reconstructs from hparams alone and could not supply that path.
+Nothing here is checkpoint-relevant.
 """
 
 import logging
@@ -22,7 +23,8 @@ from meds import tuning_split
 from meds_torchdata import MEDSTorchDataConfig
 from torch.utils.data import DataLoader
 
-from every_query.data.dataset import EveryQueryBatch, EveryQueryPytorchDataset
+from every_query.data.dataset import EveryQueryPytorchDataset
+from every_query.model.sampled_macro_auroc import SampledMacroAUROC
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,7 @@ class TaskAurocTrackingCallback(Callback):
         super().__init__()
         self.config = config
         self.batch_size = batch_size
+        self.metric = SampledMacroAUROC()
         self._loader: DataLoader | None = None
 
     def setup(self, trainer, pl_module, stage=None):
@@ -97,40 +100,37 @@ class TaskAurocTrackingCallback(Callback):
         Precondition: called inside Lightning's eval loop, so ``model`` is already in eval mode
         (``no_grad`` covers the numerics regardless).
         """
-        probs_by_task: dict[tuple[int, float], dict[int, float]] = {}
-        with torch.no_grad():
-            for batch in self._loader:
-                batch = move_data_to_device(batch, device)
-                _, outputs = model(batch)
-                # Squeeze only dim 1 so a trailing size-1 batch doesn't collapse to a 0-d scalar.
-                probs = outputs.occurs_logits.detach().cpu().squeeze(1).sigmoid().float().tolist()
-                queries = batch.query.detach().cpu().tolist()
-                durations = batch.duration_days.detach().cpu().tolist()
-                labels = batch.occurs.detach().cpu().tolist()
-                for query, duration, label, prob in zip(queries, durations, labels, probs, strict=True):
-                    if query == EveryQueryBatch.PAD_INDEX:
-                        continue  # OOV/pad — see setup() warning
-                    probs_by_task.setdefault((query, duration), {})[int(label)] = prob
+        try:
+            with torch.no_grad():
+                for batch in self._loader:
+                    batch = move_data_to_device(batch, device)
+                    _, outputs = model(batch)
+                    # Squeeze only dim 1 so a trailing size-1 batch doesn't collapse to a 0-d scalar.
+                    probs = outputs.occurs_logits.detach().squeeze(1).sigmoid().float()
+                    self.metric.update(
+                        query=batch.query.detach(),
+                        duration_days=batch.duration_days.detach(),
+                        occurs=batch.occurs.detach(),
+                        occurs_probs=probs,
+                    )
 
-        indicators = []
-        for task_probs in probs_by_task.values():
-            if 1 not in task_probs or 0 not in task_probs:
-                continue
-            pos_prob, neg_prob = task_probs[1], task_probs[0]
-            indicators.append(1.0 if pos_prob > neg_prob else 0.0 if pos_prob < neg_prob else 0.5)
+            scores = self.metric.compute()
+            if scores["n_tasks"] == 0:
+                return
 
-        if not indicators:
-            return
-
-        log_fn(
-            "tuning/occurs_auroc_macro_sampled",
-            sum(indicators) / len(indicators),
-            rank_zero_only=True,
-            sync_dist=False,
-        )
-        log_fn(
-            "tuning/occurs_auroc_macro_sampled_n_tasks",
-            float(len(indicators)),
-            rank_zero_only=True,
-            sync_dist=False,
-        )
+            log_fn(
+                "tuning/occurs_auroc_macro_sampled",
+                float(scores["auroc"]),
+                rank_zero_only=True,
+                sync_dist=False,
+            )
+            log_fn(
+                "tuning/occurs_auroc_macro_sampled_n_tasks",
+                float(scores["n_tasks"]),
+                rank_zero_only=True,
+                sync_dist=False,
+            )
+        finally:
+            # Reset in `finally` so a mid-epoch failure can't leak this epoch's rows into the next
+            # validation pass and silently skew the estimate.
+            self.metric.reset()
