@@ -299,22 +299,23 @@ A patient context is a `(subject_idx, prediction_time_index)` pair; the timestam
 #### Labeling rule
 
 For each `(subject_id, prediction_time)` row, examine the window `(prediction_time, prediction_time + duration_days]`
-(invariant 6: open lower bound via `join_asof(..., allow_exact_matches=False)`, closed upper bound). Resolve occurrence first;
-censoring applies only when the event did **not** occur in the observed window:
+(invariant 6: open lower bound via `join_asof(..., allow_exact_matches=False)`, closed upper bound). **Censoring is
+resolved first**: if the window closes after the record ends and the subject is not known dead by the window end, the
+label is `null` regardless of any earlier occurrence. Otherwise, occurrence decides:
 
-| occurs in observed window | censored | `boolean_value` |
-| ------------------------- | -------- | --------------- |
-| yes                       | —        | True            |
-| no                        | yes      | null            |
-| no                        | no       | False           |
+| censored | occurs in window | `boolean_value` |
+| -------- | ---------------- | --------------- |
+| yes      | —                | null            |
+| no       | yes              | True            |
+| no       | no               | False           |
 
-- **occurs** — an event with the query `code` falls strictly within the *observed* window
-    `(prediction_time, min(prediction_time + duration_days, max_time[subject_id])]`. Label `True`, even if
-    the window extends past the end of record.
-- **censored** — not occurred **and** `prediction_time + duration_days > max_time[subject_id]` (the record
-    ends before the window closes; the unobserved tail is unknown). Label `null`.
-- **does not occur** — not occurred and the full window is observed
-    (`prediction_time + duration_days <= max_time[subject_id]`). Label `False`.
+- **censored** — `prediction_time + duration_days > max_time[subject_id]` **and** the subject has no `MEDS_DEATH`
+    row at or before the window end (the record ends before the window closes; the unobserved tail is unknown). Label
+    `null`. Resolved *before* occurrence: an event observed earlier in the window does **not** override the unknown tail.
+- **occurs** — not censored, and an event with the query `code` falls strictly within
+    `(prediction_time, prediction_time + duration_days]`. Label `True`.
+- **does not occur** — not censored, and no matching event in the window. Label `False`. This includes a subject who is
+    dead by the window end: death is terminal, so the record is complete and a non-occurrence is a genuine negative.
 
 **Float-duration implementation note.** `polars.duration(days=...)` expects integer day expressions, so a
 float `duration_days` window must be added as e.g.

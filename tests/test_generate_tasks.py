@@ -24,6 +24,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 import polars as pl
+from meds import death_code
 
 from conftest import run_and_check
 
@@ -73,11 +74,13 @@ def test_labels_match_ground_truth(
 
     The sampler's documented semantics (``generate_tasks/sample_tasks.py::evaluate_index_df``):
 
+        # post-death events are dropped first (death is terminal); death_time = earliest MEDS_DEATH
         window_end    = prediction_time + duration_days
-        censored      = window_end > max_time[subject]
+        observed      = window_end <= max_time[subject] OR death_time[subject] <= window_end
+        censored      = not observed
         event_fires   = exists event(subject, code=query, time in (prediction_time, window_end])
-        boolean_value = True  if event_fires        # occurrence takes priority (spec §Stage 4)
-                        else None if censored        # unobserved tail → censored
+        boolean_value = None  if censored           # unobserved tail wins (spec §Stage 4)
+                        else True if event_fires     # observed occurrence
                         else False                   # full window observed, no event
 
     Recomputing row-by-row catches semantics-level bugs that a schema/shape assertion can't:
@@ -114,26 +117,46 @@ def test_labels_match_ground_truth(
             f"would be vacuous.  Check EQ_generate_training_tasks for empty-output regression."
         )
 
+        # Mirror _truncate_at_death: death is terminal, so events strictly after a subject's
+        # earliest MEDS_DEATH row are unobservable and must be dropped before computing max_time
+        # or occurrence — exactly as evaluate_index_df does.  The death row itself is kept (<=).
+        death_time_expr = pl.col("time").filter(pl.col("code") == death_code).min().over("subject_id")
+        events = events.filter(death_time_expr.is_null() | (pl.col("time") <= death_time_expr))
+
         max_time_per_subject = dict(
             events.group_by("subject_id").agg(pl.col("time").max().alias("max_time")).iter_rows()
+        )
+        # Earliest death timestamp per subject (from the truncated frame; null-absent = never dies).
+        death_time_per_subject = dict(
+            events.filter(pl.col("code") == death_code)
+            .group_by("subject_id")
+            .agg(pl.col("time").min().alias("death_time"))
+            .iter_rows()
         )
 
         # Walk every emitted row.  Simple Python — slow for millions of rows but fine for the
         # ~20-row fixture output, and the cost is bounded by CPU + parquet I/O, not test
         # complexity.  Favours readability + ground-truth correctness over vectorisation.
         #
-        # Collapsed nullable boolean_value per TaskQuerySchema (occurrence takes priority over
-        # censoring — spec §Stage 4 / evaluate_index_df line "Occurrence takes priority"):
-        #   True  → event occurred in (prediction_time, window_end], even if the window's tail
-        #           extends past max_time (an observed event is a definitive positive)
-        #   null  → no event in window AND censored (window_end > max_time OR subject absent)
-        #   False → no event in window and the full window is observed
+        # Collapsed nullable boolean_value per TaskQuerySchema — CENSORING takes priority over
+        # occurrence (spec §Stage 4 / evaluate_index_df "Censoring takes priority"):
+        #   null  → censored: window_end > max_time AND the subject is not dead by window_end
+        #           (unobserved tail is unknown, wins even over an in-window occurrence)
+        #   True  → not censored AND an event occurred in (prediction_time, window_end]
+        #   False → not censored AND no event in window (includes a subject dead by window_end)
         for row in labels.iter_rows(named=True):
             subj = row["subject_id"]
             window_end = row["prediction_time"] + timedelta(days=row["duration_days"])
 
             max_time = max_time_per_subject.get(subj)
-            expected_censored = max_time is None or window_end > max_time
+            death_t = death_time_per_subject.get(subj)
+            # Observed through window_end when the record spans it, OR the subject is dead by then
+            # (death ends the record).  Subject absent (max_time None) → mismatched inputs → censored
+            # (the sampler raises in that case, so this branch does not fire for emitted rows).
+            observed = (max_time is not None and window_end <= max_time) or (
+                death_t is not None and death_t <= window_end
+            )
+            expected_censored = not observed
 
             # Ground-truth event_fires: any event of the matching code in
             # (prediction_time, prediction_time + duration_days].  Sampler uses strict-> via
@@ -146,19 +169,19 @@ def test_labels_match_ground_truth(
                 & (pl.col("time") <= window_end)
             ).is_empty()
 
-            # Occurrence takes priority: an event observed in-window is True even when the
-            # window's tail is censored; null only when there is no event AND the tail is censored.
-            if event_fires:
-                expected_boolean = True
-            elif expected_censored:
+            # Censoring wins: an unobserved tail is null even when an event was observed earlier in
+            # the window.  Occurrence only decides True/False once the window is known-observed.
+            if expected_censored:
                 expected_boolean = None
+            elif event_fires:
+                expected_boolean = True
             else:
                 expected_boolean = False
 
             ctx = (
                 f"split={split}, subject_id={subj}, query={row['query']!r}, "
                 f"prediction_time={row['prediction_time']}, duration_days={row['duration_days']}, "
-                f"max_time={max_time}"
+                f"max_time={max_time}, death_time={death_t}"
             )
             assert row["boolean_value"] == expected_boolean, (
                 f"boolean_value mismatch: sampler={row['boolean_value']!r}, "

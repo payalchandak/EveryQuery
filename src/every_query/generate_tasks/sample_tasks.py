@@ -376,14 +376,21 @@ def evaluate_index_df(
     """Label an index DataFrame with the single nullable ``boolean_value`` column via a single ``join_asof``.
 
     Three-valued semantics (matches ``TaskQuerySchema`` + ``LabelSchema``'s nullable
-    ``boolean_value``):
+    ``boolean_value``).  Let ``window_end = prediction_time + duration_days``.  **Censoring is
+    resolved first** — an unobserved tail yields ``null`` even when the query already occurred
+    within the observed span:
 
-        - ``boolean_value = True``: an event with matching ``query`` code fell strictly
-          within ``(prediction_time, prediction_time + duration_days]``, even if the window
-          extends past ``max_time[subject_id]``.
-        - ``boolean_value = null``: no matching event in the observed window **and**
-          ``(prediction_time + duration_days) > max_time[subject_id]`` (censored).
-        - ``boolean_value = False``: no matching event and the full window is observed.
+        - ``boolean_value = null`` (censored): the record ends before the window closes
+          (``window_end > max_time[subject_id]``) **and** the subject is not known dead by
+          ``window_end``.  The unobserved tail is unknown, so the label is unknown — this takes
+          priority over an occurrence in the observed part of the window.
+        - ``boolean_value = True``: not censored, and an event with matching ``query`` code fell
+          strictly within ``(prediction_time, window_end]``.
+        - ``boolean_value = False``: not censored, and no matching event in that window.
+
+    A subject is observed through ``window_end`` when either ``window_end <= max_time`` (the
+    record spans the whole window) or the subject's ``MEDS_DEATH`` timestamp is ``<= window_end``:
+    death is terminal, so nothing can occur afterward and a non-occurrence is a genuine ``False``.
 
     The ``>`` on event time is enforced with ``join_asof(..., allow_exact_matches=False)``, which
     excludes exact-key matches from ``strategy="forward"``'s default ``>=`` search, leaving a
@@ -391,9 +398,10 @@ def evaluate_index_df(
 
     Death is terminal (#257): events timestamped strictly after a subject's ``MEDS_DEATH`` row
     (the earliest one, if duplicated) are dropped before labeling, so they neither extend
-    ``max_time`` nor satisfy an occurrence match.  The death row itself is kept, so
-    ``MEDS_DEATH`` remains answerable as a query code; subjects with no death row are
-    unaffected.  This is a no-op when ``MEDS_DEATH`` is already the last recorded event.
+    ``max_time`` nor satisfy an occurrence match; and because the record cannot continue past
+    death, a window closing at or after the death timestamp counts as fully observed (a
+    non-occurrence there is ``False``, not censored).  The death row itself is kept, so
+    ``MEDS_DEATH`` remains answerable as a query code; subjects with no death row are unaffected.
 
     Args:
         index_df: Output of ``build_index_df``. Must have columns ``subject_id``, ``prediction_time``,
@@ -432,12 +440,18 @@ def evaluate_index_df(
         return empty_task_query_df().select(out_cols)
 
     # Truncate each subject's record at death (see docstring, #257).  Must happen before *both*
-    # consumers of events_df below — max_time_per_subject and the join_asof right side — or a
+    # consumers of events_df below — subject_end_times and the join_asof right side — or a
     # post-death event could still asof-match into an occurrence.
     events_df = _truncate_at_death(events_df)
 
-    max_time_per_subject = events_df.group_by(DataSchema.subject_id_name).agg(
-        pl.col(DataSchema.time_name).max().alias("max_time")
+    subject_end_times = events_df.group_by(DataSchema.subject_id_name).agg(
+        pl.col(DataSchema.time_name).max().alias("max_time"),
+        # Death row is kept by _truncate_at_death, so its (earliest) timestamp is still here;
+        # null for subjects with no death row.
+        pl.col(DataSchema.time_name)
+        .filter(pl.col(DataSchema.code_name) == death_code)
+        .min()
+        .alias("death_time"),
     )
 
     # Left side: index rows sorted by (subject_id, query, prediction_time).  ``join_asof``
@@ -496,9 +510,9 @@ def evaluate_index_df(
         strategy="forward",
         allow_exact_matches=False,
     )
-    joined = joined.join(max_time_per_subject, on=TaskQuerySchema.subject_id_name, how="left")
+    joined = joined.join(subject_end_times, on=TaskQuerySchema.subject_id_name, how="left")
 
-    # Rows whose subject is not present in max_time_per_subject come out of the left join with
+    # Rows whose subject is not present in subject_end_times come out of the left join with
     # max_time=null.  Both pipelines build index_df and events_df from the same shard, so this
     # can only mean mismatched inputs (e.g. a stale _prediction_times cache) — raise rather than
     # launder the mismatch into censored labels (see docstring Raises).
@@ -512,17 +526,23 @@ def evaluate_index_df(
 
     duration_expr = pl.duration(seconds=pl.col(TaskQuerySchema.duration_days_name) * 86_400)
     window_end = pl.col(TaskQuerySchema.prediction_time_name) + duration_expr
-    censored = window_end > pl.col("max_time")
+    # death_time is null for subjects who never die; `null <= window_end` is null, which would
+    # poison the OR (null | False = null) and mislabel a living subject's past-max_time window as
+    # False instead of censored. fill_null(False) means "no death row => death rescue never fires".
+    observed = (pl.col("death_time") <= window_end).fill_null(False) | (window_end <= pl.col("max_time"))
+    censored = ~observed
     event_in_window = pl.col(DataSchema.time_name).is_not_null() & (
         pl.col(DataSchema.time_name) <= window_end
     )
 
-    # Occurrence takes priority: True even if the window extends past max_time (spec §Stage 4).
+    # Censoring takes priority (spec §Stage 4): an unobserved tail is null even if a matching
+    # event occurred in the observed part of the window.  A subject dead by window_end is never
+    # censored (observed via death_time), so their non-occurrence falls through to False.
     boolean_value = (
-        pl.when(event_in_window)
-        .then(pl.lit(True))
-        .when(censored)
+        pl.when(censored)
         .then(pl.lit(None, dtype=pl.Boolean))
+        .when(event_in_window)
+        .then(pl.lit(True))
         .otherwise(pl.lit(False))
     )
 

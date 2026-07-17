@@ -1,8 +1,11 @@
 """Stage 4: per-shard labeling — ``evaluate_index_df`` (pure core) + ``label_one_shard`` (worker).
 
-Covers the three-valued label (True / False / null-censored), strict-``>`` at prediction_time,
-inclusive window-end, the unknown-subject raise, dtype normalization on the event-shard read path,
-the worker's skip/overwrite/atomicity behavior, and stale-temp cleanup.  Gap tests pin the
+Covers the three-valued label (True / False / null-censored) with **censoring resolved before
+occurrence** (an unobserved tail is null even if the query occurred in the observed span) and
+**death as a fully-observed terminus** (a subject dead by the window end is never censored — a
+non-occurrence is a genuine False).  Also pins strict-``>`` at prediction_time, inclusive
+window-end, the unknown-subject raise, dtype normalization on the event-shard read path, the
+worker's skip/overwrite/atomicity behavior, and stale-temp cleanup.  Gap tests pin the
 forward-only asof direction (past events don't count) and query-code isolation.
 """
 
@@ -230,12 +233,19 @@ class TestEvaluateIndexDfEdgeCases:
         assert result["boolean_value"].to_list() == [True]
 
 
-class TestDeathTruncation:
-    """Death is terminal (#257): events after a subject's ``MEDS_DEATH`` row are unobservable.
+class TestLabelContract:
+    """The full three-valued label contract for ``evaluate_index_df`` (redesign-spec.md §Stage 4).
 
-    Truncation happens inside ``evaluate_index_df`` on ``events_df`` itself, so it affects both
-    ``max_time`` (censoring boundary) and occurrence matching, while the death row itself stays
-    queryable.
+    Two priority rules drive every case, both pinned here:
+
+      1. **Censoring beats occurrence.** For a subject not known dead, a window that closes after
+         ``max_time`` is ``null`` even if the query occurred in the observed span.
+      2. **Death is a fully-observed terminus.** A subject dead by the window end (earliest
+         ``MEDS_DEATH`` ``<= window_end``) is never censored; death truncates post-death events so
+         they neither match nor extend ``max_time``, while the death row itself stays queryable.
+
+    Each case is a single index row over a single subject, so the resolved label is unambiguously
+    the contract row under test.  ``day N`` abbreviates ``BASE + N days``; ``prediction_time = BASE``.
     """
 
     BASE = datetime(2020, 1, 1)
@@ -254,185 +264,113 @@ class TestDeathTruncation:
         assert result.height == 1
         return result["boolean_value"].to_list()[0]
 
-    def test_death_as_last_event_is_a_noop(self):
-        """Regression guard: ``MEDS_DEATH`` already last → identical to pre-#257 behavior.
+    def _events(self, rows: list[tuple[int, str]]) -> pl.DataFrame:
+        """Build a single-subject events frame from ``(day_offset, code)`` tuples."""
+        return pl.DataFrame(
+            {
+                "subject_id": [1] * len(rows),
+                "time": [self.BASE + timedelta(days=d) for d, _ in rows],
+                "code": [c for _, c in rows],
+            }
+        )
 
-        ``max_time = death (day 10)``; the 30d window runs past it with no matching event → null.
+    # -- Living subject (no MEDS_DEATH row) -------------------------------------------------------
+
+    def test_alive_occurs_in_fully_observed_window_is_true(self):
+        """Occurrence + fully-observed window → ``True``.
+
+        ``A`` at day 3 is in ``(day 0, day 7]``; the day-100 event pushes ``max_time`` past the
+        window (day 7 <= day 100) so the window is fully observed and occurrence decides.
         """
-        events = pl.DataFrame(
-            {
-                "subject_id": [1, 1],
-                "time": [self.BASE + timedelta(days=3), self.BASE + timedelta(days=10)],
-                "code": ["B", death_code],
-            }
-        )
-        assert self._label(events, query="A", duration_days=30.0) is None
+        events = self._events([(3, "A"), (100, "X")])
+        assert self._label(events, query="A", duration_days=7.0) is True
 
-    def test_event_after_death_neither_matches_nor_extends_max_time(self):
-        """The drift case: a post-death event (day 20) must be invisible.
+    def test_alive_no_occurrence_fully_observed_is_false(self):
+        """No occurrence + fully-observed window → ``False``.
 
-        - query "A" (the post-death code, in the 30d window): must not match → and because
-          ``max_time`` is now the death time (day 10) < window end (day 30), the label is
-          null (censored), not True and not False.
-        - query "B" with a 5d window fully observed before death: still False (truncation
-          doesn't disturb pre-death labeling).
+        The only event (day 100) keeps ``max_time`` past the day-7 window; no ``A`` occurs in it.
         """
-        events = pl.DataFrame(
-            {
-                "subject_id": [1, 1, 1],
-                "time": [
-                    self.BASE + timedelta(days=3),
-                    self.BASE + timedelta(days=10),
-                    self.BASE + timedelta(days=20),  # post-death drift row
-                ],
-                "code": ["C", death_code, "A"],
-            }
-        )
-        assert self._label(events, query="A", duration_days=30.0) is None
-        assert self._label(events, query="B", duration_days=5.0) is False
-
-    def test_death_code_itself_is_still_queryable(self):
-        """A query on ``MEDS_DEATH`` occurring in-window resolves True: the death row is kept (``<=``, not
-        ``<``) and occurrence takes priority over censoring."""
-        events = pl.DataFrame(
-            {
-                "subject_id": [1, 1],
-                "time": [self.BASE + timedelta(days=3), self.BASE + timedelta(days=10)],
-                "code": ["B", death_code],
-            }
-        )
-        assert self._label(events, query=death_code, duration_days=30.0) is True
-
-    def test_no_death_row_is_unaffected(self):
-        """No ``MEDS_DEATH`` for the subject → truncation is a no-op; day-100 event keeps the 7d window fully
-        observed → False."""
-        events = pl.DataFrame(
-            {
-                "subject_id": [1],
-                "time": [self.BASE + timedelta(days=100)],
-                "code": ["B"],
-            }
-        )
+        events = self._events([(100, "X")])
         assert self._label(events, query="A", duration_days=7.0) is False
 
-    def test_duplicate_death_rows_use_earliest(self):
-        """Two ``MEDS_DEATH`` rows (data-quality edge) truncate at the *earlier* one: the "A" event between
-        the two death times must not match → censored null."""
-        events = pl.DataFrame(
-            {
-                "subject_id": [1, 1, 1],
-                "time": [
-                    self.BASE + timedelta(days=10),
-                    self.BASE + timedelta(days=15),  # between the two death rows → dropped
-                    self.BASE + timedelta(days=20),
-                ],
-                "code": [death_code, "A", death_code],
-            }
-        )
+    def test_alive_no_occurrence_window_past_record_is_censored_null(self):
+        """No occurrence + window past ``max_time`` (alive) → ``null`` (censored).
+
+        The only event is at day 10 (``max_time = day 10``); the 30d window's tail (day 10→30) is
+        unobserved, so the label is unknown.
+        """
+        events = self._events([(10, "B")])
         assert self._label(events, query="A", duration_days=30.0) is None
 
+    def test_alive_occurrence_but_window_past_record_is_censored_null(self):
+        """Censoring beats occurrence: an observed ``A`` at day 3 is still ``null`` when the window
+        runs past ``max_time`` for a living subject.
 
-class TestBooleanValueTruthTable:
-    """One test per row of the spec's labeling truth table (redesign-spec.md §Stage 4).
-
-    For each ``(subject_id, prediction_time)`` row the observed window is
-    ``(prediction_time, min(prediction_time + duration_days, max_time[subject_id])]``.
-    Occurrence is resolved first; censoring applies only when the event did **not** occur:
-
-    | occurs in observed window | censored | ``boolean_value`` |
-    | ------------------------- | -------- | ----------------- |
-    | yes                       | —        | True              |
-    | no                        | yes      | null              |
-    | no                        | no       | False             |
-
-    Each case is a single index row over a single subject so the resolved label is
-    unambiguously the table row under test, pinned independently of the other two.
-    """
-
-    BASE = datetime(2020, 1, 1)
-
-    def _evaluate_one(self, events: pl.DataFrame, duration_days: float) -> bool | None:
-        """Label a single index row (subject 1, code ``A``, ``prediction_time = BASE``) and return its
-        ``boolean_value``."""
-        events = events.with_columns(pl.col("time").cast(pl.Datetime("us"))).sort(["subject_id", "time"])
-        index_df = pl.DataFrame(
-            {
-                "subject_id": [1],
-                "prediction_time": [self.BASE],
-                "query": ["A"],
-                "duration_days": [duration_days],
-            }
-        ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
-        result = evaluate_index_df(index_df, events)
-        assert result.height == 1
-        return result["boolean_value"].to_list()[0]
-
-    def test_occurs_in_observed_window_is_true(self):
-        """Row 1: a matching event falls in the observed window → ``True``.
-
-        Event ``A`` at day 3 is strictly within ``(day 0, day 7]``; the later event at day 100
-        pushes ``max_time`` well past the window so occurrence — not censoring — decides the label.
+        ``A`` at day 3 is the subject's last event, so ``max_time = day 3`` and the 30d window's
+        tail (day 3→30) is unobserved.  Even though the query demonstrably occurred at day 3, the
+        unknown tail wins (spec §Stage 4: censoring resolved first) → ``null``.
         """
-        events = pl.DataFrame(
-            {
-                "subject_id": [1, 1],
-                "time": [self.BASE + timedelta(days=3), self.BASE + timedelta(days=100)],
-                "code": ["A", "A"],
-            }
-        )
-        assert self._evaluate_one(events, duration_days=7.0) is True
+        events = self._events([(3, "A")])
+        assert self._label(events, query="A", duration_days=30.0) is None
 
-    def test_occurs_takes_priority_over_censoring_is_true(self):
-        """Row 1, censored column ``—``: occurrence wins even when the requested window runs past ``max_time``
-        → ``True``, never ``null``.
+    def test_no_death_row_leaves_censoring_on_max_time(self):
+        """A subject with no ``MEDS_DEATH`` row is censored purely on ``max_time`` (the null-death guard must
+        not launder a past-record window into ``False``).
 
-        The subject's last (and only matching) event is ``A`` at day 3, so ``max_time = day 3``.
-        The requested window end (day 30) exceeds ``max_time`` — the censoring predicate
-        ``prediction_time + duration_days > max_time`` is **true** — but the ``A`` at day 3 falls
-        in the observed window ``(day 0, day 3]``.  Per the spec, occurrence is resolved first, so
-        the label is ``True`` and censoring never applies.
+        Regression guard for the ``death_time`` null-handling: with ``death_time`` null the
+        observed test collapses to ``window_end <= max_time``; here day-100 event keeps the 7d
+        window observed → ``False`` (and, per the case above, a past-record window would be null).
         """
-        events = pl.DataFrame(
-            {
-                "subject_id": [1],
-                "time": [self.BASE + timedelta(days=3)],
-                "code": ["A"],
-            }
-        )
-        assert self._evaluate_one(events, duration_days=30.0) is True
+        events = self._events([(100, "B")])
+        assert self._label(events, query="A", duration_days=7.0) is False
 
-    def test_no_occurrence_and_censored_is_null(self):
-        """Row 2: no matching event in the observed window **and** the window runs past
-        ``max_time`` → ``null`` (censored).
+    # -- Dead subject (MEDS_DEATH terminates the record) ------------------------------------------
 
-        The subject's only event is at day 10 (so ``max_time = day 10``) and carries a
-        non-matching code, so no ``A`` occurs in ``(day 0, day 10]``.  The requested window
-        end (day 30) exceeds ``max_time``, so the unobserved tail is unknown → censored.
+    def test_dead_occurrence_before_death_is_true(self):
+        """Occurrence before death, window past death → ``True`` (dead ⇒ observed, then occurrence).
+
+        ``A`` at day 3, death at day 10; the 30d window closes after death so it is fully observed,
+        and ``A`` in ``(day 0, day 30]`` makes it ``True``.
         """
-        events = pl.DataFrame(
-            {
-                "subject_id": [1],
-                "time": [self.BASE + timedelta(days=10)],
-                "code": ["B"],  # non-matching: no "A" anywhere
-            }
-        )
-        assert self._evaluate_one(events, duration_days=30.0) is None
+        events = self._events([(3, "A"), (10, death_code)])
+        assert self._label(events, query="A", duration_days=30.0) is True
 
-    def test_no_occurrence_and_fully_observed_is_false(self):
-        """Row 3: no matching event in the window and the full window is observed → ``False``.
+    def test_dead_no_occurrence_window_past_death_is_false(self):
+        """No occurrence, window past death → ``False``, NOT censored.
 
-        The matching event ``A`` lands at day 100 — outside ``(day 0, day 7]`` — and keeps
-        ``max_time`` (day 100) past the window end (day 7), so the window is fully observed
-        with no in-window occurrence.
+        Death (day 10) ends the record, so the day-30 window is fully observed even though it runs
+        past ``max_time = day 10``.  With no ``A``, the subject genuinely never has the event.
         """
-        events = pl.DataFrame(
-            {
-                "subject_id": [1],
-                "time": [self.BASE + timedelta(days=100)],
-                "code": ["A"],
-            }
-        )
-        assert self._evaluate_one(events, duration_days=7.0) is False
+        events = self._events([(3, "B"), (10, death_code)])
+        assert self._label(events, query="A", duration_days=30.0) is False
+
+    def test_dead_no_occurrence_window_within_record_is_false(self):
+        """No occurrence, window entirely before death → ``False`` (ordinary fully-observed case)."""
+        events = self._events([(3, "B"), (10, death_code)])
+        assert self._label(events, query="A", duration_days=5.0) is False
+
+    def test_dead_death_code_itself_is_queryable_true(self):
+        """The ``MEDS_DEATH`` row is kept (``<=``, not ``<``), so querying it in-window → ``True``."""
+        events = self._events([(3, "B"), (10, death_code)])
+        assert self._label(events, query=death_code, duration_days=30.0) is True
+
+    def test_dead_post_death_event_is_invisible(self):
+        """A matching event strictly after death is truncated → ``False``, not ``True`` or ``null``.
+
+        ``A`` at day 20 sits past the day-10 death and is dropped, so it neither matches nor extends
+        ``max_time``; the window is fully observed via death → ``False``.
+        """
+        events = self._events([(3, "C"), (10, death_code), (20, "A")])
+        assert self._label(events, query="A", duration_days=30.0) is False
+
+    def test_dead_duplicate_death_rows_use_earliest(self):
+        """Two ``MEDS_DEATH`` rows truncate at the *earlier* one: an ``A`` between them is dropped.
+
+        Death at day 10 and day 20; ``A`` at day 15 is post-earliest-death → invisible.  Observed
+        via death (day 10), no ``A`` → ``False``.
+        """
+        events = self._events([(10, death_code), (15, "A"), (20, death_code)])
+        assert self._label(events, query="A", duration_days=30.0) is False
 
 
 class TestReadEventShardDtypeNormalization:
@@ -676,16 +614,17 @@ class TestLabelOneShard:
         ``label_one_shard`` (not just ``evaluate_index_df`` in isolation)."""
         events = pl.DataFrame(
             {
-                "subject_id": [1, 1, 2, 2, 3, 3],
+                "subject_id": [1, 1, 1, 2, 2, 3, 3],
                 "time": [
                     self.BASE,
                     self.BASE + timedelta(days=5),  # event at day 5
+                    self.BASE + timedelta(days=10),  # max_time = day 10 (keeps the 7d window observed)
                     self.BASE,
                     self.BASE + timedelta(days=10),  # max_time = day 10
                     self.BASE,
                     self.BASE + timedelta(days=10),  # max_time = day 10
                 ],
-                "code": ["ICD//X", "ICD//A01", "ICD//X", "ICD//X", "ICD//X", "ICD//X"],
+                "code": ["ICD//X", "ICD//A01", "ICD//X", "ICD//X", "ICD//X", "ICD//X", "ICD//X"],
             }
         ).with_columns(pl.col("time").cast(pl.Datetime("us")))
 
@@ -694,7 +633,7 @@ class TestLabelOneShard:
                 "subject_id": [1, 2, 3],
                 "prediction_time": [self.BASE, self.BASE, self.BASE],
                 "query": ["ICD//A01", "ICD//A01", "ICD//A01"],
-                # subject 1: window 7d, event at day 5 → True
+                # subject 1: window 7d, event at day 5, max_time=10 ≥ 0+7 (observed) → True
                 # subject 2: window 7d, no ICD//A01 event, max_time=10 ≥ 0+7 → False
                 # subject 3: window 30d, no ICD//A01 event, max_time=10 < 0+30 → null (censored)
                 "duration_days": [7.0, 7.0, 30.0],
