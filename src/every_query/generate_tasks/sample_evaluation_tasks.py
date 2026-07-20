@@ -450,10 +450,15 @@ def main(cfg: DictConfig) -> None:
 
     split = cfg.split
     shards = _split_shards(data_dir, split)
-    if not shards:
-        raise FileNotFoundError(
-            f"No shards found under {data_dir / 'data' / split}; expected *.parquet files."
-        )
+    for prev_dir in (Path(out_dir) / "eval" / split, Path(out_dir) / "eval_unique" / split):
+        stale = sorted(p.name for p in prev_dir.glob("*.parquet") if p.stem not in shards)
+        if stale:
+            logger.warning(
+                "Outputs in %s match no discovered shard and will be neither rewritten nor "
+                "removed (downstream consumers read every parquet in this dir): %s",
+                prev_dir,
+                stale,
+            )
 
     # Reject booleans up front: Hydra/OmegaConf parses ``subject_subsample_fraction=true``
     # as a Python ``True``, which would otherwise become ``1.0`` and silently disable

@@ -189,7 +189,7 @@ def test_eq_generate_evaluation_tasks_subject_subsample_deterministic(
 
 def test_eq_generate_evaluation_tasks_rejects_input_shard_override(tmp_path: Path) -> None:
     """The removed ``input_shard`` knob must fail loudly, not be silently ignored (#279)."""
-    with pytest.raises(RuntimeError, match="input_shard"):
+    with pytest.raises(RuntimeError, match="Could not override 'input_shard'"):
         run_and_check(
             [
                 "EQ_generate_evaluation_tasks",

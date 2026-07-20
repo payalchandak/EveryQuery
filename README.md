@@ -173,7 +173,7 @@ codes:
 ```
 
 ```bash
-EQ_generate_evaluation_tasks codes=/path/to/sampled_codes.yaml …
+EQ_generate_evaluation_tasks query_codes=/path/to/sampled_codes.yaml …
 ```
 
 ### 3. Train
