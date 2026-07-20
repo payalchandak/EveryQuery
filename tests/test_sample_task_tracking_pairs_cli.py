@@ -36,7 +36,6 @@ def _generate_tuning_eval_labels(intermediate: Path, out_dir: Path, seed: int) -
             f"data_dir={intermediate!s}",
             f"out_dir={out_dir!s}",
             "split=tuning",
-            "input_shard=0",
             "prediction_times_per_subject=3",
             "min_context_per_subject=1",
             "query_codes=[HR,TEMP]",

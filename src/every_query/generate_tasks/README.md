@@ -98,8 +98,9 @@ EQ_generate_training_tasks \
 	query_codes=/path/to/train_query_codes.yaml
 ```
 
-There is **no** `task_shard`/`input_shard` axis and no Hydra `-m` sweep — the single driver
-process samples globally and fans Stage-4 labeling out itself. Key knobs (full list in
+There is **no** `task_shard`/`input_shard` axis and no Hydra `-m` sweep (true of the
+evaluation generator too, since #279) — the single driver process samples globally and
+fans Stage-4 labeling out itself. Key knobs (full list in
 `configs/sample_training_tasks_config.yaml`):
 
 - `num_queries`, `num_contexts_per_query` — sampling budget; output is
@@ -115,19 +116,20 @@ process samples globally and fans Stage-4 labeling out itself. Key knobs (full l
     downward only. Set it when a run OOMs.
 - `seed`, `overwrite`, and optional path overrides `data_dir` / `out_dir`.
 
-### Evaluation tasks — dense grid, swept per shard
+### Evaluation tasks — dense grid, one parquet per discovered shard
 
 ```bash
-EQ_generate_evaluation_tasks -m \
-	input_shard=0,1,2,... split=held_out
+EQ_generate_evaluation_tasks split=held_out
 ```
+
+All shards under `{data_dir}/data/{split}/*.parquet` are discovered and processed in this
+one invocation (#279).
 
 ### Task-tracking pairs — one compact parquet for in-training AUROC monitoring
 
 ```bash
 # First, generate dense tuning-split labels the same way as above (note split=tuning):
-EQ_generate_evaluation_tasks -m \
-	input_shard=0,1,2,... split=tuning \
+EQ_generate_evaluation_tasks split=tuning \
 	query_codes=$TENSORIZED_COHORT_DIR durations=[30,90,180,365,731]
 
 # Then sample one pos/neg pair per task from that output:

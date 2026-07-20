@@ -46,7 +46,6 @@ def test_eq_generate_evaluation_tasks_end_to_end(
             f"data_dir={intermediate!s}",
             f"out_dir={out_dir!s}",
             "split=tuning",
-            "input_shard=0",
             f"prediction_times_per_subject={pt_per_subject}",
             "min_context_per_subject=1",
             "query_codes=[HR,TEMP]",
@@ -60,6 +59,13 @@ def test_eq_generate_evaluation_tasks_end_to_end(
     unique_fp = out_dir / "eval_unique" / "tuning" / "0.parquet"
     assert labels_fp.is_file(), f"expected {labels_fp} to exist; got {list(out_dir.rglob('*.parquet'))}"
     assert unique_fp.is_file(), f"expected sibling unique parquet at {unique_fp}"
+
+    # Shard discovery (#279): every shard in the split must have an output parquet.
+    input_shards = sorted(p.stem for p in (intermediate / "data" / "tuning").glob("*.parquet"))
+    output_shards = sorted(p.stem for p in (out_dir / "eval" / "tuning").glob("*.parquet"))
+    assert output_shards == input_shards, (
+        f"expected one output per input shard: inputs={input_shards}, outputs={output_shards}"
+    )
 
     TaskQuerySchema.align(pq.read_table(labels_fp))
 
@@ -101,7 +107,6 @@ def test_eq_generate_evaluation_tasks_deterministic(
     common_args: list[str] = [
         f"data_dir={intermediate!s}",
         "split=tuning",
-        "input_shard=0",
         "prediction_times_per_subject=3",
         "min_context_per_subject=1",
         "query_codes=[HR,TEMP]",
@@ -153,7 +158,6 @@ def test_eq_generate_evaluation_tasks_subject_subsample_deterministic(
     common_args: list[str] = [
         f"data_dir={intermediate!s}",
         "split=tuning",
-        "input_shard=0",
         "prediction_times_per_subject=3",
         "min_context_per_subject=1",
         "query_codes=[HR,TEMP]",
@@ -181,6 +185,21 @@ def test_eq_generate_evaluation_tasks_subject_subsample_deterministic(
     assert df_a.equals(df_b), (
         "EQ_generate_evaluation_tasks should be deterministic with subject_subsample_fraction set"
     )
+
+
+def test_eq_generate_evaluation_tasks_rejects_input_shard_override(tmp_path: Path) -> None:
+    """The removed ``input_shard`` knob must fail loudly, not be silently ignored (#279)."""
+    with pytest.raises(RuntimeError, match="input_shard"):
+        run_and_check(
+            [
+                "EQ_generate_evaluation_tasks",
+                f"data_dir={tmp_path!s}",
+                f"out_dir={tmp_path!s}",
+                "input_shard=0",
+                "query_codes=[HR]",
+            ],
+            timeout=60.0,
+        )
 
 
 # ---------------------------------------------------------------------------
