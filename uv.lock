@@ -741,7 +741,7 @@ requires-dist = [
     { name = "lightning", specifier = ">=2.3,<3" },
     { name = "matplotlib", specifier = ">=3.9,<4" },
     { name = "meds", specifier = ">=0.4,<0.5" },
-    { name = "meds-random-task-sampler", git = "https://github.com/florian6973/meds-random-task-sampler.git?rev=9b1fee8e22239116d6a5d4add2b8ac8c8cb07f0c" },
+    { name = "meds-random-task-sampler", specifier = "==0.1.0" },
     { name = "meds-torch-data", extras = ["lightning"], specifier = "~=0.9.0" },
     { name = "meds-transforms", specifier = ">=0.6.7,<0.7" },
     { name = "numpy", specifier = ">=2,<3" },
@@ -1578,8 +1578,8 @@ wheels = [
 
 [[package]]
 name = "meds-random-task-sampler"
-version = "0.1.dev12+g9b1fee8e2"
-source = { git = "https://github.com/florian6973/meds-random-task-sampler.git?rev=9b1fee8e22239116d6a5d4add2b8ac8c8cb07f0c#9b1fee8e22239116d6a5d4add2b8ac8c8cb07f0c" }
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "flexible-schema" },
     { name = "meds" },
@@ -1587,6 +1587,10 @@ dependencies = [
     { name = "polars" },
     { name = "pyarrow" },
     { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b1/8d/f05de0843d180a575c6c6a6015ae5043bbc0e270da0e71d6530d638a5148/meds_random_task_sampler-0.1.0.tar.gz", hash = "sha256:598e269d8a201879c11db185fb4ec3cb9f922b4f4faa02dd4e7ce139533c7865", size = 132690, upload-time = "2026-07-23T15:24:57.727Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/da/1b28bd1b375d46354733fe8a70272807e05b46391ce7da898dcb9f989676/meds_random_task_sampler-0.1.0-py3-none-any.whl", hash = "sha256:d1d64d519ca30a5bd383f2dbefe7551289b496470256801a8f430179b992e699", size = 39879, upload-time = "2026-07-23T15:24:56.614Z" },
 ]
 
 [[package]]
