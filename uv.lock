@@ -741,7 +741,7 @@ requires-dist = [
     { name = "lightning", specifier = ">=2.3,<3" },
     { name = "matplotlib", specifier = ">=3.9,<4" },
     { name = "meds", specifier = ">=0.4,<0.5" },
-    { name = "meds-random-task-sampler", git = "https://github.com/florian6973/meds-random-task-sampler.git?rev=e6695259ccbbb1ce64d818ed6386aadce1992616" },
+    { name = "meds-random-task-sampler", git = "https://github.com/florian6973/meds-random-task-sampler.git?rev=2584ca1355c3074c842e3d9b48d181ef9092d454" },
     { name = "meds-torch-data", extras = ["lightning"], specifier = "~=0.9.0" },
     { name = "meds-transforms", specifier = ">=0.6.7,<0.7" },
     { name = "numpy", specifier = ">=2,<3" },
@@ -1578,8 +1578,8 @@ wheels = [
 
 [[package]]
 name = "meds-random-task-sampler"
-version = "0.1.dev9+ge6695259c"
-source = { git = "https://github.com/florian6973/meds-random-task-sampler.git?rev=e6695259ccbbb1ce64d818ed6386aadce1992616#e6695259ccbbb1ce64d818ed6386aadce1992616" }
+version = "0.1.dev11+g2584ca135"
+source = { git = "https://github.com/florian6973/meds-random-task-sampler.git?rev=2584ca1355c3074c842e3d9b48d181ef9092d454#2584ca1355c3074c842e3d9b48d181ef9092d454" }
 dependencies = [
     { name = "flexible-schema" },
     { name = "meds" },
