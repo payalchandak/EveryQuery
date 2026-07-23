@@ -42,10 +42,10 @@ import hydra
 import numpy as np
 import polars as pl
 from meds import DataSchema, death_code
+from meds_random_task_sampler import RandomTaskSamplerConfig, sample_random_tasks
 from omegaconf import DictConfig, ListConfig
 
 from every_query.data.schema import TaskQuerySchema, empty_task_query_df
-from every_query.utils.seeds import derive_seed
 
 logger = logging.getLogger(__name__)
 
@@ -1534,91 +1534,26 @@ def label_shards(
 
 
 def run(cfg: DictConfig) -> None:
-    """Execute the 5-stage pipeline for a fully-resolved config (no Hydra side effects).
-
-    Split out from :func:`main` so it is callable directly (tests, programmatic drivers) without
-    triggering Hydra arg parsing; :func:`main` is the thin Hydra entry point that delegates here.
-    Path roots come from :func:`resolve_training_task_paths` (``cfg.data_dir`` / ``cfg.out_dir``)
-    plus the sibling ``_artifacts`` intermediate root; query codes via :func:`read_query_codes`
-    (``cfg.query_codes`` as a list, file path, or metadata root dir → ``{dir}/metadata/codes.parquet``).
-
-    Stages 0-3 run sequentially in this driver process and produce the partitioned Stage 3 index;
-    Stage 4 then fans out one :func:`label_one_shard` worker per shard via a ``ProcessPoolExecutor``
-    sized by :func:`resolve_workers` (capped by ``cfg.max_workers``).  The query and context axes are
-    seeded independently via :func:`derive_seed` so they reproduce separately for a fixed ``cfg.seed``.
-    """
-    path_to_data, training_tasks_dir, training_task_artifacts_dir = resolve_training_task_paths(cfg)
-
-    # Stage 0: precompute & cache subject prediction_time_indexes and number of prediction_times_per_subject
-    n_subjects = build_prediction_times(
-        path_to_data=path_to_data,
-        training_task_artifacts_dir=training_task_artifacts_dir,
-        split=cfg.split,
-        min_prediction_times_per_subject=cfg.min_prediction_times_per_subject,
-        overwrite=cfg.overwrite,
+    """Translate the EveryQuery Hydra config and delegate to the package sampler."""
+    query_codes = list(cfg.query_codes) if isinstance(cfg.query_codes, ListConfig) else cfg.query_codes
+    package_config = RandomTaskSamplerConfig(
+        num_queries=int(cfg.num_queries),
+        num_contexts_per_query=int(cfg.num_contexts_per_query),
+        min_prediction_times_per_subject=int(cfg.min_prediction_times_per_subject),
+        query_codes=query_codes,
+        min_duration=float(cfg.min_duration),
+        max_duration=float(cfg.max_duration),
+        duration_distribution=str(cfg.duration_distribution),
+        seed=int(cfg.seed),
+        max_workers=None if cfg.max_workers is None else int(cfg.max_workers),
     )
-    logger.info("Stage 0: %s eligible subject(s) for split=%s.", f"{n_subjects:,}", cfg.split)
-
-    # Independent RNG streams per axis (invariant 5): the query and context draws reproduce separately
-    # for a fixed ``cfg.seed``.  Cross-process RNG-order determinism tests land in #211.
-    query_rng = np.random.default_rng(derive_seed(cfg.seed, "queries"))
-    context_rng = np.random.default_rng(derive_seed(cfg.seed, "contexts"))
-
-    # Stage 1: Sample num_queries QuerySpecs
-    query_dist = QueryDistribution.from_config(cfg)
-    sampled_queries = query_dist.sample(cfg.num_queries, query_rng)
-    logger.info(
-        "Stage 1: sampled %s quer%s from a %s-code universe (%s durations over [%g, %g] days).",
-        f"{len(sampled_queries):,}",
-        "y" if len(sampled_queries) == 1 else "ies",
-        f"{query_dist.query_universe_size:,}",
-        query_dist.duration_distribution,
-        query_dist.min_duration,
-        query_dist.max_duration,
+    sample_random_tasks(
+        data_dir=_require_path_arg(cfg.get("data_dir"), "data_dir"),
+        output_dir=_require_path_arg(cfg.get("out_dir"), "out_dir"),
+        split=str(cfg.split),
+        config=package_config,
+        overwrite=bool(cfg.overwrite),
     )
-
-    # Stage 2: Sample (num_queries*num_contexts_per_query) patient contexts
-    total_rows = cfg.num_queries * cfg.num_contexts_per_query
-    # Re-sort by subject_id: Stage 2 treats row position as subject_idx, so this read must restore the
-    # same canonical order Stage 0 wrote (eligible.sort("subject_id"), see build_prediction_times). A
-    # plain read_parquet happens to preserve that order today, but sorting here makes the subject_idx ->
-    # subject_id mapping independent of parquet round-trip order (e.g. if Stage 0 ever moves to a
-    # partitioned/multi-file write or this read gains pushdown that reorders row groups).
-    prediction_time_counts_df = pl.read_parquet(
-        prediction_time_counts_path(training_task_artifacts_dir, cfg.split)
-    ).sort("subject_id")
-
-    sampled_patient_contexts = sample_patient_contexts(
-        prediction_time_counts=prediction_time_counts_df,
-        n=total_rows,
-        min_prediction_times_per_subject=cfg.min_prediction_times_per_subject,
-        rng=context_rng,
-    )
-    logger.info(
-        "Stage 2: sampled %s patient context(s) (%s quer%s * %s context(s) each).",
-        f"{total_rows:,}",
-        f"{cfg.num_queries:,}",
-        "y" if cfg.num_queries == 1 else "ies",
-        f"{cfg.num_contexts_per_query:,}",
-    )
-
-    # Stage 3: zip queries with contexts, resolve prediction time, write the per-shard index.
-    n_index_shards = build_index(
-        queries=sampled_queries,
-        contexts=sampled_patient_contexts,
-        training_task_artifacts_dir=training_task_artifacts_dir,
-        split=cfg.split,
-        num_contexts_per_query=cfg.num_contexts_per_query,
-    )
-    logger.info(
-        "Stage 3: wrote partitioned index for split=%s (%s rows across %s shards).",
-        cfg.split,
-        f"{sampled_patient_contexts.height:,}",
-        f"{n_index_shards:,}",
-    )
-
-    # Stage 4: fan one labeling worker out per shard (one Stage 3 index partition each).
-    label_shards(cfg, path_to_data, training_tasks_dir, training_task_artifacts_dir, total_rows)
 
 
 @hydra.main(version_base=None, config_path=CONFIGS, config_name="sample_training_tasks_config")

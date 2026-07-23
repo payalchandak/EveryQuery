@@ -13,6 +13,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from meds_random_task_sampler import random_sample as package_sampler
 from omegaconf import OmegaConf
 
 from every_query.data.schema import TaskQuerySchema
@@ -187,7 +188,7 @@ class TestMainOrchestration:
         self._run_env(monkeypatch, tmp_path, synthetic_events, synthetic_query_codes)
         cfg = self._cfg(synthetic_query_codes, num_queries=4, num_contexts_per_query=2)  # budget 8
 
-        real_build_index = st.build_index
+        real_build_index = package_sampler.build_index
 
         def _short_build_index(queries, contexts, training_task_artifacts_dir, split, num_contexts_per_query):
             # Drop the last query and its trailing contexts block; the (queries, contexts) lengths
@@ -200,7 +201,7 @@ class TestMainOrchestration:
                 num_contexts_per_query,
             )
 
-        monkeypatch.setattr(st, "build_index", _short_build_index)
+        monkeypatch.setattr(package_sampler, "build_index", _short_build_index)
         with pytest.raises(ValueError, match=r"expected 8"):
             st.run(cfg)
 

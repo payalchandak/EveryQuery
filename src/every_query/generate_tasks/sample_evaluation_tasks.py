@@ -31,6 +31,7 @@ from pathlib import Path
 import hydra
 import polars as pl
 from meds import DataSchema
+from meds_random_task_sampler import TaskGridGeneratorConfig, generate_task_grid
 from omegaconf import DictConfig
 
 from every_query.data.schema import TaskQuerySchema, empty_task_query_df
@@ -460,20 +461,23 @@ def main(cfg: DictConfig) -> None:
     subject_subsample_fraction = None if ssf_raw is None else float(ssf_raw)
 
     write_unique_prediction_times = bool(cfg.get("write_unique_prediction_times", True))
-    run_worker(
-        data_dir=data_dir,
-        out_dir=Path(out_dir) / "eval",
-        split=split,
-        input_shard=input_shard,
-        codes=codes,
-        durations=durations,
+    package_config = TaskGridGeneratorConfig(
         prediction_times_per_subject=int(cfg.prediction_times_per_subject),
         min_context_per_subject=int(cfg.min_context_per_subject),
-        seed=int(cfg.seed),
-        overwrite=bool(cfg.get("overwrite", False)),
+        query_codes=codes,
+        durations=durations,
         subject_subsample_fraction=subject_subsample_fraction,
         write_unique_prediction_times=write_unique_prediction_times,
-        unique_out_dir=Path(out_dir) / "eval_unique" if write_unique_prediction_times else None,
+        censored_rows="drop",
+        seed=int(cfg.seed),
+    )
+    generate_task_grid(
+        data_dir=data_dir,
+        output_dir=Path(out_dir) / "eval",
+        split=split,
+        input_shard=input_shard,
+        config=package_config,
+        overwrite=bool(cfg.get("overwrite", False)),
     )
 
 

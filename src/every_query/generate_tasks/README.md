@@ -4,6 +4,10 @@ Task-label generation stage of the EveryQuery pipeline. Two console scripts
 live here, each producing a `TaskQuerySchema`-conformant parquet but with
 different row distributions:
 
+The Hydra commands delegate generation, the shared task schema, deterministic seeds, and labeling to the
+Git-pinned `meds-random-task-sampler` package. EveryQuery retains its command names, configuration, output layout,
+model datasets, prediction, and metric evaluation.
+
 - **`EQ_generate_training_tasks`** — scattered shape: `num_queries` independent
     `(code, duration_days)` queries × `num_contexts_per_query` patient contexts,
     for pretraining. Runs a single-process 5-stage pipeline (see below).
