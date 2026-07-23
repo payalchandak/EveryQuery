@@ -21,10 +21,10 @@ import polars as pl
 import pyarrow.parquet as pq
 import pytest
 from meds import DataSchema
+from meds_random_task_sampler.dense_grid import subsample_subject_ids
 
 from conftest import run_and_check
 from every_query.data.schema import TaskQuerySchema
-from every_query.generate_tasks.sample_evaluation_tasks import subsample_subject_ids
 
 if TYPE_CHECKING:
     from pathlib import Path

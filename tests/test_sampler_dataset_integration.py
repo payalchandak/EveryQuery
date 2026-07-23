@@ -12,11 +12,11 @@ from pathlib import Path
 import polars as pl
 import torch
 from meds import train_split
+from meds_random_task_sampler.random_sample import evaluate_index_df
 from meds_torchdata.config import MEDSTorchDataConfig
 
 from every_query.data.dataset import EveryQueryPytorchDataset
 from every_query.data.schema import TaskQuerySchema
-from every_query.generate_tasks.sample_tasks import evaluate_index_df
 
 # Subject IDs and prediction times from conftest / simple_static_MEDS.  Duplicated here rather
 # than imported to keep the test module self-contained.

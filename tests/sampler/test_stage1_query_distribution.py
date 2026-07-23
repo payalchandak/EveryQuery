@@ -7,9 +7,8 @@ the universe).
 
 import numpy as np
 import pytest
-from omegaconf import OmegaConf
+from meds_random_task_sampler.random_sample import QueryDistribution, QuerySpec
 
-from every_query.generate_tasks.sample_tasks import QueryDistribution, QuerySpec
 from every_query.utils.seeds import derive_seed
 
 
@@ -23,21 +22,6 @@ class TestQueryDistribution:
     def test_query_universe_size_is_derived(self, synthetic_query_codes):
         dist = QueryDistribution(synthetic_query_codes, 1.0, 365.0, "log-uniform")
         assert dist.query_universe_size == len(synthetic_query_codes)
-
-    def test_from_config_builds_expected_dataclass(self, synthetic_query_codes):
-        # query_codes is resolved inside from_config via read_query_codes(cfg.query_codes); an inline
-        # list is returned order-preserving + deduped, so it matches synthetic_query_codes here.
-        cfg = OmegaConf.create(
-            {
-                "query_codes": synthetic_query_codes,
-                "min_duration": 1,
-                "max_duration": 731,
-                "duration_distribution": "log-uniform",
-            }
-        )
-        dist = QueryDistribution.from_config(cfg)
-        assert dist == QueryDistribution(synthetic_query_codes, 1.0, 731.0, "log-uniform")
-        assert isinstance(dist.min_duration, float) and isinstance(dist.max_duration, float)
 
     def test_sample_determinism(self, synthetic_query_codes):
         dist = QueryDistribution(synthetic_query_codes, 1.0, 365.0, "log-uniform")

@@ -8,8 +8,8 @@ join-key dtype gap tests.
 import numpy as np
 import polars as pl
 import pytest
+from meds_random_task_sampler.random_sample import sample_patient_contexts
 
-from every_query.generate_tasks.sample_tasks import sample_patient_contexts
 from every_query.utils.seeds import derive_seed
 
 

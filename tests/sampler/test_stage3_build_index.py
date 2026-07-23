@@ -14,8 +14,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
-from every_query.generate_tasks.sample_tasks import (
+from meds_random_task_sampler.random_sample import (
     QuerySpec,
     build_index,
     build_prediction_times,

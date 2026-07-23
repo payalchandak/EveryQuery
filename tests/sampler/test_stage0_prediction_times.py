@@ -16,9 +16,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 from meds import death_code
-
-from every_query.generate_tasks import sample_tasks as st
-from every_query.generate_tasks.sample_tasks import (
+from meds_random_task_sampler import random_sample as st
+from meds_random_task_sampler.random_sample import (
     build_prediction_times,
     prediction_time_counts_path,
     prediction_times_meta_path,

@@ -1,7 +1,7 @@
 """Shared fixtures and helpers for the 5-stage training-task sampler unit suite.
 
 This package (``tests/sampler/``) is the per-stage unit layer for
-``every_query.generate_tasks.sample_tasks``.  Every stage here is a pure data transform
+``meds_random_task_sampler.random_sample``. Every stage here is a pure data transform
 (sampling + labeling + parquet I/O) with **no model dependency**, so this conftest overrides the
 repo-root ``_setup_doctest_namespace`` autouse fixture (see the top-level ``conftest.py``) to drop
 its dependency on ``demo_model`` — which builds a ModernBERT via ``AutoConfig.from_pretrained`` and
