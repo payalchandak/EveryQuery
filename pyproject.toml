@@ -19,7 +19,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-  "meds-random-task-sampler @ git+https://github.com/florian6973/meds-random-task-sampler.git@2584ca1355c3074c842e3d9b48d181ef9092d454",
+  "meds-random-task-sampler @ git+https://github.com/florian6973/meds-random-task-sampler.git@9b1fee8e22239116d6a5d4add2b8ac8c8cb07f0c",
   # Upper bounds are set at the next major version for every library that follows semver —
   # this is the loosest range we can ship without relying on a not-yet-released major being
   # backwards-compatible.  Tighter ranges (`meds-torch-data ~=0.9.0`) are upstream-opinionated

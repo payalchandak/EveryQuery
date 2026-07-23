@@ -5,10 +5,9 @@ The evaluation-shaped sampling stages live in
 """
 
 from importlib.resources import files
-from pathlib import Path
 
 import hydra
-from meds_random_task_sampler import TaskGridGeneratorConfig, generate_task_grid
+from meds_random_task_sampler import TaskGridGeneratorConfig, generate_task_grids
 from meds_random_task_sampler.random_sample import _require_path_arg, read_query_codes
 from omegaconf import DictConfig, ListConfig
 
@@ -17,7 +16,7 @@ CONFIGS = str(files("every_query") / "generate_tasks" / "configs")
 
 @hydra.main(version_base=None, config_path=CONFIGS, config_name="sample_evaluation_tasks_config")
 def main(cfg: DictConfig) -> None:
-    """Generate one dense task-grid shard from an EveryQuery Hydra configuration."""
+    """Generate one dense task-grid parquet for every discovered split shard."""
     data_dir = _require_path_arg(cfg.get("data_dir"), "data_dir")
     out_dir = _require_path_arg(cfg.get("out_dir"), "out_dir")
     query_codes = cfg.get("query_codes")
@@ -53,11 +52,10 @@ def main(cfg: DictConfig) -> None:
         censored_rows="drop",
         seed=int(cfg.seed),
     )
-    generate_task_grid(
+    generate_task_grids(
         data_dir=data_dir,
-        output_dir=Path(out_dir) / "eval",
+        output_dir=out_dir / "eval",
         split=str(cfg.split),
-        input_shard=str(cfg.input_shard),
         config=package_config,
         overwrite=bool(cfg.get("overwrite", False)),
     )

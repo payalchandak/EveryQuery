@@ -149,7 +149,6 @@ codes:
 ```bash
 EQ_generate_evaluation_tasks \
 	split=held_out \
-	input_shard=0 \
 	prediction_times_per_subject=5 \
 	'query_codes=[HR, TEMP]' \
 	'durations=[1, 7, 30, 90, 365]' \
@@ -159,31 +158,7 @@ EQ_generate_evaluation_tasks \
 
 Samples `1` prediction times per subject by default, cross-joins with the full `(codes × durations)` grid, labels via the same primitive as training. Output lands under `$EVAL_TASKS_DIR/eval/{split}/*.parquet` (separate `eval/` subdir so it doesn't collide with the training-task output).
 
-The endpoint writes one parquet per `(split, input_shard)` worker, so to label a whole split use Hydra multirun (`-m`) to sweep `input_shard` — there's no auto-discovery, so enumerate the range explicitly. Count the shards for your split first (`N` = this number):
-
-```bash
-ls "$TOKENIZED_EVENTS_DIR"/data/held_out/*.parquet | wc -l
-```
-
-Then sweep `input_shard=range(0,N)`:
-
-```bash
-# Sequential (basic launcher) — one shard after another in a single process:
-EQ_generate_evaluation_tasks -m \
-	input_shard=range(0,16) \
-	split=held_out \
-	prediction_times_per_subject=5 \
-	'query_codes=[HR, TEMP]' \
-	'durations=[1, 7, 30, 90, 365]'
-
-# Parallel on SLURM (submitit launcher — already a dependency):
-EQ_generate_evaluation_tasks -m \
-	hydra/launcher=submitit_slurm \
-	input_shard=range(0,16) \
-	split=held_out …
-```
-
-A comma list (`input_shard=0,1,2`) works too; `range(0,16)` is just shorthand for `0..15`. The prediction-time sampler is deterministic in `(seed, input_shard, split)`, so a swept run and the equivalent per-shard runs produce identical output.
+The endpoint discovers every shard under `{data_dir}/data/{split}/*.parquet` and processes them all in one invocation, writing one output parquet per shard — no shard counting and no `-m input_shard=...` sweep. Passing `input_shard=` now fails as an unknown override. Prediction-time sampling remains deterministic per shard in `(seed, input_shard, split)`, so outputs are identical to the old exhaustive sweep. Reruns skip shards whose outputs already exist unless `overwrite=true`.
 
 As with training, `data_dir` / `out_dir` are required Hydra args (pass them as shell-expanded vars). `query_codes` is also required — it is the evaluation query universe.
 
@@ -198,7 +173,7 @@ codes:
 ```
 
 ```bash
-EQ_generate_evaluation_tasks codes=/path/to/sampled_codes.yaml …
+EQ_generate_evaluation_tasks query_codes=/path/to/sampled_codes.yaml …
 ```
 
 ### 3. Train
