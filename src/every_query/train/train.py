@@ -11,7 +11,7 @@ import torch
 from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
 from MEDS_transforms.configs.utils import OmegaConfResolver
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from every_query.train.resume_check import validate_resume_directory
 
@@ -269,6 +269,22 @@ CONFIGS = str(files("every_query") / "train" / "configs")
 def main(cfg: DictConfig) -> float | None:
     _init_env()
     validate_training_config(cfg)
+
+    # Size the embedding table to the dataset's code vocabulary rather than to ModernBERT-base's
+    # 50368-entry text vocabulary, which is what `EveryQueryModel` inherits when nobody tells it
+    # otherwise.  `MEDSTorchDataConfig.vocab_size` reads `max(code/vocab_index) + 1` off the code
+    # metadata parquet, so instantiating the data config alone is enough — no dataset build
+    # needed.  An explicit `vocab_size` in the config wins: that's the escape hatch for training
+    # against a vocabulary that isn't this cohort's.  Fixes #283.
+    #
+    # This runs before `validate_resume_directory` and before the config is written, so a
+    # resumed run compares like against like (both sides carry the derived value) and
+    # ``resolved_config.yaml`` records the size the run actually used.
+    if cfg.lightning_module.model.get("vocab_size", None) is None:
+        data_vocab_size = instantiate(cfg.datamodule.config).vocab_size
+        logger.info(f"Setting model vocab_size to the dataset's code vocabulary: {data_vocab_size}")
+        with open_dict(cfg):
+            cfg.lightning_module.model.vocab_size = data_vocab_size
 
     if cfg.do_overwrite and cfg.do_resume:
         logger.warning(

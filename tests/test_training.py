@@ -10,7 +10,9 @@ from functools import partial
 from unittest.mock import patch
 
 import lightning as L
+import pytest
 import torch
+from meds_torchdata.types import MEDSTorchBatch
 from torch.utils.data import DataLoader
 
 from conftest import DEMO_CONFIG_OVERRIDES
@@ -259,3 +261,116 @@ class TestDemoModeChecks:
             model(sample_batch)
 
         assert any("nan" in msg.lower() for msg in caplog.messages)
+
+
+# ── test_vocab_sizing ───────────────────────────────────────────────────
+
+# The demo overrides minus the two keys under test, so each case sets them explicitly.
+_TINY_OVERRIDES = {k: v for k, v in DEMO_CONFIG_OVERRIDES.items() if k not in {"vocab_size", "pad_token_id"}}
+
+
+class TestVocabSizing:
+    """``vocab_size`` sizes the embedding table to the data and re-pins ``padding_idx``.
+
+    Without it the table inherits ModernBERT-base's 50368-entry text vocabulary (#283): every
+    row above the real code vocabulary is randomly initialised and never receives a gradient,
+    and ``padding_idx`` sits at ModernBERT's ``pad_token_id=50283`` rather than at the index
+    MEDS-TorchData actually pads with.
+    """
+
+    def _tok_embeddings(self, model: EveryQueryModel) -> torch.nn.Embedding:
+        return model.HF_model.embeddings.tok_embeddings
+
+    def test_unset_preserves_legacy_behaviour(self):
+        model = EveryQueryModel(config_overrides=_TINY_OVERRIDES, precision="32-true")
+        assert model.vocab_size == 50368
+        assert self._tok_embeddings(model).padding_idx == 50283
+        assert model.hparams["vocab_size"] is None
+
+    def test_sizes_table_to_requested_vocab(self):
+        model = EveryQueryModel(config_overrides=_TINY_OVERRIDES, vocab_size=37, precision="32-true")
+        assert model.vocab_size == 37
+        assert self._tok_embeddings(model).weight.shape[0] == 37
+
+    def test_padding_idx_follows_pad_index(self):
+        model = EveryQueryModel(config_overrides=_TINY_OVERRIDES, vocab_size=37, precision="32-true")
+        assert self._tok_embeddings(model).padding_idx == MEDSTorchBatch.PAD_INDEX
+        assert model.HF_model_config.pad_token_id == MEDSTorchBatch.PAD_INDEX
+
+    def test_pad_row_is_zero_at_init(self):
+        """ModernBERT's ``_init_weights`` re-draws the table after ``nn.Embedding`` zeroes the
+        pad row; without a re-zero the pad row would be a random vector frozen forever."""
+        model = EveryQueryModel(config_overrides=_TINY_OVERRIDES, vocab_size=37, precision="32-true")
+        assert torch.equal(
+            self._tok_embeddings(model).weight[MEDSTorchBatch.PAD_INDEX],
+            torch.zeros(model.HF_model_config.hidden_size),
+        )
+
+    def test_pad_row_stays_zero_after_optimiser_step(self, sample_batch):
+        model = EveryQueryModel(
+            config_overrides=_TINY_OVERRIDES, vocab_size=100, do_demo=True, precision="32-true"
+        )
+        model.train()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-2)
+
+        loss, _ = model(sample_batch)
+        loss.backward()
+        optimizer.step()
+
+        assert torch.equal(
+            self._tok_embeddings(model).weight[MEDSTorchBatch.PAD_INDEX],
+            torch.zeros(model.HF_model_config.hidden_size),
+        )
+
+    def test_takes_precedence_over_config_overrides(self):
+        model = EveryQueryModel(
+            config_overrides={**_TINY_OVERRIDES, "vocab_size": 100, "pad_token_id": 7},
+            vocab_size=37,
+            precision="32-true",
+        )
+        assert model.vocab_size == 37
+        assert self._tok_embeddings(model).padding_idx == MEDSTorchBatch.PAD_INDEX
+
+    def test_conflicting_pad_override_warns(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="every_query.model"):
+            EveryQueryModel(
+                config_overrides={**_TINY_OVERRIDES, "pad_token_id": 7}, vocab_size=37, precision="32-true"
+            )
+        assert any("pad_token_id" in msg for msg in caplog.messages)
+
+    def test_vocab_too_small_for_pad_index_raises(self):
+        with pytest.raises(ValueError, match="must be greater than the pad index"):
+            EveryQueryModel(config_overrides=_TINY_OVERRIDES, vocab_size=0, precision="32-true")
+
+    def test_survives_checkpoint_roundtrip(self, tmp_path):
+        model = EveryQueryModel(
+            config_overrides=_TINY_OVERRIDES, vocab_size=37, do_demo=True, precision="32-true"
+        )
+        module = EveryQueryLightningModule(model=model, optimizer=partial(torch.optim.AdamW, lr=1e-4))
+
+        ckpt_path = tmp_path / "vocab.ckpt"
+        trainer = L.Trainer(accelerator="cpu", devices=1, logger=False)
+        trainer.strategy.connect(module)
+        trainer.save_checkpoint(ckpt_path)
+
+        loaded = EveryQueryLightningModule.load_from_checkpoint(str(ckpt_path))
+        assert loaded.hparams["model"]["vocab_size"] == 37
+        assert loaded.model.vocab_size == 37
+        assert self._tok_embeddings(loaded.model).padding_idx == MEDSTorchBatch.PAD_INDEX
+
+    def test_legacy_checkpoint_without_vocab_size_still_loads(self, tmp_path):
+        """Checkpoints written before #283 have no ``vocab_size`` key in their hparams."""
+        model = EveryQueryModel(config_overrides=_TINY_OVERRIDES, do_demo=True, precision="32-true")
+        module = EveryQueryLightningModule(model=model, optimizer=partial(torch.optim.AdamW, lr=1e-4))
+
+        ckpt_path = tmp_path / "legacy.ckpt"
+        trainer = L.Trainer(accelerator="cpu", devices=1, logger=False)
+        trainer.strategy.connect(module)
+        trainer.save_checkpoint(ckpt_path)
+
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        del ckpt["hyper_parameters"]["model"]["vocab_size"]
+        torch.save(ckpt, ckpt_path)
+
+        loaded = EveryQueryLightningModule.load_from_checkpoint(str(ckpt_path))
+        assert loaded.model.vocab_size == 50368

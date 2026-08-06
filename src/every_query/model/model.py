@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import torch
+from meds_torchdata.types import MEDSTorchBatch
 from transformers import AutoConfig, ModernBertConfig, ModernBertModel
 from transformers.modeling_outputs import BaseModelOutput
 
@@ -256,6 +257,61 @@ class EveryQueryOutput(BaseModelOutput):
 
 
 class EveryQueryModel(torch.nn.Module):
+    """A ModernBERT trunk over MEDS code sequences with censor / occurs prediction heads.
+
+    The trunk is built *from config* (`ModernBertModel._from_config`), never from pretrained
+    weights, so `model_name` supplies architecture only.  That makes `vocab_size` a real knob:
+    it should be the size of the dataset's code vocabulary (`MEDSTorchDataConfig.vocab_size`),
+    not ModernBERT's 50368-entry text vocabulary, every row of which above the real code
+    vocabulary is randomly initialised and never receives a gradient.
+
+    Examples:
+        >>> tiny = {
+        ...     "hidden_size": 64, "num_hidden_layers": 2, "num_attention_heads": 2,
+        ...     "intermediate_size": 128, "max_position_embeddings": 128,
+        ... }
+
+        Left unset, the embedding table keeps the HF checkpoint's text vocabulary and
+        ModernBERT's own pad row — the behaviour of every checkpoint trained before this
+        parameter existed:
+
+        >>> model = EveryQueryModel(config_overrides=tiny)
+        >>> model.vocab_size
+        50368
+        >>> model.HF_model.embeddings.tok_embeddings.padding_idx
+        50283
+
+        Passing `vocab_size` sizes the table to the data and re-pins `padding_idx` to the index
+        MEDS-TorchData actually pads with:
+
+        >>> model = EveryQueryModel(config_overrides=tiny, vocab_size=128)
+        >>> model.vocab_size
+        128
+        >>> model.HF_model.embeddings.tok_embeddings.weight.shape
+        torch.Size([128, 64])
+        >>> model.HF_model.embeddings.tok_embeddings.padding_idx
+        0
+        >>> bool(model.HF_model.embeddings.tok_embeddings.weight[0].eq(0).all())
+        True
+
+        It takes precedence over `config_overrides`, matching how `num_hidden_layers` behaves,
+        and round-trips through `hparams` so a reloaded checkpoint rebuilds the same table:
+
+        >>> model = EveryQueryModel(config_overrides={**tiny, "vocab_size": 100}, vocab_size=128)
+        >>> model.vocab_size
+        128
+        >>> model.hparams["vocab_size"]
+        128
+
+        A vocabulary too small to hold the pad index is rejected up front, rather than at the
+        `nn.Embedding` assertion:
+
+        >>> EveryQueryModel(config_overrides=tiny, vocab_size=0)
+        Traceback (most recent call last):
+            ...
+        ValueError: vocab_size must be greater than the pad index (0); got 0.
+    """
+
     HF_model_config: ModernBertConfig
     HF_model: ModernBertModel
     do_demo: bool
@@ -280,6 +336,7 @@ class EveryQueryModel(torch.nn.Module):
         mlp_dropout: float = 0.1,
         model_name: str = "answerdotai/ModernBERT-base",
         num_hidden_layers: int | None = None,
+        vocab_size: int | None = None,
         config_overrides: dict[str, Any] | None = None,
         occurs_loss_weight: float = 0.5,
     ):
@@ -295,6 +352,35 @@ class EveryQueryModel(torch.nn.Module):
         # if both config_overrides["num_hidden_layers"] and num_hidden_layers are set.
         if num_hidden_layers is not None:
             self.HF_model_config.num_hidden_layers = num_hidden_layers
+
+        # Same precedence rule as num_hidden_layers.  Left `None` the config keeps the HF
+        # checkpoint's vocab size (50368 for ModernBERT-base), which is what every checkpoint
+        # trained before this parameter existed used — so those still load unchanged.
+        #
+        # `pad_token_id` has to move with it.  ModernBERT builds its embedding as
+        # `nn.Embedding(vocab_size, hidden_size, padding_idx=pad_token_id)` and ships
+        # `pad_token_id=50283`, while MEDS-TorchData pads batches with
+        # `MEDSTorchBatch.PAD_INDEX`.  Keeping the HF value would (a) pin the wrong row at zero
+        # and train the real pad code as an ordinary token, and (b) trip `nn.Embedding`'s
+        # `padding_idx < num_embeddings` assertion as soon as a realistic code-vocabulary size
+        # is set.
+        if vocab_size is not None:
+            if vocab_size <= MEDSTorchBatch.PAD_INDEX:
+                raise ValueError(
+                    f"vocab_size must be greater than the pad index "
+                    f"({MEDSTorchBatch.PAD_INDEX}); got {vocab_size}."
+                )
+
+            self.HF_model_config.vocab_size = vocab_size
+
+            pad_override = (config_overrides or {}).get("pad_token_id")
+            if pad_override is not None and pad_override != MEDSTorchBatch.PAD_INDEX:
+                logger.warning(
+                    f"Ignoring config_overrides['pad_token_id']={pad_override}; batches are padded "
+                    f"with MEDSTorchBatch.PAD_INDEX={MEDSTorchBatch.PAD_INDEX}, so the embedding's "
+                    f"padding_idx must match it."
+                )
+            self.HF_model_config.pad_token_id = MEDSTorchBatch.PAD_INDEX
 
         extra_kwargs = {"torch_dtype": self.PRECISION_TO_MODEL_WEIGHTS_DTYPE.get(precision)}
 
@@ -321,6 +407,16 @@ class EveryQueryModel(torch.nn.Module):
         self.HF_model_config.mlp_dropout = float(mlp_dropout)
 
         self.HF_model = ModernBertModel._from_config(self.HF_model_config, **extra_kwargs)
+
+        if vocab_size is not None:
+            # `nn.Embedding.__init__` zeroes the `padding_idx` row, but ModernBERT's
+            # `_init_weights` re-draws the whole table afterwards and doesn't restore it — so
+            # the pad row would keep a random vector that `padding_idx` then freezes forever.
+            # Every padded position in every batch would add that fixed vector to the sequence.
+            # Re-zero it here.  Only needed on the `vocab_size`-set path: with ModernBERT's own
+            # `pad_token_id` the frozen row is one the data never indexes.
+            with torch.no_grad():
+                self.HF_model.embeddings.tok_embeddings.weight[MEDSTorchBatch.PAD_INDEX].fill_(0)
 
         self.do_grad_ckpt = do_grad_ckpt
         if self.do_grad_ckpt and hasattr(self.HF_model, "gradient_checkpointing_enable"):
@@ -349,6 +445,11 @@ class EveryQueryModel(torch.nn.Module):
             "mlp_dropout": self.HF_model.config.mlp_dropout,
             "model_name": model_name,
             "num_hidden_layers": self.HF_model_config.num_hidden_layers,
+            # The *parameter*, not `HF_model_config.vocab_size`: `None` has to round-trip as
+            # `None` so a reloaded checkpoint reconstructs the same config resolution order
+            # (and so pre-existing checkpoints, whose hparams lack the key entirely, keep
+            # falling back to the HF default).
+            "vocab_size": vocab_size,
             "config_overrides": dict(config_overrides) if config_overrides else None,
             "occurs_loss_weight": self.occurs_loss_weight,
         }

@@ -10,10 +10,14 @@ from __future__ import annotations
 import shutil
 from typing import TYPE_CHECKING
 
+import polars as pl
+import pytest
 import torch
+from meds_torchdata.types import MEDSTorchBatch
 from omegaconf import OmegaConf
 
 from conftest import run_and_check
+from every_query.utils.model_loader import setup_model
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -194,3 +198,76 @@ def test_resume_actually_loads_checkpoint_state(
         "advancing resume did not change any parameter tensors.  Likely a gradient-path "
         "regression (zero-lr, frozen params, or trainer.fit not actually training)."
     )
+
+
+def _cohort_vocab_size(cohort_dir: Path) -> int:
+    """``max(code/vocab_index) + 1`` — the same quantity ``MEDSTorchDataConfig.vocab_size`` reads."""
+    codes = pl.read_parquet(cohort_dir / "metadata" / "codes.parquet", columns=["code/vocab_index"])
+    return codes["code/vocab_index"].max() + 1
+
+
+def test_vocab_size_derived_from_cohort(
+    eq_trained_model_dir: Path,
+    eq_preprocessed_dataset: Path,
+) -> None:
+    """The trained model's embedding table is sized to the cohort's code vocabulary (#283).
+
+    Before the fix the table inherited ModernBERT-base's 50368-entry text vocabulary, so a
+    depth sweep was really measuring a model dominated by embedding rows the data never
+    indexes.  Asserting against the cohort's actual vocab (rather than just ``!= 50368``)
+    also catches a wiring bug that plugs in *some* number but the wrong one.
+    """
+    expected = _cohort_vocab_size(eq_preprocessed_dataset)
+    assert expected < 50368, "sanity: the demo cohort should be far smaller than ModernBERT's vocab"
+
+    cfg = OmegaConf.load(eq_trained_model_dir / "resolved_config.yaml")
+    assert cfg.lightning_module.model.vocab_size == expected
+
+    _, ckpt = _highest_step_checkpoint(eq_trained_model_dir)
+    assert ckpt["hyper_parameters"]["model"]["vocab_size"] == expected
+
+    embedding_key = "model.HF_model.embeddings.tok_embeddings.weight"
+    assert ckpt["state_dict"][embedding_key].shape[0] == expected
+
+
+def test_pad_row_untrained_in_checkpoint(eq_trained_model_dir: Path) -> None:
+    """The pad row stays exactly zero through training — ``padding_idx`` really is pinned."""
+    _, ckpt = _highest_step_checkpoint(eq_trained_model_dir)
+    pad_row = ckpt["state_dict"]["model.HF_model.embeddings.tok_embeddings.weight"][MEDSTorchBatch.PAD_INDEX]
+    assert torch.equal(pad_row, torch.zeros_like(pad_row))
+
+
+def test_setup_model_rejects_changed_cohort_vocabulary(
+    eq_trained_model_dir: Path,
+    eq_preprocessed_dataset: Path,
+    tmp_path: Path,
+) -> None:
+    """Loading a checkpoint against a re-tensorized cohort is a hard error, not a silent load.
+
+    ``code/vocab_index`` is assigned lexicographically over the whole code set, so a cohort
+    that gained a code has renumbered every index the checkpoint was trained on — the state
+    dict would still be loadable only if the size matched, and here it doesn't.  Either way
+    the predictions would be nonsense, so refuse.
+    """
+    tampered_cohort = tmp_path / "cohort"
+    shutil.copytree(eq_preprocessed_dataset, tampered_cohort)
+
+    codes_fp = tampered_cohort / "metadata" / "codes.parquet"
+    codes = pl.read_parquet(codes_fp)
+    extra = codes.head(1).with_columns(
+        pl.lit("NEW//CODE").alias("code"),
+        pl.lit(codes["code/vocab_index"].max() + 1)
+        .cast(codes.schema["code/vocab_index"])
+        .alias("code/vocab_index"),
+    )
+    pl.concat([codes, extra]).write_parquet(codes_fp)
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _stage_resume_dir(eq_trained_model_dir, run_dir)
+    cfg = OmegaConf.load(run_dir / "resolved_config.yaml")
+    cfg.datamodule.config.tensorized_cohort_dir = str(tampered_cohort)
+    OmegaConf.save(cfg, run_dir / "resolved_config.yaml")
+
+    with pytest.raises(ValueError, match="does not match the cohort"):
+        setup_model(run_dir)
