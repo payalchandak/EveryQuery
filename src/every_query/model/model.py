@@ -319,6 +319,11 @@ class EveryQueryModel(torch.nn.Module):
         self.HF_model_config.output_attentions = False
         self.HF_model_config.use_cache = False
         self.HF_model_config.mlp_dropout = float(mlp_dropout)
+        # Not a knob: this must be the collate's pad index, since `_hf_inputs` builds the
+        # attention mask from the same constant and ModernBERT passes it to
+        # `nn.Embedding(..., padding_idx=...)`.  ModernBERT's own default is its tokenizer's
+        # [PAD] (50283), which is out of range once `vocab_size` is sized from the data.
+        self.HF_model_config.pad_token_id = EveryQueryBatch.PAD_INDEX
 
         self.HF_model = ModernBertModel._from_config(self.HF_model_config, **extra_kwargs)
 

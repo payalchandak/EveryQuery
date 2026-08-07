@@ -270,6 +270,16 @@ def main(cfg: DictConfig) -> float | None:
     _init_env()
     validate_training_config(cfg)
 
+    # Size the model from the data: vocab from metadata/codes.parquet, positions from the
+    # datamodule window plus the two tokens the model adds — the query token (prepended in
+    # ``EveryQueryPytorchDataset._seeded_getitem``) and the duration token (spliced in
+    # ``EveryQueryModel._hf_inputs``).  Done here, before the config is saved and before
+    # ``validate_resume_directory`` diffs it, so the run dir records the real numbers and a
+    # resumed run compares like with like.
+    ds_cfg = instantiate(cfg.datamodule.config)
+    cfg.lightning_module.model.config_overrides.vocab_size = ds_cfg.vocab_size
+    cfg.lightning_module.model.config_overrides.max_position_embeddings = ds_cfg.max_seq_len + 2
+
     if cfg.do_overwrite and cfg.do_resume:
         logger.warning(
             "Both `do_overwrite` and `do_resume` are set to True. "

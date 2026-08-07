@@ -42,13 +42,9 @@ lightning_module:
       num_hidden_layers: 2
       num_attention_heads: 2
       intermediate_size: 128
-      max_position_embeddings: 128
-      vocab_size: 100
-      pad_token_id: 0
-      cls_token_id: 1
-      bos_token_id: 1
-      sep_token_id: 2
-      eos_token_id: 2
+      # Dictated by the data — filled in by train.py from the datamodule config.
+      vocab_size: ???
+      max_position_embeddings: ???
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true

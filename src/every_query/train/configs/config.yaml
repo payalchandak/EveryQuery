@@ -50,6 +50,10 @@ lightning_module:
     mlp_dropout: 0.1
     num_hidden_layers: 22
     occurs_loss_weight: 0.5
+    config_overrides:
+      # Dictated by the data — filled in by train.py from the datamodule config.
+      vocab_size: ???
+      max_position_embeddings: ???
   optimizer:
     _target_: torch.optim.AdamW
     _partial_: true

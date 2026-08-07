@@ -235,7 +235,6 @@ def oracle_trained_model_dir(
             "lightning_module.model.config_overrides.num_hidden_layers=4",
             "lightning_module.model.config_overrides.num_attention_heads=4",
             "lightning_module.model.config_overrides.intermediate_size=256",
-            "lightning_module.model.config_overrides.max_position_embeddings=512",
             # 2000 steps is enough once the weight init is reproducible — the #124 fix moved
             # `seed_everything` above `instantiate(cfg.lightning_module)`, so weight init is
             # now platform-independent for a given `cfg.seed`.  Before that, an unlucky 3.12
