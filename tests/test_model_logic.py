@@ -7,7 +7,12 @@ dimension, and asserting the expected output change (or invariance).
 
 import copy
 
+import pytest
 import torch
+
+from conftest import DEMO_CONFIG_OVERRIDES
+from every_query.data.dataset import EveryQueryBatch
+from every_query.model.model import EveryQueryModel
 
 
 class TestQueryTokenPositionAffectsQueryEmbed:
@@ -510,3 +515,31 @@ class TestCrossLossTargetIndependence:
             "censor_loss must change when censor targets are flipped "
             "(proves censor_loss is not trivially constant)"
         )
+
+
+class TestConfigOverridesValidation:
+    """`config_overrides` rejects keys the model derives, and keys HF does not have.
+
+    Both used to be silent: a derived key was accepted and then clobbered by the forced
+    block, and a typo'd key was `setattr`-ed onto the config and recorded in `hparams`
+    while the model quietly trained at the HF default.
+    """
+
+    def test_derived_key_raises(self):
+        with pytest.raises(ValueError, match="derived, not configurable"):
+            EveryQueryModel(config_overrides={**DEMO_CONFIG_OVERRIDES, "pad_token_id": 7})
+
+    def test_derived_key_error_names_all_offenders(self):
+        with pytest.raises(ValueError, match=r"\['mlp_dropout', 'pad_token_id'\]"):
+            EveryQueryModel(config_overrides={**DEMO_CONFIG_OVERRIDES, "pad_token_id": 7, "mlp_dropout": 0.9})
+
+    def test_unknown_key_raises(self):
+        with pytest.raises(ValueError, match="does not have attribute hiden_size"):
+            EveryQueryModel(config_overrides={**DEMO_CONFIG_OVERRIDES, "hiden_size": 999})
+
+    def test_valid_overrides_still_apply(self):
+        model = EveryQueryModel(config_overrides=DEMO_CONFIG_OVERRIDES)
+        assert model.HF_model_config.hidden_size == DEMO_CONFIG_OVERRIDES["hidden_size"]
+        # Forced despite never appearing in config_overrides.
+        assert model.HF_model_config.pad_token_id == EveryQueryBatch.PAD_INDEX
+        assert model.HF_model.embeddings.tok_embeddings.padding_idx == EveryQueryBatch.PAD_INDEX

@@ -69,7 +69,6 @@ DEMO_CONFIG_OVERRIDES: dict[str, int] = {
     "intermediate_size": 128,
     "max_position_embeddings": 128,
     "vocab_size": 100,
-    "pad_token_id": 0,
     "cls_token_id": 1,
     "bos_token_id": 1,
     "sep_token_id": 2,
