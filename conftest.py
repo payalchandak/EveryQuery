@@ -62,14 +62,18 @@ _PRED_TIMES: dict[int, datetime] = {
 
 _QUERY_CODES = ["HR", "TEMP"]
 
+# Kept key-for-key identical to `_demo_train.yaml`'s `config_overrides`, so the in-process
+# fixtures and the demo training run build the same architecture.  `vocab_size` lives outside it
+# because it goes through the `EveryQueryModel` parameter (which also pins `padding_idx`), the
+# way `train.py` supplies it — see #283.
+DEMO_VOCAB_SIZE = 100
+
 DEMO_CONFIG_OVERRIDES: dict[str, int] = {
     "hidden_size": 64,
     "num_hidden_layers": 2,
     "num_attention_heads": 2,
     "intermediate_size": 128,
     "max_position_embeddings": 128,
-    "vocab_size": 100,
-    "pad_token_id": 0,
     "cls_token_id": 1,
     "bos_token_id": 1,
     "sep_token_id": 2,
@@ -83,7 +87,7 @@ DEMO_CONFIG_OVERRIDES: dict[str, int] = {
 @pytest.fixture(scope="session")
 def demo_model_config() -> ModernBertConfig:
     """Tiny ModernBERT config suitable for CPU-only testing."""
-    return ModernBertConfig(**DEMO_CONFIG_OVERRIDES)
+    return ModernBertConfig(**DEMO_CONFIG_OVERRIDES, vocab_size=DEMO_VOCAB_SIZE, pad_token_id=0)
 
 
 @pytest.fixture(scope="session")
@@ -92,6 +96,7 @@ def demo_model() -> EveryQueryModel:
     torch.manual_seed(0)
     model = EveryQueryModel(
         config_overrides=DEMO_CONFIG_OVERRIDES,
+        vocab_size=DEMO_VOCAB_SIZE,
         do_demo=True,
         precision="32-true",
     )

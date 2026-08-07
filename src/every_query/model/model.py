@@ -285,31 +285,22 @@ class EveryQueryModel(torch.nn.Module):
         MEDS-TorchData actually pads with:
 
         >>> model = EveryQueryModel(config_overrides=tiny, vocab_size=128)
-        >>> model.vocab_size
-        128
         >>> model.HF_model.embeddings.tok_embeddings.weight.shape
         torch.Size([128, 64])
         >>> model.HF_model.embeddings.tok_embeddings.padding_idx
         0
-        >>> bool(model.HF_model.embeddings.tok_embeddings.weight[0].eq(0).all())
-        True
 
-        It takes precedence over `config_overrides`, matching how `num_hidden_layers` behaves,
-        and round-trips through `hparams` so a reloaded checkpoint rebuilds the same table:
+        `pad_token_id` is not a knob once `vocab_size` is set — the embedding's `padding_idx`
+        has to be the index MEDS-TorchData pads with, so a conflicting override is dropped
+        with a warning rather than honoured:
 
-        >>> model = EveryQueryModel(config_overrides={**tiny, "vocab_size": 100}, vocab_size=128)
-        >>> model.vocab_size
-        128
-        >>> model.hparams["vocab_size"]
-        128
+        >>> model = EveryQueryModel(config_overrides={**tiny, "pad_token_id": 3}, vocab_size=128)
+        >>> model.HF_model_config.pad_token_id
+        0
 
-        A vocabulary too small to hold the pad index is rejected up front, rather than at the
-        `nn.Embedding` assertion:
-
-        >>> EveryQueryModel(config_overrides=tiny, vocab_size=0)
-        Traceback (most recent call last):
-            ...
-        ValueError: vocab_size must be greater than the pad index (0); got 0.
+        `TestVocabSizing` in `tests/test_training.py` covers the rest of the matrix: precedence
+        over `config_overrides`, the pad row staying zero across an optimiser step, the
+        `hparams` round-trip, and the too-small-vocabulary `ValueError`.
     """
 
     HF_model_config: ModernBertConfig
@@ -371,6 +362,12 @@ class EveryQueryModel(torch.nn.Module):
                     f"({MEDSTorchBatch.PAD_INDEX}); got {vocab_size}."
                 )
 
+            vocab_override = (config_overrides or {}).get("vocab_size")
+            if vocab_override is not None and vocab_override != vocab_size:
+                logger.warning(
+                    f"Ignoring config_overrides['vocab_size']={vocab_override} in favour of the "
+                    f"explicit vocab_size={vocab_size}."
+                )
             self.HF_model_config.vocab_size = vocab_size
 
             pad_override = (config_overrides or {}).get("pad_token_id")
@@ -408,15 +405,21 @@ class EveryQueryModel(torch.nn.Module):
 
         self.HF_model = ModernBertModel._from_config(self.HF_model_config, **extra_kwargs)
 
-        if vocab_size is not None:
-            # `nn.Embedding.__init__` zeroes the `padding_idx` row, but ModernBERT's
-            # `_init_weights` re-draws the whole table afterwards and doesn't restore it — so
-            # the pad row would keep a random vector that `padding_idx` then freezes forever.
-            # Every padded position in every batch would add that fixed vector to the sequence.
-            # Re-zero it here.  Only needed on the `vocab_size`-set path: with ModernBERT's own
-            # `pad_token_id` the frozen row is one the data never indexes.
+        # `nn.Embedding.__init__` zeroes the `padding_idx` row, but ModernBERT's `_init_weights`
+        # re-draws the whole table afterwards and doesn't restore it — so the pad row keeps a
+        # random vector that `padding_idx` then freezes for the life of the run.
+        #
+        # This is hygiene, not a numerical bug: `_hf_inputs` masks padded positions out of
+        # attention entirely, so the row never reaches a model output.  It matters because a
+        # frozen random pad row makes two otherwise-identical checkpoints differ, and because
+        # anything that reads the table directly has to special-case it.
+        #
+        # Keyed on the *resulting* config, not on which argument set it: `config_overrides` can
+        # set `pad_token_id` too (the pre-#283 idiom), and that path needs the same treatment.
+        pad_idx = self.HF_model_config.pad_token_id
+        if pad_idx is not None and 0 <= pad_idx < self.HF_model_config.vocab_size:
             with torch.no_grad():
-                self.HF_model.embeddings.tok_embeddings.weight[MEDSTorchBatch.PAD_INDEX].fill_(0)
+                self.HF_model.embeddings.tok_embeddings.weight[pad_idx].fill_(0)
 
         self.do_grad_ckpt = do_grad_ckpt
         if self.do_grad_ckpt and hasattr(self.HF_model, "gradient_checkpointing_enable"):

@@ -212,10 +212,10 @@ def test_vocab_size_derived_from_cohort(
 ) -> None:
     """The trained model's embedding table is sized to the cohort's code vocabulary (#283).
 
-    Before the fix the table inherited ModernBERT-base's 50368-entry text vocabulary, so a
-    depth sweep was really measuring a model dominated by embedding rows the data never
-    indexes.  Asserting against the cohort's actual vocab (rather than just ``!= 50368``)
-    also catches a wiring bug that plugs in *some* number but the wrong one.
+    Before the fix the table inherited ModernBERT-base's 50368-entry text vocabulary, so a depth sweep was
+    really measuring a model dominated by embedding rows the data never indexes.  Asserting against the
+    cohort's actual vocab (rather than just ``!= 50368``) also catches a wiring bug that plugs in *some*
+    number but the wrong one.
     """
     expected = _cohort_vocab_size(eq_preprocessed_dataset)
     assert expected < 50368, "sanity: the demo cohort should be far smaller than ModernBERT's vocab"
@@ -271,3 +271,68 @@ def test_setup_model_rejects_changed_cohort_vocabulary(
 
     with pytest.raises(ValueError, match="does not match the cohort"):
         setup_model(run_dir)
+
+
+def test_resume_of_pre_283_run_dir(
+    eq_trained_model_dir: Path,
+    eq_preprocessed_dataset: Path,
+    eq_sampled_tasks_dir: Path,
+    tmp_path_factory,
+) -> None:
+    """A run started before #283 stays resumable — the derivation must not run against it.
+
+    Its ``config.yaml`` has no ``lightning_module.model.vocab_size``, so unconditionally
+    deriving one makes ``validate_resume_directory`` reject the resume ("not present in the old
+    config") on a key that isn't in ``ALLOWED_DIFFERENCE_KEYS``.  The only escape the error
+    message offers is ``do_overwrite=True``, which rmtree's the very checkpoint being resumed.
+
+    Whitelisting the key would be the wrong fix and this test would not catch it: the old
+    checkpoint's ``tok_embeddings.weight`` is ``[50368, H]``, so the rebuilt model would then
+    fail a strict ``load_state_dict``.  Hence the checkpoint assertions below — the resumed run
+    has to keep the table the checkpoint actually contains.
+    """
+    resume_dir = tmp_path_factory.mktemp("eq_train_legacy_resume")
+    _stage_resume_dir(eq_trained_model_dir, resume_dir)
+
+    # Rewrite the staged run as a pre-#283 one: no vocab_size key, and a 50368-wide table.
+    for name in ("config.yaml", "resolved_config.yaml"):
+        cfg = OmegaConf.load(resume_dir / name)
+        del cfg.lightning_module.model.vocab_size
+        OmegaConf.save(cfg, resume_dir / name)
+
+    # Every checkpoint in the dir, not just the max-step one: `find_checkpoint_path` picks by its
+    # own rule and any it could pick has to look pre-#283.  The optimiser state has to be widened
+    # alongside the weights or `trainer.fit` dies in AdamW rather than in `load_state_dict`, which
+    # would make this test pass for the wrong reason.
+    embedding_key = "model.HF_model.embeddings.tok_embeddings.weight"
+    for ckpt_path in (resume_dir / "checkpoints").glob("*.ckpt"):
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        del ckpt["hyper_parameters"]["model"]["vocab_size"]
+        old = ckpt["state_dict"][embedding_key]
+        wide = torch.zeros(50368, old.shape[1])
+        ckpt["state_dict"][embedding_key] = wide
+        for opt_state in ckpt["optimizer_states"]:
+            # tok_embeddings.weight is the first parameter AdamW sees.
+            entry = opt_state["state"][0]
+            assert entry["exp_avg"].shape == old.shape, "expected param 0 to be tok_embeddings"
+            entry["exp_avg"] = torch.zeros_like(wide)
+            entry["exp_avg_sq"] = torch.zeros_like(wide)
+        torch.save(ckpt, ckpt_path)
+
+    run_and_check(
+        [
+            "EQ_train",
+            "--config-name=_demo_train",
+            f"output_dir={resume_dir!s}",
+            f"datamodule.config.tensorized_cohort_dir={eq_preprocessed_dataset!s}",
+            f"datamodule.config.task_labels_dir={eq_sampled_tasks_dir!s}",
+            "do_overwrite=False",
+            "do_resume=True",
+            "trainer.max_steps=4",
+        ],
+        timeout=300.0,
+    )
+
+    _, resumed = _highest_step_checkpoint(resume_dir)
+    assert resumed["hyper_parameters"]["model"].get("vocab_size") is None
+    assert resumed["state_dict"][embedding_key].shape[0] == 50368

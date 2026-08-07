@@ -37,8 +37,10 @@ lightning_module:
     do_demo: true
     do_grad_ckpt: false
     mlp_dropout: 0.1
-    # `vocab_size` and `pad_token_id` are deliberately absent: train.py derives both from the
-    # cohort's code metadata (see #283), so pinning them here would just shadow the real values.
+    # `vocab_size` and `pad_token_id` are deliberately absent (see #283).  train.py derives
+    # `vocab_size` from the cohort's code metadata and passes it to `EveryQueryModel`, which then
+    # pins `pad_token_id` to `MEDSTorchBatch.PAD_INDEX`.  Setting either here would be ignored:
+    # `vocab_size` would suppress the derivation, `pad_token_id` would be dropped with a warning.
     config_overrides:
       hidden_size: 64
       num_hidden_layers: 2

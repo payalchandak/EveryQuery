@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import polars as pl
 import torch
 from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
@@ -22,87 +21,79 @@ from every_query.model.lightning_module import EveryQueryLightningModule
 logger = logging.getLogger(__name__)
 
 
-def _check_vocab_size(ckpt_vocab_size: int, train_cfg: DictConfig) -> None:
-    """Raise if the checkpoint's embedding table doesn't match the cohort's code vocabulary.
+def _check_vocab_size(ckpt_vocab_size: int | None, train_cfg: DictConfig) -> None:
+    """Raise if the checkpoint's embedding table is a different size than the cohort's vocabulary.
 
-    Since #283 the embedding table is sized from `MEDSTorchDataConfig.vocab_size`, so a
-    checkpoint's table size is a fingerprint of the code metadata it was trained against.
-    `code/vocab_index` is assigned lexicographically over the whole code set, so re-tensorizing
-    a cohort with even one extra code renumbers *every* index — the checkpoint would still load
-    (the state dict shape check only fails if the count changed) but every embedding lookup
-    would return another code's vector.  Refuse instead of silently predicting from a shuffled
+    Since #283 the embedding table is sized from `MEDSTorchDataConfig.vocab_size`, so its size is
+    a partial fingerprint of the code metadata the model was trained against.
+    `code/vocab_index` is assigned lexicographically over the whole code set, so re-tensorizing a
+    cohort with even one extra code renumbers *every* index — the checkpoint would still load
+    (the state-dict shape check only fails if the count changed) but every embedding lookup would
+    return another code's vector.  Refuse instead of silently predicting from a shuffled
     vocabulary.
 
+    This is a size check, not an identity check: a cohort that gained one code and dropped
+    another, or had one renamed, has the same `max(code/vocab_index) + 1` and is renumbered just
+    as thoroughly.  Catching that needs a hash of the code set recorded at train time; see #283
+    for the follow-up.  What's here catches the common case at the cost of one parquet read.
+
     Args:
-        ckpt_vocab_size: The loaded model's embedding table size.
-        train_cfg: The run's `resolved_config.yaml`.
+        ckpt_vocab_size: The checkpoint's ``hparams["model"]["vocab_size"]``.  `None` for
+            checkpoints predating #283, which carry ModernBERT's 50368-entry text vocabulary
+            rather than a data-derived one — nothing meaningful to compare, so the check is
+            skipped.  Read off the checkpoint rather than the run's ``resolved_config.yaml``
+            because ``setup_model`` will load any checkpoint under ``checkpoints/``, including
+            one that predates the config sitting next to it.
+        train_cfg: The run's ``resolved_config.yaml``.
 
     Raises:
         ValueError: if the cohort's current vocabulary size differs from the checkpoint's.
+        FileNotFoundError: if the cohort has no code metadata to check against — the same
+            policy `predict._check_vocab` applies to the same file.
 
     Examples:
+        >>> import tempfile
+        >>> import polars as pl
+        >>> def cfg_for(tmpdir):
+        ...     return OmegaConf.create({"datamodule": {"config": {
+        ...         "tensorized_cohort_dir": str(tmpdir), "max_seq_len": 10,
+        ...         "_target_": "meds_torchdata.config.MEDSTorchDataConfig",
+        ...     }}})
+        >>> tmp = Path(tempfile.mkdtemp())
+        >>> (tmp / "metadata").mkdir()
+        >>> pl.DataFrame({"code/vocab_index": [1, 2, 3]}).write_parquet(
+        ...     tmp / "metadata" / "codes.parquet")
+
         Sizes agree — no raise (`code/vocab_index` is 1-based, so `max + 1` is 4 here):
 
-        >>> import tempfile
-        >>> def cfg_for(tmpdir, vocab_size=4):
-        ...     return OmegaConf.create({
-        ...         "datamodule": {"config": {"tensorized_cohort_dir": tmpdir}},
-        ...         "lightning_module": {"model": {"vocab_size": vocab_size}},
-        ...     })
-        >>> def write_codes(tmpdir, indices):
-        ...     meta_dir = Path(tmpdir) / "metadata"
-        ...     meta_dir.mkdir(exist_ok=True)
-        ...     pl.DataFrame({"code/vocab_index": indices}).write_parquet(meta_dir / "codes.parquet")
-        >>> with tempfile.TemporaryDirectory() as tmpdir:
-        ...     write_codes(tmpdir, [1, 2, 3])
-        ...     _check_vocab_size(4, cfg_for(tmpdir))  # no output, no error
+        >>> _check_vocab_size(4, cfg_for(tmp))
 
         A cohort that has since gained a code raises:
 
-        >>> with tempfile.TemporaryDirectory() as tmpdir:
-        ...     write_codes(tmpdir, [1, 2, 3, 4])
-        ...     _check_vocab_size(4, cfg_for(tmpdir))
+        >>> _check_vocab_size(3, cfg_for(tmp))
         Traceback (most recent call last):
             ...
-        ValueError: Checkpoint vocabulary size (4) does not match the cohort at ...
+        ValueError: Checkpoint vocabulary size (3) does not match the cohort at ...
 
-        Checkpoints predating #283 carry ModernBERT's text vocabulary rather than a
-        data-derived one, so there is nothing meaningful to compare and the check is skipped:
+        A checkpoint predating #283 is skipped without reading anything:
 
-        >>> with tempfile.TemporaryDirectory() as tmpdir:
-        ...     write_codes(tmpdir, [1, 2, 3, 4])
-        ...     _check_vocab_size(50368, cfg_for(tmpdir, vocab_size=None))  # no error
-
-        Missing metadata warns rather than raises — the checkpoint is still usable, we just
-        can't verify it:
-
-        >>> with tempfile.TemporaryDirectory() as tmpdir:
-        ...     _check_vocab_size(4, cfg_for(tmpdir))  # no error
+        >>> _check_vocab_size(None, cfg_for(tmp / "nonexistent"))
     """
-    if OmegaConf.select(train_cfg, "lightning_module.model.vocab_size") is None:
+    if ckpt_vocab_size is None:
         return
 
-    cohort_dir = Path(train_cfg.datamodule.config.tensorized_cohort_dir)
-    metadata_fp = cohort_dir / "metadata" / "codes.parquet"
-    if not metadata_fp.is_file():
-        logger.warning(
-            f"No code metadata at {metadata_fp}; cannot verify that the checkpoint's vocabulary "
-            f"({ckpt_vocab_size}) still matches the cohort it was trained on."
-        )
-        return
-
-    data_vocab_size = (
-        pl.read_parquet(metadata_fp, columns=["code/vocab_index"], use_pyarrow=True)["code/vocab_index"].max()
-        + 1
-    )
+    # Same call `train.py` sizes the table with, so the two can't drift.
+    data_vocab_size = instantiate(train_cfg.datamodule.config).vocab_size
     if data_vocab_size != ckpt_vocab_size:
+        cohort_dir = train_cfg.datamodule.config.tensorized_cohort_dir
         raise ValueError(
             f"Checkpoint vocabulary size ({ckpt_vocab_size}) does not match the cohort at "
             f"{cohort_dir} ({data_vocab_size}).  `code/vocab_index` is assigned lexicographically "
             f"over the full code set, so a cohort whose vocabulary has changed size has also "
             f"renumbered the codes this model was trained on — every embedding lookup would "
-            f"return the wrong code's vector.  Re-train against the current cohort, or point "
-            f"`datamodule.config.tensorized_cohort_dir` at the cohort the model was trained on."
+            f"return the wrong code's vector.  Re-train against the current cohort, or edit "
+            f"`datamodule.config.tensorized_cohort_dir` in the run's `resolved_config.yaml` to "
+            f"point at the cohort the model was trained on."
         )
 
 
@@ -132,6 +123,7 @@ def setup_model(model_run_dir: str | Path, ckpt_name: str | None = None):
         FileNotFoundError: if no checkpoint can be resolved.
         ValueError: if the checkpoint's embedding table no longer matches the cohort's code
             vocabulary (see :func:`_check_vocab_size`).
+        FileNotFoundError: if the cohort has no code metadata to check the checkpoint against.
     """
     model_run_dir = Path(model_run_dir)
     if not model_run_dir.is_dir():
@@ -172,7 +164,7 @@ def setup_model(model_run_dir: str | Path, ckpt_name: str | None = None):
     logger.info(f"Loading lightning module from checkpoint: {ckpt_path}")
     M = EveryQueryLightningModule.load_from_checkpoint(str(ckpt_path))
 
-    _check_vocab_size(M.model.vocab_size, train_cfg)
+    _check_vocab_size(M.model.hparams.get("vocab_size"), train_cfg)
 
     logger.info("Instantiating trainer...")
     trainer = instantiate(train_cfg.trainer)

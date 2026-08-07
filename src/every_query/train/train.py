@@ -254,6 +254,117 @@ def validate_training_config(cfg: DictConfig) -> None:
         )
 
 
+def resolve_vocab_size(cfg: DictConfig, run_cfg_path: Path) -> None:
+    """Set ``lightning_module.model.vocab_size`` in-place to the cohort's code vocabulary.
+
+    Sizes the embedding table to the dataset rather than to ModernBERT-base's 50368-entry text
+    vocabulary, which is what `EveryQueryModel` inherits when nobody tells it otherwise (#283).
+    `MEDSTorchDataConfig.vocab_size` reads ``max(code/vocab_index) + 1`` off the code metadata
+    parquet, so instantiating the data config alone is enough — no dataset build needed.
+
+    Three things suppress the derivation:
+
+    - An explicit ``lightning_module.model.vocab_size``.  That's the escape hatch for training
+      against a vocabulary that isn't this cohort's; since the key isn't declared in
+      ``config.yaml`` it takes Hydra's append form, ``+lightning_module.model.vocab_size=N``.
+    - An explicit ``config_overrides.vocab_size`` — the pre-#283 idiom.  Honoured (with a
+      warning) rather than silently replaced, so existing user yaml keeps training the table it
+      asked for.
+    - Resuming a run whose saved config predates #283.  Such a run's checkpoint holds a
+      ``[50368, H]`` table; deriving would rebuild the model at the cohort's width and
+      ``trainer.fit(ckpt_path=...)`` would die on a state-dict shape mismatch.  Leaving the key
+      unset reproduces the table the checkpoint actually contains *and* keeps the config
+      diffable against the old one, so `validate_resume_directory` still passes.  A run started
+      after #283 has the key saved and it is read back verbatim.
+
+    Args:
+        cfg: The training config, mutated in place.
+        run_cfg_path: ``<run_dir>/config.yaml`` — the config of the run being resumed, if any.
+
+    Examples:
+        >>> import tempfile
+        >>> import polars as pl
+        >>> def cfg_for(cohort_dir, **model):
+        ...     return OmegaConf.create({
+        ...         "do_resume": True, "do_overwrite": False,
+        ...         "datamodule": {"config": {
+        ...             "tensorized_cohort_dir": str(cohort_dir), "max_seq_len": 10,
+        ...             "_target_": "meds_torchdata.config.MEDSTorchDataConfig",
+        ...         }},
+        ...         "lightning_module": {"model": model},
+        ...     })
+        >>> tmp = Path(tempfile.mkdtemp())
+        >>> (tmp / "metadata").mkdir()
+        >>> pl.DataFrame({"code/vocab_index": [1, 2, 3]}).write_parquet(
+        ...     tmp / "metadata" / "codes.parquet")
+
+        With no run dir to resume, the value comes from the cohort:
+
+        >>> cfg = cfg_for(tmp)
+        >>> resolve_vocab_size(cfg, tmp / "nonexistent.yaml")
+        >>> cfg.lightning_module.model.vocab_size
+        4
+
+        Resuming a run whose saved config predates #283, the key stays absent:
+
+        >>> old_cfg_path = tmp / "config.yaml"
+        >>> OmegaConf.save(OmegaConf.create({"lightning_module": {"model": {}}}), old_cfg_path)
+        >>> cfg = cfg_for(tmp)
+        >>> resolve_vocab_size(cfg, old_cfg_path)
+        >>> "vocab_size" in cfg.lightning_module.model
+        False
+
+        Resuming a post-#283 run, the saved value is read back rather than re-derived:
+
+        >>> OmegaConf.save(
+        ...     OmegaConf.create({"lightning_module": {"model": {"vocab_size": 9}}}), old_cfg_path)
+        >>> cfg = cfg_for(tmp)
+        >>> resolve_vocab_size(cfg, old_cfg_path)
+        >>> cfg.lightning_module.model.vocab_size
+        9
+
+        An explicit value is left alone, whichever way it was set:
+
+        >>> cfg = cfg_for(tmp, vocab_size=61312)
+        >>> resolve_vocab_size(cfg, tmp / "nonexistent.yaml")
+        >>> cfg.lightning_module.model.vocab_size
+        61312
+        >>> cfg = cfg_for(tmp, config_overrides={"vocab_size": 100})
+        >>> resolve_vocab_size(cfg, tmp / "nonexistent.yaml")
+        >>> "vocab_size" in cfg.lightning_module.model
+        False
+    """
+    model_cfg = cfg.lightning_module.model
+
+    if model_cfg.get("vocab_size", None) is not None:
+        return
+
+    overridden = (model_cfg.get("config_overrides") or {}).get("vocab_size")
+    if overridden is not None:
+        logger.warning(
+            f"Using config_overrides.vocab_size={overridden} rather than the cohort's code "
+            f"vocabulary.  Prefer `+lightning_module.model.vocab_size={overridden}`, which also "
+            f"pins the embedding's padding_idx to the index batches are padded with."
+        )
+        return
+
+    if cfg.do_resume and not cfg.do_overwrite and run_cfg_path.is_file():
+        resumed = OmegaConf.select(OmegaConf.load(run_cfg_path), "lightning_module.model.vocab_size")
+        if resumed is None:
+            logger.info(
+                f"Resuming a run started before #283 ({run_cfg_path} sets no vocab_size); keeping "
+                f"the checkpoint's ModernBERT-sized embedding table rather than deriving one."
+            )
+            return
+        vocab_size = resumed
+    else:
+        vocab_size = instantiate(cfg.datamodule.config).vocab_size
+        logger.info(f"Setting model vocab_size to the dataset's code vocabulary: {vocab_size}")
+
+    with open_dict(cfg):
+        model_cfg.vocab_size = vocab_size
+
+
 def _init_env() -> None:
     """Configure thread counts for polars/OMP from the SLURM/system environment."""
     num_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
@@ -270,22 +381,6 @@ def main(cfg: DictConfig) -> float | None:
     _init_env()
     validate_training_config(cfg)
 
-    # Size the embedding table to the dataset's code vocabulary rather than to ModernBERT-base's
-    # 50368-entry text vocabulary, which is what `EveryQueryModel` inherits when nobody tells it
-    # otherwise.  `MEDSTorchDataConfig.vocab_size` reads `max(code/vocab_index) + 1` off the code
-    # metadata parquet, so instantiating the data config alone is enough — no dataset build
-    # needed.  An explicit `vocab_size` in the config wins: that's the escape hatch for training
-    # against a vocabulary that isn't this cohort's.  Fixes #283.
-    #
-    # This runs before `validate_resume_directory` and before the config is written, so a
-    # resumed run compares like against like (both sides carry the derived value) and
-    # ``resolved_config.yaml`` records the size the run actually used.
-    if cfg.lightning_module.model.get("vocab_size", None) is None:
-        data_vocab_size = instantiate(cfg.datamodule.config).vocab_size
-        logger.info(f"Setting model vocab_size to the dataset's code vocabulary: {data_vocab_size}")
-        with open_dict(cfg):
-            cfg.lightning_module.model.vocab_size = data_vocab_size
-
     if cfg.do_overwrite and cfg.do_resume:
         logger.warning(
             "Both `do_overwrite` and `do_resume` are set to True. "
@@ -300,6 +395,12 @@ def main(cfg: DictConfig) -> float | None:
         raise NotADirectoryError(f"Run directory {run_dir} is a file, not a directory.")
 
     cfg_path = run_dir / "config.yaml"
+
+    # Must land before both `validate_resume_directory` and the config write below, so the
+    # resume diff compares like against like and ``resolved_config.yaml`` records the size the
+    # run actually used.  Needs `cfg_path` to tell a pre-#283 run dir from a post-#283 one.
+    resolve_vocab_size(cfg, cfg_path)
+
     ckpt_path = None
     if cfg_path.exists():
         if cfg.do_overwrite:
