@@ -319,8 +319,8 @@ def main(cfg: DictConfig) -> float | None:
         OmegaConf.save(cfg, run_dir / "config.yaml")
         save_resolved_config(cfg, run_dir / "resolved_config.yaml")
 
-    logger.info("Setting torch float32 matmul precision to 'medium'.")
-    torch.set_float32_matmul_precision("medium")
+    logger.info("Setting torch float32 matmul precision to 'high'.")
+    torch.set_float32_matmul_precision("high")
 
     # Seed *before* any `instantiate(...)` call so that model weight init, DataLoader
     # generator construction, and any other RNG-consuming work happen under the seeded

@@ -103,7 +103,7 @@ class TaskAurocTrackingCallback(Callback):
                 batch = move_data_to_device(batch, device)
                 _, outputs = model(batch)
                 # Squeeze only dim 1 so a trailing size-1 batch doesn't collapse to a 0-d scalar.
-                probs = outputs.occurs_logits.detach().cpu().squeeze(1).sigmoid().float().tolist()
+                probs = outputs.occurs_logits.detach().cpu().squeeze(1).float().sigmoid().tolist()
                 queries = batch.query.detach().cpu().tolist()
                 durations = batch.duration_days.detach().cpu().tolist()
                 labels = batch.occurs.detach().cpu().tolist()

@@ -44,7 +44,7 @@ lightning_module:
   grad_norm_log_every_n_steps: 1000 # log per-task encoder grad norms every N optimizer steps
   model:
     _target_: every_query.model.EveryQueryModel
-    precision: "16-mixed"
+    precision: ${trainer.precision} # single source of truth: the Trainer owns AMP
     do_demo: false
     do_grad_ckpt: false
     mlp_dropout: 0.1
@@ -121,6 +121,8 @@ trainer:
   accelerator: "auto"
   devices: 1
   strategy: "auto"
+  # AMP lives here and nowhere else — weights stay fp32, autocast handles the casting.
+  precision: "bf16-mixed"
   accumulate_grad_batches: 1 # set to 1 for no gradient accumulation, >1 for gradient accumulation
   log_every_n_steps: 50
   # perform a validation loop every N training epochs

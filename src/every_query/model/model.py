@@ -138,8 +138,18 @@ class EveryQueryOutput(BaseModelOutput):
             tensor(True)
             >>> EveryQueryOutput.logits_to_probs(torch.tensor([[-1000.0]])) < 0.001
             tensor(True)
+
+            bf16 logits are upcast before the sigmoid — bf16 sigmoid would round to
+            exactly 1.0 from a logit of ~6, flattening every confident prediction into
+            a tie for ranking metrics like AUROC:
+
+            >>> probs = EveryQueryOutput.logits_to_probs(torch.tensor([[8.0]], dtype=torch.bfloat16))
+            >>> probs.dtype, bool(probs < 1.0)
+            (torch.float32, True)
         """
-        return torch.sigmoid(logits).squeeze()
+        # Sigmoid must run in fp32: bf16 saturates to exactly 1.0 at logit ~6 (fp32: ~17),
+        # and these probs are persisted to parquet and fed into AUROC.
+        return torch.sigmoid(logits.float()).squeeze()
 
     @property
     def occurs_probs(self) -> torch.Tensor | None:
@@ -263,15 +273,6 @@ class EveryQueryModel(torch.nn.Module):
     precision: str
     mlp_dropout: float
 
-    PRECISION_TO_MODEL_WEIGHTS_DTYPE: ClassVar[dict[str, torch.dtype]] = {
-        "32-true": torch.float32,
-        "16-true": torch.float16,
-        "16-mixed": torch.float32,
-        "bf16-true": torch.bfloat16,
-        "bf16-mixed": torch.float32,
-        "transformer-engine": torch.bfloat16,
-    }
-
     # Keys this class derives or forces later in ``__init__``, so a ``config_overrides`` entry for
     # any of them would be accepted, recorded in ``hparams``/``resolved_config.yaml``, and then
     # silently discarded.  Reject instead, naming the real control surface — the same guard
@@ -319,7 +320,10 @@ class EveryQueryModel(torch.nn.Module):
         if num_hidden_layers is not None:
             self.HF_model_config.num_hidden_layers = num_hidden_layers
 
-        extra_kwargs = {"torch_dtype": self.PRECISION_TO_MODEL_WEIGHTS_DTYPE.get(precision)}
+        # No torch_dtype: weights load fp32 and the Trainer's AMP plugin autocasts around them.
+        # Loading them at half precision instead leaves the optimizer nothing to accumulate
+        # small updates into.
+        extra_kwargs = {}
 
         if HAS_FLASH_ATTN:
             logger.info("Using FlashAttention 2 for the model.")

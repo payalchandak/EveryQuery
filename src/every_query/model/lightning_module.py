@@ -252,7 +252,7 @@ class EveryQueryLightningModule(L.LightningModule):
                 self._update_metric(
                     name="censor_auc",
                     split=split,
-                    preds=outputs.censor_logits.detach().cpu().squeeze(1).sigmoid().float(),
+                    preds=outputs.censor_logits.detach().cpu().squeeze(1).float().sigmoid(),
                     target=batch.censor.detach().cpu().long(),
                 )
             if (
@@ -260,7 +260,7 @@ class EveryQueryLightningModule(L.LightningModule):
                 and getattr(batch, "occurs", None) is not None
             ):
                 mask = (~batch.censor).detach().cpu().bool() if hasattr(batch, "censor") else None
-                preds = outputs.occurs_logits.detach().cpu().squeeze(1).sigmoid().float()
+                preds = outputs.occurs_logits.detach().cpu().squeeze(1).float().sigmoid()
                 target = batch.occurs.detach().cpu().long()
                 if mask is not None:
                     preds = preds[mask]
@@ -404,16 +404,19 @@ class EveryQueryLightningModule(L.LightningModule):
         _, outputs = self.model(batch)
 
         empty_tensor = torch.tensor([])
+        # Probs come back fp32 already (``logits_to_probs`` upcasts before the sigmoid so bf16
+        # can't saturate them); ``query_embed`` is still bf16 under ``bf16-mixed`` and
+        # ``torch.Tensor.numpy()`` rejects bf16 outright, so keep the ``.float()`` on the way out.
         return {
-            "occurs_probs": outputs.occurs_probs.detach().cpu(),
-            "censor_probs": outputs.censor_probs.detach().cpu(),
+            "occurs_probs": outputs.occurs_probs.detach().float().cpu(),
+            "censor_probs": outputs.censor_probs.detach().float().cpu(),
             "occurs": batch.occurs.detach().cpu() if batch.occurs is not None else empty_tensor,
             "censor": batch.censor.detach().cpu() if batch.censor is not None else empty_tensor,
             "query": batch.query.detach().cpu() if batch.query is not None else empty_tensor,
             "duration_days": (
                 batch.duration_days.detach().cpu() if batch.duration_days is not None else empty_tensor
             ),
-            "query_embed": outputs.query_embed.detach().cpu(),
+            "query_embed": outputs.query_embed.detach().float().cpu(),
         }
 
     @staticmethod

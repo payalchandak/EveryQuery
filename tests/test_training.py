@@ -259,3 +259,49 @@ class TestDemoModeChecks:
             model(sample_batch)
 
         assert any("nan" in msg.lower() for msg in caplog.messages)
+
+
+# ── test_mixed_precision_wiring ─────────────────────────────────────────
+
+
+class TestMixedPrecisionWiring:
+    """AMP is the Trainer's job; weights stay fp32 so the optimizer has full-precision masters.
+
+    Regression guard: ``lightning_module.model.precision`` used to be set while
+    ``trainer.precision`` was left at Lightning's ``32-true`` default, so runs logged
+    "Using mixed precision" and then trained in fp32 with no autocast anywhere.
+    """
+
+    def test_trainer_config_sets_precision(self):
+        from pathlib import Path
+
+        from hydra import compose, initialize_config_dir
+
+        import every_query.train
+
+        configs = Path(every_query.train.__file__).parent / "configs"
+        with initialize_config_dir(str(configs), version_base=None):
+            cfg = compose(config_name="config")
+        assert cfg.trainer.precision == "bf16-mixed"
+        # The model is told the same thing, so its FlashAttention log matches reality.
+        assert cfg.lightning_module.model.precision == cfg.trainer.precision
+
+    def test_weights_stay_fp32_under_mixed_precision(self):
+        model = EveryQueryModel(config_overrides=DEMO_CONFIG_OVERRIDES, precision="bf16-mixed")
+        assert {p.dtype for p in model.parameters()} == {torch.float32}
+
+    def test_loss_stays_fp32_under_autocast(self, demo_model, sample_batch):
+        """BCEWithLogitsLoss is on autocast's fp32 promote list — no manual wrapping needed."""
+        with torch.autocast("cpu", dtype=torch.bfloat16), torch.no_grad():
+            loss, _ = demo_model(sample_batch)
+        assert loss.dtype is torch.float32
+        assert loss.isfinite()
+
+    def test_predict_step_outputs_are_numpy_convertible(self, demo_lightning_module, sample_batch):
+        """``EQ_predict`` reuses the training precision, and ``.numpy()`` rejects bf16 outright."""
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            result = demo_lightning_module.predict_step(sample_batch)
+
+        for key in ("occurs_probs", "censor_probs", "query_embed"):
+            assert result[key].dtype is torch.float32, f"{key} is {result[key].dtype}"
+            result[key].reshape(-1).numpy()  # raises TypeError on bf16

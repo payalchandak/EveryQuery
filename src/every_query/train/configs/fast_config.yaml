@@ -13,7 +13,6 @@ datamodule:
 
 lightning_module:
   model:
-    precision: "bf16-mixed"
     num_hidden_layers: 4
   optimizer:
     lr: 1.0e-4
