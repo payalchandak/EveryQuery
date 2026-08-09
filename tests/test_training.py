@@ -290,6 +290,25 @@ class TestMixedPrecisionWiring:
         model = EveryQueryModel(config_overrides=DEMO_CONFIG_OVERRIDES, precision="bf16-mixed")
         assert {p.dtype for p in model.parameters()} == {torch.float32}
 
+    def test_weights_stay_fp32_when_the_hf_config_declares_bf16(self):
+        """A published checkpoint whose config.json carries ``torch_dtype: bfloat16`` must not
+        drag the weights down with it.
+
+        ``_from_config`` falls back to ``config.dtype`` when no dtype is passed, so without an
+        explicit ``torch_dtype`` this yields bf16 parameters and the optimizer loses its
+        full-precision masters — autocast is supposed to handle the casting, not the weights.
+        """
+        from transformers import ModernBertConfig
+
+        # Built locally rather than fetched, so the assertion doesn't depend on what the
+        # real ModernBERT config.json happens to declare today.
+        bf16_config = ModernBertConfig(torch_dtype=torch.bfloat16)
+
+        with patch("every_query.model.model.AutoConfig.from_pretrained", return_value=bf16_config):
+            model = EveryQueryModel(config_overrides=DEMO_CONFIG_OVERRIDES, precision="bf16-mixed")
+
+        assert {p.dtype for p in model.parameters()} == {torch.float32}
+
     def test_loss_stays_fp32_under_autocast(self, demo_model, sample_batch):
         """BCEWithLogitsLoss is on autocast's fp32 promote list — no manual wrapping needed."""
         with torch.autocast("cpu", dtype=torch.bfloat16), torch.no_grad():

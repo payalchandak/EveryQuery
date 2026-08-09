@@ -320,10 +320,20 @@ class EveryQueryModel(torch.nn.Module):
         if num_hidden_layers is not None:
             self.HF_model_config.num_hidden_layers = num_hidden_layers
 
-        # No torch_dtype: weights load fp32 and the Trainer's AMP plugin autocasts around them.
-        # Loading them at half precision instead leaves the optimizer nothing to accumulate
-        # small updates into.
-        extra_kwargs = {}
+        # Pin fp32 weights regardless of what the remote config declares, so the optimizer always
+        # has full-precision masters to accumulate small updates into; under a ``*-mixed``
+        # precision the Trainer's AMP plugin autocasts to bf16/fp16 around them.  This cannot be
+        # left to Lightning: its ``MixedPrecision`` plugin only wraps forward in ``torch.autocast``
+        # and inherits a no-op ``convert_module``, so it preserves whatever dtype the module was
+        # built with (only the ``*-true`` precisions cast weights).  And it cannot be left to
+        # transformers: ``_from_config`` with no dtype falls back to ``config.dtype``, so any
+        # ``model_name`` whose config.json carries ``torch_dtype: bfloat16`` would silently
+        # produce bf16 masters.
+        #
+        # Spelled ``torch_dtype`` rather than ``dtype`` because the floor of our transformers
+        # range (>=4.48) predates the rename; 4.57 still honors it with a deprecation warning.
+        # Switch to ``dtype`` once the floor moves past 4.56.
+        extra_kwargs = {"torch_dtype": torch.float32}
 
         if HAS_FLASH_ATTN:
             logger.info("Using FlashAttention 2 for the model.")
