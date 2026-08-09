@@ -62,8 +62,10 @@ def setup_model(model_run_dir: str | Path, ckpt_name: str | None = None):
         logger.info(f"Seeding with seed={seed}")
         seed_everything(seed, workers=True)
 
-    logger.info("Setting torch float32 matmul precision to 'medium'.")
-    torch.set_float32_matmul_precision("medium")
+    # Must match ``train.py`` — scoring a checkpoint with lower-precision fp32 matmuls than it
+    # was trained under makes offline metrics disagree with in-training validation metrics.
+    logger.info("Setting torch float32 matmul precision to 'high'.")
+    torch.set_float32_matmul_precision("high")
 
     # Resolve checkpoint: explicit name → best_model.ckpt → last.ckpt
     candidates = (

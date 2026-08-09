@@ -34,6 +34,13 @@ ALLOWED_DIFFERENCE_KEYS = {
     "trainer.max_steps",
     "trainer.max_epochs",
     "trainer.callbacks.early_stopping.patience",
+    # AMP moved from ``lightning_module.model.precision: 16-mixed`` to ``trainer.precision:
+    # bf16-mixed`` (the Trainer now owns autocast; the model field just mirrors it).  Runs
+    # started before that switch have no ``trainer.precision`` key at all and carry the old
+    # model value, so both would otherwise be un-resumable with no CLI override that helps.
+    # Weights are fp32 under both settings, so the checkpoint stays loadable either way.
+    "trainer.precision",
+    "lightning_module.model.precision",
 }
 
 LEGACY_REMOVED_KEYS = {

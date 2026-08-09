@@ -40,6 +40,32 @@ def test_resume_ignores_legacy_query_stanza(tmp_path: Path) -> None:
     validate_resume_directory(tmp_path, new_cfg)
 
 
+def test_resume_survives_the_amp_precision_move(tmp_path: Path) -> None:
+    """A run started before AMP moved to the Trainer must still resume.
+
+    Such a run dir has no ``trainer.precision`` key and carries the old
+    ``lightning_module.model.precision: 16-mixed``; both are allow-listed because weights are
+    fp32 under either setting, so the checkpoint stays loadable.
+    """
+    saved = tmp_path / "config.yaml"
+    _write_cfg(
+        saved,
+        trainer={"accelerator": "auto"},
+        lightning_module={"model": {"precision": "16-mixed"}},
+    )
+
+    new_cfg = OmegaConf.create(
+        {
+            "seed": 140799,
+            "datamodule": {"config": {"max_seq_len": 256}},
+            "trainer": {"accelerator": "auto", "precision": "bf16-mixed"},
+            "lightning_module": {"model": {"precision": "bf16-mixed"}},
+        }
+    )
+
+    validate_resume_directory(tmp_path, new_cfg)
+
+
 def test_resume_rejects_non_legacy_drift(tmp_path: Path) -> None:
     """A structural mismatch outside the allow-list / legacy set must still raise."""
     saved = tmp_path / "config.yaml"
