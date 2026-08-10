@@ -7,11 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 from omegaconf import OmegaConf
 
-from every_query.train.resume_check import (
-    ALLOWED_DIFFERENCE_KEYS,
-    LEGACY_REMOVED_KEYS,
-    validate_resume_directory,
-)
+from every_query.train.resume_check import LEGACY_REMOVED_KEYS, validate_resume_directory
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -46,8 +42,6 @@ def test_resume_ignores_legacy_query_stanza(tmp_path: Path) -> None:
 
 def test_resume_survives_the_amp_precision_move(tmp_path: Path) -> None:
     """A run dir predating the AMP move — no ``trainer.precision``, old model value — still resumes."""
-    assert {"trainer.precision", "lightning_module.model.precision"} <= ALLOWED_DIFFERENCE_KEYS
-
     saved = tmp_path / "config.yaml"
     _write_cfg(
         saved,
@@ -65,6 +59,33 @@ def test_resume_survives_the_amp_precision_move(tmp_path: Path) -> None:
     )
 
     validate_resume_directory(tmp_path, new_cfg)
+
+
+def test_resume_still_rejects_precision_drift_after_the_amp_move(tmp_path: Path) -> None:
+    """Once a run dir has ``trainer.precision``, precision drift raises again.
+
+    The legacy exemption must not become a blanket allow-list: ``bf16-true`` casts weights to bf16
+    via Lightning's ``HalfPrecision.convert_module``, so silently accepting it would resume with
+    half-precision masters.
+    """
+    saved = tmp_path / "config.yaml"
+    _write_cfg(
+        saved,
+        trainer={"accelerator": "auto", "precision": "bf16-mixed"},
+        lightning_module={"model": {"precision": "bf16-mixed"}},
+    )
+
+    new_cfg = OmegaConf.create(
+        {
+            "seed": 140799,
+            "datamodule": {"config": {"max_seq_len": 256}},
+            "trainer": {"accelerator": "auto", "precision": "bf16-true"},
+            "lightning_module": {"model": {"precision": "bf16-true"}},
+        }
+    )
+
+    with pytest.raises(ValueError, match="precision"):
+        validate_resume_directory(tmp_path, new_cfg)
 
 
 def test_resume_rejects_non_legacy_drift(tmp_path: Path) -> None:

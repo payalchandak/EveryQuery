@@ -34,8 +34,14 @@ ALLOWED_DIFFERENCE_KEYS = {
     "trainer.max_steps",
     "trainer.max_epochs",
     "trainer.callbacks.early_stopping.patience",
-    # AMP moved to ``trainer.precision``: pre-switch runs lack that key and carry the old
-    # ``16-mixed`` model value.  Weights are fp32 either way, so the checkpoint stays loadable.
+}
+
+LEGACY_AMP_KEYS = {
+    # AMP moved to ``trainer.precision``, so a run dir predating the switch has no such key and
+    # still carries ``lightning_module.model.precision: 16-mixed``.  Exempted *only* for those
+    # run dirs (see ``validate_resume_directory``), never allow-listed outright: precision drift
+    # is exactly what this guard exists to catch, and ``bf16-true`` really does cast weights to
+    # bf16 via Lightning's ``HalfPrecision.convert_module``.
     "trainer.precision",
     "lightning_module.model.precision",
 }
@@ -168,7 +174,8 @@ def diff_configs(new_config: dict[str, Any], old_config: dict[str, Any]) -> dict
 def validate_resume_directory(output_dir: Path, cfg: DictConfig) -> None:
     """Raise if the config in ``output_dir/config.yaml`` disagrees with ``cfg`` on any key that matters.
 
-    "Matters" = any key not listed in ``ALLOWED_DIFFERENCE_KEYS``.  The allow-list covers lifecycle
+    "Matters" = any key not listed in ``ALLOWED_DIFFERENCE_KEYS``, plus ``LEGACY_AMP_KEYS`` when the
+    saved config predates the AMP move.  The allow-list covers lifecycle
     flags (``do_resume``, ``do_overwrite``), path fields that legitimately differ between runs, local
     performance knobs, and training-schedule overrides that are reasonable to bump on resume.  Any
     structural drift (model hyperparameters, dataset shape, seed) raises ``ValueError``
@@ -197,9 +204,15 @@ def validate_resume_directory(output_dir: Path, cfg: DictConfig) -> None:
 
     differences = diff_configs(new_cfg, old_cfg)
 
+    # A run dir predating the AMP move is identified by the absence of ``trainer.precision``.
+    # Only those get the ``LEGACY_AMP_KEYS`` exemption; every other precision drift still raises.
+    predates_amp_move = "precision" not in (old_cfg.get("trainer") or {})
+
     err_lines = []
     for key, diff in differences.items():
         if key in ALLOWED_DIFFERENCE_KEYS:
+            continue
+        if predates_amp_move and key in LEGACY_AMP_KEYS:
             continue
         err_lines.append(f"  - key '{key}' {diff}")
 
