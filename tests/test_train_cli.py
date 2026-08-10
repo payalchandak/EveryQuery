@@ -228,3 +228,54 @@ class TestTrainResumeRejectsStructuralDrift:
         assert "max_seq_len" in drifted.stderr, (
             f"Expected error to name 'max_seq_len', got:\n{drifted.stderr}"
         )
+
+
+class TestWandbRunIdContinuity:
+    """A resumed run must continue the original wandb run, not start a new one.
+
+    train.py writes ``wandb_run_id`` to the run dir on the first launch and feeds it back as
+    ``trainer.logger.id`` (+ ``resume=allow``) on ``do_resume``.  With an offline wandb logger,
+    every offline run directory name ends with the run id — so after train + resume, all
+    ``offline-run-*`` dirs must share the id recorded in ``wandb_run_id``.
+    """
+
+    @pytest.fixture(scope="class")
+    def wandb_output(self, task_labels_dir, tensorized_cohort_dir, tmp_path_factory) -> Path:
+        output_dir = tmp_path_factory.mktemp("cli_wandb_resume")
+        logger_override = (
+            "trainer.logger={_target_: pytorch_lightning.loggers.wandb.WandbLogger, "
+            f"offline: true, project: eq-test, entity: eq-test, save_dir: {output_dir}/loggers}}"
+        )
+
+        initial = _run_train_subprocess(
+            task_labels_dir,
+            tensorized_cohort_dir,
+            output_dir,
+            extra_overrides=[logger_override],
+        )
+        assert initial.returncode == 0, (
+            f"Initial training failed (rc={initial.returncode}).\nstderr:\n{initial.stderr}"
+        )
+
+        resumed = _run_train_subprocess(
+            task_labels_dir,
+            tensorized_cohort_dir,
+            output_dir,
+            do_resume=True,
+            do_overwrite=False,
+            extra_overrides=[logger_override, "trainer.max_steps=4"],
+        )
+        assert resumed.returncode == 0, (
+            f"Resumed training failed (rc={resumed.returncode}).\nstderr:\n{resumed.stderr}"
+        )
+        return output_dir
+
+    def test_run_id_file_written(self, wandb_output):
+        assert (wandb_output / "wandb_run_id").is_file()
+
+    def test_resume_reuses_the_same_wandb_run(self, wandb_output):
+        run_id = (wandb_output / "wandb_run_id").read_text().strip()
+        offline_runs = list((wandb_output / "loggers" / "wandb").glob("offline-run-*"))
+        assert len(offline_runs) >= 2, f"Expected offline dirs for train + resume, got {offline_runs}"
+        for run in offline_runs:
+            assert run.name.endswith(f"-{run_id}"), f"{run.name} does not end with run id {run_id}"

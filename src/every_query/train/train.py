@@ -11,7 +11,7 @@ import torch
 from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
 from MEDS_transforms.configs.utils import OmegaConfResolver
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from every_query.train.resume_check import validate_resume_directory
 
@@ -303,6 +303,14 @@ def main(cfg: DictConfig) -> float | None:
             logger.info(f"Resuming training in existing run directory {run_dir}.")
             validate_resume_directory(run_dir, cfg)
             ckpt_path = find_checkpoint_path(run_dir)
+            # Reuse the original run's wandb id so the resumed run continues the same curve
+            # instead of starting a new wandb run.  Mutated *after* validate_resume_directory
+            # so the config diff still compares like with like.
+            wandb_id_fp = run_dir / "wandb_run_id"
+            if ckpt_path and _is_wandb_logger(cfg.trainer.get("logger")) and wandb_id_fp.is_file():
+                with open_dict(cfg.trainer.logger):
+                    cfg.trainer.logger.id = wandb_id_fp.read_text().strip()
+                    cfg.trainer.logger.resume = "allow"
         else:
             raise FileExistsError(
                 f"Run directory {run_dir} already exists and is populated. "
@@ -347,6 +355,14 @@ def main(cfg: DictConfig) -> float | None:
     # back to its folder on disk — best_ckpt_path below is only logged after fit() completes.
     for log in trainer.loggers:
         log.log_hyperparams({"run_dir": str(run_dir)})
+
+    # Persist the wandb run id so a later `do_resume` continues the same wandb curve.
+    # log_hyperparams above already created the experiment, so `version` is the real run id
+    # on rank zero (non-zero ranks see None and skip).
+    if _is_wandb_logger(cfg.trainer.get("logger")) and not (run_dir / "wandb_run_id").is_file():
+        run_id = trainer.logger.version
+        if trainer.is_global_zero and run_id:
+            (run_dir / "wandb_run_id").write_text(str(run_id))
 
     trainer_kwargs = {"model": M, "datamodule": D}
     if ckpt_path:
