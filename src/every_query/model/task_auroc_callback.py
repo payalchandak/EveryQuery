@@ -89,7 +89,10 @@ class TaskAurocTrackingCallback(Callback):
         # naive is_global_zero gate + sync_dist=True would deadlock).
         if self._loader is None or not trainer.is_global_zero:
             return
-        self._compute_and_log(pl_module.model, pl_module.device, pl_module.log)
+        # Manual forwards here run outside Lightning's step hooks, so the precision plugin's
+        # autocast context must be entered explicitly to match validation_step numerics.
+        with trainer.precision_plugin.forward_context():
+            self._compute_and_log(pl_module.model, pl_module.device, pl_module.log)
 
     def _compute_and_log(self, model, device, log_fn):
         """Score the pair set and log the macro win/tie/loss AUROC estimate.
