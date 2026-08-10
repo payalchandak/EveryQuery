@@ -517,6 +517,114 @@ class TestCrossLossTargetIndependence:
         )
 
 
+class TestTimeBasedPositionIds:
+    """When ``use_time_positions=True``, ``_hf_inputs`` must include ``position_ids``
+    derived from ``batch.time_delta_days`` cumulative sums, and different time gaps
+    must produce different model outputs.
+    """
+
+    @torch.no_grad()
+    def test_time_model_includes_position_ids(self, demo_model_time, sample_batch):
+        """``_hf_inputs`` must return ``position_ids`` when time positions are on."""
+        hf_out = demo_model_time._hf_inputs(sample_batch)
+        assert "position_ids" in hf_out, (
+            "_hf_inputs should include 'position_ids' when use_time_positions=True"
+        )
+
+    @torch.no_grad()
+    def test_default_model_excludes_position_ids(self, demo_model, sample_batch):
+        """``_hf_inputs`` must NOT return ``position_ids`` when time positions are off."""
+        hf_out = demo_model._hf_inputs(sample_batch)
+        assert "position_ids" not in hf_out, (
+            "_hf_inputs should NOT include 'position_ids' when use_time_positions=False"
+        )
+
+    @torch.no_grad()
+    def test_position_ids_shape_matches_attention_mask(self, demo_model_time, sample_batch):
+        """``position_ids`` must have the same shape as ``attention_mask``."""
+        hf_out = demo_model_time._hf_inputs(sample_batch)
+        assert hf_out["position_ids"].shape == hf_out["attention_mask"].shape, (
+            f"position_ids shape {hf_out['position_ids'].shape} must match "
+            f"attention_mask shape {hf_out['attention_mask'].shape}"
+        )
+
+    @torch.no_grad()
+    def test_position_ids_are_nonnegative(self, demo_model_time, sample_batch):
+        """All position IDs must be ≥ 0 (negative cumulative time is clamped)."""
+        hf_out = demo_model_time._hf_inputs(sample_batch)
+        assert (hf_out["position_ids"] >= 0).all(), "position_ids must be non-negative"
+
+    @torch.no_grad()
+    def test_different_time_gaps_produce_different_outputs(self, demo_model_time, sample_batch):
+        """Scaling ``time_delta_days`` must change model output when time positions are on.
+
+        This is the core test: if RoPE rotations are driven by cumulative time, changing
+        the time gaps changes the rotation angles and therefore the output embeddings.
+        """
+        _, baseline_out = demo_model_time._forward(sample_batch)
+
+        perturbed = copy.deepcopy(sample_batch)
+        # Multiply all time deltas by 10 — same events, much wider temporal spacing
+        perturbed.time_delta_days = perturbed.time_delta_days * 10
+
+        _, perturbed_out = demo_model_time._forward(perturbed)
+
+        assert not torch.equal(baseline_out.query_embed, perturbed_out.query_embed), (
+            "query_embed should change when time_delta_days is scaled (time-based RoPE is active)"
+        )
+
+    @torch.no_grad()
+    def test_time_scaling_does_not_affect_default_model(self, demo_model, sample_batch):
+        """Scaling ``time_delta_days`` must NOT change output when time positions are off.
+
+        Negative control: the default model ignores ``time_delta_days`` for positional
+        encoding, so scaling it should leave the output unchanged.
+        """
+        _, baseline_out = demo_model._forward(sample_batch)
+
+        perturbed = copy.deepcopy(sample_batch)
+        perturbed.time_delta_days = perturbed.time_delta_days * 10
+
+        _, perturbed_out = demo_model._forward(perturbed)
+
+        assert torch.equal(baseline_out.query_embed, perturbed_out.query_embed), (
+            "query_embed should NOT change when time_delta_days is scaled "
+            "with use_time_positions=False (negative control)"
+        )
+
+    @torch.no_grad()
+    def test_duration_splice_with_time_positions(self, demo_model_time, sample_batch):
+        """When duration_days is present, position_ids must be spliced to match the
+        expanded sequence (duration token inserted at position 1).
+        """
+        assert sample_batch.duration_days is not None, (
+            "Precondition: sample_batch must have duration_days"
+        )
+        seq_len = sample_batch.code.shape[1]
+        hf_out = demo_model_time._hf_inputs(sample_batch)
+
+        assert hf_out["position_ids"].shape[1] == seq_len + 1, (
+            "position_ids seq dim should be seq_len + 1 when duration token is inserted"
+        )
+        # The duration token at position 1 should have position value 0 (same as query)
+        assert (hf_out["position_ids"][:, 1] == 0.0).all(), (
+            "Duration token at index 1 should have time-position 0 (concurrent with query)"
+        )
+
+    @torch.no_grad()
+    def test_use_time_positions_stored_in_hparams(self, demo_model_time):
+        """``use_time_positions`` must be stored in hparams for checkpoint round-tripping."""
+        assert "use_time_positions" in demo_model_time.hparams, (
+            "use_time_positions must be stored in model hparams"
+        )
+        assert demo_model_time.hparams["use_time_positions"] is True
+
+    @torch.no_grad()
+    def test_use_time_positions_defaults_false_in_hparams(self, demo_model):
+        """Old-style models must default to ``use_time_positions=False``."""
+        assert demo_model.hparams.get("use_time_positions", False) is False
+
+
 class TestConfigOverridesValidation:
     """`config_overrides` rejects keys the model derives, and keys HF does not have.
 

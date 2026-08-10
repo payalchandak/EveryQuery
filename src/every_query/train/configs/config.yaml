@@ -50,6 +50,7 @@ lightning_module:
     mlp_dropout: 0.1
     num_hidden_layers: 22
     occurs_loss_weight: 0.5
+    use_time_positions: false
     config_overrides:
       # Dictated by the data — filled in by train.py from the datamodule config.
       vocab_size: ???

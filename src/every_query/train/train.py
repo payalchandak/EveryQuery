@@ -278,7 +278,16 @@ def main(cfg: DictConfig) -> float | None:
     # resumed run compares like with like.
     ds_cfg = instantiate(cfg.datamodule.config)
     cfg.lightning_module.model.config_overrides.vocab_size = ds_cfg.vocab_size
-    cfg.lightning_module.model.config_overrides.max_position_embeddings = ds_cfg.max_seq_len + 2
+
+    use_time_positions = cfg.lightning_module.model.get("use_time_positions", False)
+    if use_time_positions:
+        # With time-based RoPE, position values are cumulative days, not token indices.
+        # A 10-year patient history maxes out around 3,650.  Set to 4,096 to give
+        # headroom — RoPE extrapolates beyond this via its frequency design, but
+        # ModernBERT may pre-compute or clamp at max_position_embeddings.
+        cfg.lightning_module.model.config_overrides.max_position_embeddings = 4096
+    else:
+        cfg.lightning_module.model.config_overrides.max_position_embeddings = ds_cfg.max_seq_len + 2
 
     if cfg.do_overwrite and cfg.do_resume:
         logger.warning(

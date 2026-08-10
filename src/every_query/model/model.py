@@ -290,6 +290,7 @@ class EveryQueryModel(torch.nn.Module):
         num_hidden_layers: int | None = None,
         config_overrides: dict[str, Any] | None = None,
         occurs_loss_weight: float = 0.5,
+        use_time_positions: bool = False,
     ):
         super().__init__()
 
@@ -365,6 +366,8 @@ class EveryQueryModel(torch.nn.Module):
         self.criterion = torch.nn.BCEWithLogitsLoss()
         self.occurs_loss_weight = occurs_loss_weight
 
+        self.use_time_positions = use_time_positions
+
         self.do_demo = do_demo
         if self.do_demo:
             self.forward = self._forward_demo
@@ -379,6 +382,7 @@ class EveryQueryModel(torch.nn.Module):
             "num_hidden_layers": self.HF_model_config.num_hidden_layers,
             "config_overrides": dict(config_overrides) if config_overrides else None,
             "occurs_loss_weight": self.occurs_loss_weight,
+            "use_time_positions": self.use_time_positions,
         }
 
     @property
@@ -549,6 +553,31 @@ class EveryQueryModel(torch.nn.Module):
         if nan_count > 0:
             logger.warning(f"Embeddings contains {nan_count}/{embeddings.numel()} nan values.")
 
+    def _compute_time_position_ids(self, batch: EveryQueryBatch) -> torch.Tensor:
+        """Compute cumulative-time position IDs from ``batch.time_delta_days``.
+
+        Replaces sequential integer positions ``[0, 1, 2, ...]`` with the cumulative
+        elapsed time (in days) at each event, so that RoPE rotations encode *temporal*
+        distance rather than *ordinal* distance.
+
+        Edge-case handling:
+            - NaN deltas (synthetic query/duration tokens) → 0 before cumsum.
+            - Negative deltas (timestamp noise) → clamped to 0.
+            - Padding positions → set to 0 (masked out by attention anyway).
+
+        Returns:
+            ``(batch_size, seq_len)`` float tensor of cumulative-day positions.
+        """
+        # time_delta_days: (B, seq_len), may contain NaN for synthetic tokens
+        clean_deltas = batch.time_delta_days.nan_to_num(0.0).clamp(min=0.0)
+        position_ids = clean_deltas.cumsum(dim=1)  # (B, seq_len)
+
+        # Zero out padding positions (cosmetic — attention mask already handles this)
+        pad_mask = batch.code == batch.PAD_INDEX
+        position_ids = position_ids.masked_fill(pad_mask, 0.0)
+
+        return position_ids
+
     def _hf_inputs(self, batch: EveryQueryBatch) -> dict[str, torch.Tensor]:
         """Converts the EveryQueryBatch to a dictionary of inputs for the Hugging Face model.
 
@@ -560,6 +589,9 @@ class EveryQueryModel(torch.nn.Module):
               0s for tokens that are masked and 1s for tokens that are not masked. This means it is given by
               `batch.code != batch.PAD_INDEX` as whenever the code is not a padding token, it should be
               attended to.
+            - position_ids: When ``self.use_time_positions`` is True, cumulative elapsed
+              time (in days) derived from ``batch.time_delta_days``.  When False (default),
+              omitted so ModernBERT falls back to sequential ``[0, 1, 2, ...]``.
 
         Args:
             batch: The input batch of data.
@@ -569,6 +601,12 @@ class EveryQueryModel(torch.nn.Module):
         """
         attention_mask = batch.code != batch.PAD_INDEX  # (batch_size, seq_len)
 
+        # Compute time-based position IDs before the duration splice so it operates on
+        # the same seq_len as time_delta_days.
+        position_ids = None
+        if self.use_time_positions and batch.time_delta_days is not None:
+            position_ids = self._compute_time_position_ids(batch)
+
         if batch.duration_days is not None:
             word_embeds = self.HF_model.embeddings.tok_embeddings(batch.code)  # (B, seq_len, H)
             dur_norm = (batch.duration_days / 365.0).unsqueeze(-1)  # (B, 1)
@@ -577,12 +615,22 @@ class EveryQueryModel(torch.nn.Module):
             inputs_embeds = torch.cat([word_embeds[:, :1, :], dur_emb, word_embeds[:, 1:, :]], dim=1)
             dur_mask = torch.ones(batch.code.shape[0], 1, dtype=torch.bool, device=batch.code.device)
             attention_mask = torch.cat([attention_mask[:, :1], dur_mask, attention_mask[:, 1:]], dim=1)
-            return {"inputs_embeds": inputs_embeds, "attention_mask": attention_mask}
 
-        return {
-            "input_ids": batch.code,
-            "attention_mask": attention_mask,
-        }
+            if position_ids is not None:
+                # Splice a zero-time entry at position 1 for the duration token (same
+                # temporal position as the query token at the start of the sequence).
+                dur_pos = torch.zeros(batch.code.shape[0], 1, device=position_ids.device)
+                position_ids = torch.cat([position_ids[:, :1], dur_pos, position_ids[:, 1:]], dim=1)
+
+            result = {"inputs_embeds": inputs_embeds, "attention_mask": attention_mask}
+            if position_ids is not None:
+                result["position_ids"] = position_ids
+            return result
+
+        result = {"input_ids": batch.code, "attention_mask": attention_mask}
+        if position_ids is not None:
+            result["position_ids"] = position_ids
+        return result
 
     def _forward_demo(self, batch: EveryQueryBatch) -> tuple[torch.FloatTensor, BaseModelOutput]:
         """A demo forward pass that adds more checks and assertions."""

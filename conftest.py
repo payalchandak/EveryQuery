@@ -99,6 +99,20 @@ def demo_model() -> EveryQueryModel:
 
 
 @pytest.fixture(scope="session")
+def demo_model_time() -> EveryQueryModel:
+    """Seeded, tiny EveryQueryModel with ``use_time_positions=True`` for CPU-only testing."""
+    torch.manual_seed(0)
+    model = EveryQueryModel(
+        config_overrides=DEMO_CONFIG_OVERRIDES,
+        do_demo=True,
+        precision="32-true",
+        use_time_positions=True,
+    )
+    model.eval()
+    return model
+
+
+@pytest.fixture(scope="session")
 def demo_lightning_module(demo_model: EveryQueryModel) -> EveryQueryLightningModule:
     """Lightning wrapper around *demo_model* with an AdamW optimiser factory."""
     optimizer_factory = partial(torch.optim.AdamW, lr=1e-4)

@@ -37,6 +37,7 @@ lightning_module:
     do_demo: true
     do_grad_ckpt: false
     mlp_dropout: 0.1
+    use_time_positions: false
     config_overrides:
       hidden_size: 64
       num_hidden_layers: 2
