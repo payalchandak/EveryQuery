@@ -15,7 +15,7 @@ from hydra import compose, initialize_config_dir
 from torch.utils.data import DataLoader
 from transformers import ModernBertConfig
 
-from conftest import DEMO_CONFIG_OVERRIDES
+from conftest import DEMO_CONFIG_OVERRIDES, DEMO_PRECISION
 from every_query.model import EveryQueryModel, EveryQueryOutput
 from every_query.model.lightning_module import EveryQueryLightningModule
 from every_query.train.train import CONFIGS
@@ -71,7 +71,7 @@ class TestModelBackward:
         model = EveryQueryModel(
             config_overrides=DEMO_CONFIG_OVERRIDES,
             do_demo=True,
-            precision="32-true",
+            precision=DEMO_PRECISION,
         )
         model.train()
 
@@ -97,7 +97,7 @@ class TestLightningTrainingStep:
         model = EveryQueryModel(
             config_overrides=DEMO_CONFIG_OVERRIDES,
             do_demo=True,
-            precision="32-true",
+            precision=DEMO_PRECISION,
         )
         module = EveryQueryLightningModule(
             model=model,
@@ -122,7 +122,7 @@ class TestTrainerFitTwoSteps:
         model = EveryQueryModel(
             config_overrides=DEMO_CONFIG_OVERRIDES,
             do_demo=True,
-            precision="32-true",
+            precision=DEMO_PRECISION,
         )
         module = EveryQueryLightningModule(
             model=model,
@@ -165,7 +165,7 @@ class TestCheckpointRoundtrip:
         model = EveryQueryModel(
             config_overrides=DEMO_CONFIG_OVERRIDES,
             do_demo=True,
-            precision="32-true",
+            precision=DEMO_PRECISION,
         )
         module = EveryQueryLightningModule(
             model=model,
@@ -200,7 +200,7 @@ class TestCheckpointRoundtrip:
 
         loaded = EveryQueryLightningModule.load_from_checkpoint(str(ckpt_path))
 
-        assert loaded.hparams["model"]["precision"] == "32-true"
+        assert loaded.hparams["model"]["precision"] == DEMO_PRECISION
         assert loaded.hparams["model"]["do_demo"] is True
         assert loaded.hparams["optimizer"]["_target_"] == "torch.optim.adamw.AdamW"
         assert loaded.hparams["LR_scheduler"] is None
@@ -253,7 +253,7 @@ class TestDemoModeChecks:
         model = EveryQueryModel(
             config_overrides=DEMO_CONFIG_OVERRIDES,
             do_demo=True,
-            precision="32-true",
+            precision=DEMO_PRECISION,
         )
         with torch.no_grad():
             next(iter(model.censor_mlp.parameters())).fill_(float("nan"))

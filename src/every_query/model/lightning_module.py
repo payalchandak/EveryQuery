@@ -588,7 +588,7 @@ class EveryQueryLightningModule(L.LightningModule):
             >>> loaded.hparams['LR_scheduler'] is None
             True
             >>> loaded.hparams['model']['precision']
-            '32-true'
+            'bf16-mixed'
             >>> loaded.hparams['model']['do_demo']
             True
 

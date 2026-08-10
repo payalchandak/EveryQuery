@@ -41,6 +41,7 @@ import pytest
 import torch
 from meds import train_split, tuning_split
 from meds_torchdata.config import MEDSTorchDataConfig
+from omegaconf import OmegaConf
 from transformers import ModernBertConfig
 
 from every_query.data.dataset import EveryQueryBatch, EveryQueryPytorchDataset
@@ -62,11 +63,19 @@ _PRED_TIMES: dict[int, datetime] = {
 
 _QUERY_CODES = ["HR", "TEMP"]
 
+# Architecture sizes come from _demo_train.yaml so fixtures and the Hydra demo config
+# can't drift; the remaining fields are the ones train.py injects from the data at
+# runtime, which unit-test fixtures must pin statically.
+_DEMO_TRAIN_YAML = Path(__file__).parent / "src/every_query/train/configs/_demo_train.yaml"
+_demo_train_cfg = OmegaConf.load(_DEMO_TRAIN_YAML)
+_yaml_overrides = OmegaConf.to_container(_demo_train_cfg.lightning_module.model.config_overrides)
+
+# Mirrors training: "bf16-mixed" via ${trainer.precision} — still fp32 weights; autocast
+# (when a test opts in) owns the bf16 casting, exactly as under the Trainer.
+DEMO_PRECISION: str = _demo_train_cfg.lightning_module.model.precision
+
 DEMO_CONFIG_OVERRIDES: dict[str, int] = {
-    "hidden_size": 64,
-    "num_hidden_layers": 2,
-    "num_attention_heads": 2,
-    "intermediate_size": 128,
+    **{k: v for k, v in _yaml_overrides.items() if v != "???"},
     "max_position_embeddings": 128,
     "vocab_size": 100,
     "cls_token_id": 1,
@@ -92,7 +101,7 @@ def demo_model() -> EveryQueryModel:
     model = EveryQueryModel(
         config_overrides=DEMO_CONFIG_OVERRIDES,
         do_demo=True,
-        precision="32-true",
+        precision=DEMO_PRECISION,
     )
     model.eval()
     return model
