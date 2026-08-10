@@ -26,7 +26,7 @@ hydra:
           - datamodule.config.task_labels_dir
 
 datamodule:
-  _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
+  _target_: every_query.data.datamodule.ResumableDatamodule
   data_class: every_query.data.dataset.EveryQueryPytorchDataset
   config:
     _target_: meds_torchdata.MEDSTorchDataConfig
