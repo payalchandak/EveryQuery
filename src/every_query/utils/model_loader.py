@@ -62,8 +62,9 @@ def setup_model(model_run_dir: str | Path, ckpt_name: str | None = None):
         logger.info(f"Seeding with seed={seed}")
         seed_everything(seed, workers=True)
 
-    # Must match ``train.py`` — scoring a checkpoint with lower-precision fp32 matmuls than it
-    # was trained under makes offline metrics disagree with in-training validation metrics.
+    # Raised from "medium" alongside ``train.py``; the two must move together, or a checkpoint
+    # gets scored under different fp32 matmuls than it was trained with and offline metrics stop
+    # agreeing with in-training validation.  Checkpoints trained before that raise saw "medium".
     logger.info("Setting torch float32 matmul precision to 'high'.")
     torch.set_float32_matmul_precision("high")
 

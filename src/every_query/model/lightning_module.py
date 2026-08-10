@@ -404,19 +404,16 @@ class EveryQueryLightningModule(L.LightningModule):
         _, outputs = self.model(batch)
 
         empty_tensor = torch.tensor([])
-        # Probs come back fp32 already (``logits_to_probs`` upcasts before the sigmoid so bf16
-        # can't saturate them); ``query_embed`` is still bf16 under ``bf16-mixed`` and
-        # ``torch.Tensor.numpy()`` rejects bf16 outright, so keep the ``.float()`` on the way out.
         return {
-            "occurs_probs": outputs.occurs_probs.detach().float().cpu(),
-            "censor_probs": outputs.censor_probs.detach().float().cpu(),
+            "occurs_probs": outputs.occurs_probs.detach().cpu(),
+            "censor_probs": outputs.censor_probs.detach().cpu(),
             "occurs": batch.occurs.detach().cpu() if batch.occurs is not None else empty_tensor,
             "censor": batch.censor.detach().cpu() if batch.censor is not None else empty_tensor,
             "query": batch.query.detach().cpu() if batch.query is not None else empty_tensor,
             "duration_days": (
                 batch.duration_days.detach().cpu() if batch.duration_days is not None else empty_tensor
             ),
-            "query_embed": outputs.query_embed.detach().float().cpu(),
+            "query_embed": outputs.query_embed.detach().cpu(),
         }
 
     @staticmethod

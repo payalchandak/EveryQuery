@@ -319,6 +319,7 @@ def main(cfg: DictConfig) -> float | None:
         OmegaConf.save(cfg, run_dir / "config.yaml")
         save_resolved_config(cfg, run_dir / "resolved_config.yaml")
 
+    # Kept in step with ``utils/model_loader.py`` so training and scoring use the same matmuls.
     logger.info("Setting torch float32 matmul precision to 'high'.")
     torch.set_float32_matmul_precision("high")
 

@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING
 import pytest
 from omegaconf import OmegaConf
 
-from every_query.train.resume_check import LEGACY_REMOVED_KEYS, validate_resume_directory
+from every_query.train.resume_check import (
+    ALLOWED_DIFFERENCE_KEYS,
+    LEGACY_REMOVED_KEYS,
+    validate_resume_directory,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -41,12 +45,9 @@ def test_resume_ignores_legacy_query_stanza(tmp_path: Path) -> None:
 
 
 def test_resume_survives_the_amp_precision_move(tmp_path: Path) -> None:
-    """A run started before AMP moved to the Trainer must still resume.
+    """A run dir predating the AMP move — no ``trainer.precision``, old model value — still resumes."""
+    assert {"trainer.precision", "lightning_module.model.precision"} <= ALLOWED_DIFFERENCE_KEYS
 
-    Such a run dir has no ``trainer.precision`` key and carries the old
-    ``lightning_module.model.precision: 16-mixed``; both are allow-listed because weights are
-    fp32 under either setting, so the checkpoint stays loadable.
-    """
     saved = tmp_path / "config.yaml"
     _write_cfg(
         saved,

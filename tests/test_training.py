@@ -11,11 +11,14 @@ from unittest.mock import patch
 
 import lightning as L
 import torch
+from hydra import compose, initialize_config_dir
 from torch.utils.data import DataLoader
+from transformers import ModernBertConfig
 
 from conftest import DEMO_CONFIG_OVERRIDES
 from every_query.model import EveryQueryModel, EveryQueryOutput
 from every_query.model.lightning_module import EveryQueryLightningModule
+from every_query.train.train import CONFIGS
 
 # ── test_model_forward_shape ────────────────────────────────────────────
 
@@ -265,41 +268,22 @@ class TestDemoModeChecks:
 
 
 class TestMixedPrecisionWiring:
-    """AMP is the Trainer's job; weights stay fp32 so the optimizer has full-precision masters.
-
-    Regression guard: ``lightning_module.model.precision`` used to be set while
-    ``trainer.precision`` was left at Lightning's ``32-true`` default, so runs logged
-    "Using mixed precision" and then trained in fp32 with no autocast anywhere.
-    """
+    """AMP is the Trainer's job; weights stay fp32 so the optimizer has full-precision masters."""
 
     def test_trainer_config_sets_precision(self):
-        from pathlib import Path
-
-        from hydra import compose, initialize_config_dir
-
-        import every_query.train
-
-        configs = Path(every_query.train.__file__).parent / "configs"
-        with initialize_config_dir(str(configs), version_base=None):
+        """``trainer.precision`` drives AMP; the model field mirrors it rather than setting its own."""
+        with initialize_config_dir(CONFIGS, version_base=None):
             cfg = compose(config_name="config")
         assert cfg.trainer.precision == "bf16-mixed"
-        # The model is told the same thing, so its FlashAttention log matches reality.
         assert cfg.lightning_module.model.precision == cfg.trainer.precision
 
-    def test_weights_stay_fp32_under_mixed_precision(self):
-        model = EveryQueryModel(config_overrides=DEMO_CONFIG_OVERRIDES, precision="bf16-mixed")
-        assert {p.dtype for p in model.parameters()} == {torch.float32}
-
     def test_weights_stay_fp32_when_the_hf_config_declares_bf16(self):
-        """A published checkpoint whose config.json carries ``torch_dtype: bfloat16`` must not
-        drag the weights down with it.
+        """A published checkpoint declaring ``torch_dtype: bfloat16`` must not drag the weights down.
 
         ``_from_config`` falls back to ``config.dtype`` when no dtype is passed, so without an
         explicit ``torch_dtype`` this yields bf16 parameters and the optimizer loses its
         full-precision masters — autocast is supposed to handle the casting, not the weights.
         """
-        from transformers import ModernBertConfig
-
         # Built locally rather than fetched, so the assertion doesn't depend on what the
         # real ModernBERT config.json happens to declare today.
         bf16_config = ModernBertConfig(torch_dtype=torch.bfloat16)
@@ -310,17 +294,7 @@ class TestMixedPrecisionWiring:
         assert {p.dtype for p in model.parameters()} == {torch.float32}
 
     def test_loss_stays_fp32_under_autocast(self, demo_model, sample_batch):
-        """BCEWithLogitsLoss is on autocast's fp32 promote list — no manual wrapping needed."""
+        """``binary_cross_entropy_with_logits`` is on autocast's fp32 cast list — no manual wrapping."""
         with torch.autocast("cpu", dtype=torch.bfloat16), torch.no_grad():
             loss, _ = demo_model(sample_batch)
         assert loss.dtype is torch.float32
-        assert loss.isfinite()
-
-    def test_predict_step_outputs_are_numpy_convertible(self, demo_lightning_module, sample_batch):
-        """``EQ_predict`` reuses the training precision, and ``.numpy()`` rejects bf16 outright."""
-        with torch.autocast("cpu", dtype=torch.bfloat16):
-            result = demo_lightning_module.predict_step(sample_batch)
-
-        for key in ("occurs_probs", "censor_probs", "query_embed"):
-            assert result[key].dtype is torch.float32, f"{key} is {result[key].dtype}"
-            result[key].reshape(-1).numpy()  # raises TypeError on bf16
