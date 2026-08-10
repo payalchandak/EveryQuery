@@ -271,6 +271,15 @@ class EveryQueryModel(torch.nn.Module):
     precision: str
     mlp_dropout: float
 
+    PRECISION_TO_MODEL_WEIGHTS_DTYPE: ClassVar[dict[str, torch.dtype]] = {
+        "32-true": torch.float32,
+        "16-true": torch.float16,
+        "16-mixed": torch.float32,
+        "bf16-true": torch.bfloat16,
+        "bf16-mixed": torch.float32,
+        "transformer-engine": torch.bfloat16,
+    }
+
     # Keys this class derives or forces later in ``__init__``, so a ``config_overrides`` entry for
     # any of them would be accepted, recorded in ``hparams``/``resolved_config.yaml``, and then
     # silently discarded.  Reject instead, naming the real control surface — the same guard
@@ -318,13 +327,7 @@ class EveryQueryModel(torch.nn.Module):
         if num_hidden_layers is not None:
             self.HF_model_config.num_hidden_layers = num_hidden_layers
 
-        # Pin fp32 weights so the optimizer always has full-precision masters; under a ``*-mixed``
-        # precision the Trainer's AMP plugin autocasts around them.  Not implied by the precision
-        # string: ``_from_config`` with no dtype falls back to ``config.dtype``, so a ``model_name``
-        # whose config.json declares ``torch_dtype: bfloat16`` would silently produce bf16 masters.
-        # Spelled ``torch_dtype`` because our transformers floor (>=4.48) predates the ``dtype``
-        # rename; switch once that floor moves past 4.56.
-        extra_kwargs = {"torch_dtype": torch.float32}
+        extra_kwargs = {"torch_dtype": self.PRECISION_TO_MODEL_WEIGHTS_DTYPE.get(precision)}
 
         if HAS_FLASH_ATTN:
             logger.info("Using FlashAttention 2 for the model.")
