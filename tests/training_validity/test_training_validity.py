@@ -241,6 +241,10 @@ def oracle_trained_model_dir(
             # init had the censor head stuck at AUROC 0.765 / flat duration means at 2000
             # steps; that can't happen anymore.
             "trainer.max_steps=2000",
+            # CI runners are CPU-only and lack bf16 fast paths (AMX/AVX512-BF16), so the
+            # _demo_train default of bf16-mixed runs ~3-4x slower than fp32 and blows the
+            # 1800s timeout.  This test checks learning behavior, not AMP, so pin fp32.
+            "trainer.precision=32-true",
             "trainer.max_epochs=10000",
             "trainer.limit_val_batches=2",
             "trainer.val_check_interval=1000",
