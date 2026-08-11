@@ -63,11 +63,12 @@ lightning_module:
     betas: [0.9, 0.999] # default betas (standard)
     amsgrad: false # default amsgrad (standard)
     fused: false # default fused (standard)
+  # Fraction of total optimizer steps spent in LR warmup; the module derives the
+  # actual step counts from trainer.estimated_stepping_batches at fit time.
+  warmup_ratio: 0.05
   LR_scheduler:
     _target_: transformers.get_cosine_schedule_with_warmup
     _partial_: true
-    num_warmup_steps: ${int_prod:0.05,${.num_training_steps}} # ~10% of training steps
-    num_training_steps: ${trainer.max_steps}
     num_cycles: 0.5
 
 trainer:

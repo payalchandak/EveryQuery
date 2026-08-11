@@ -1,4 +1,5 @@
 import copy
+import inspect
 import logging
 import re
 from collections.abc import Callable, Iterator
@@ -115,19 +116,38 @@ def _dict_to_factory(d: dict[str, Any] | None) -> partial | None:
 
 
 class EveryQueryLightningModule(L.LightningModule):
-    """LightningModule for EveryQuery with factory-friendly optimizers and metrics."""
+    """LightningModule for EveryQuery with factory-friendly optimizers and metrics.
+
+    ``warmup_ratio`` is the fraction of total optimizer steps spent in LR warmup; the
+    step counts themselves are derived from the trainer at fit time (see
+    ``configure_optimizers``).  It must lie in ``[0.0, 1.0]``:
+
+    Examples:
+        >>> EveryQueryLightningModule(model=demo_model, warmup_ratio=1.5)
+        Traceback (most recent call last):
+            ...
+        ValueError: warmup_ratio must be in [0.0, 1.0], got 1.5
+        >>> EveryQueryLightningModule(model=demo_model, warmup_ratio=-0.1)
+        Traceback (most recent call last):
+            ...
+        ValueError: warmup_ratio must be in [0.0, 1.0], got -0.1
+    """
 
     def __init__(
         self,
         model: EveryQueryModel,
         optimizer: Callable[[Iterator[torch.nn.parameter.Parameter]], torch.optim.Optimizer] | None = None,
-        LR_scheduler: Callable[[torch.optim.Optimizer], torch.optim.lr_scheduler._LRScheduler] | None = None,
+        LR_scheduler: Callable[..., Any] | None = None,
+        warmup_ratio: float = 0.0,
         grad_norm_log_every_n_steps: int = 1000,
     ):
         super().__init__()
+        if not 0.0 <= warmup_ratio <= 1.0:
+            raise ValueError(f"warmup_ratio must be in [0.0, 1.0], got {warmup_ratio}")
         self.model = model
         self.optimizer_factory = optimizer
         self.LR_scheduler_factory = LR_scheduler
+        self.warmup_ratio = warmup_ratio
         # Logging knob only — intentionally kept out of save_hyperparameters so old
         # checkpoints load unchanged and load_from_checkpoint needs no edits.
         self.grad_norm_log_every_n_steps = grad_norm_log_every_n_steps
@@ -149,6 +169,7 @@ class EveryQueryLightningModule(L.LightningModule):
                 "model": getattr(model, "hparams", {}),
                 "optimizer": _factory_to_dict(self.optimizer_factory),
                 "LR_scheduler": _factory_to_dict(self.LR_scheduler_factory),
+                "warmup_ratio": warmup_ratio,
             }
         )
 
@@ -515,6 +536,37 @@ class EveryQueryLightningModule(L.LightningModule):
             >>> result_sched['lr_scheduler']['interval']
             'step'
 
+            HF-style schedulers get their step counts from the trainer at fit time:
+            ``warmup_ratio=0.1`` of 10,000 estimated stepping batches gives 1,000
+            warmup steps, so the LR ramp is halfway done at step 500:
+
+            >>> from unittest.mock import Mock
+            >>> from transformers import get_cosine_schedule_with_warmup
+            >>> module_warm = EveryQueryLightningModule(
+            ...     model=demo_model,
+            ...     optimizer=partial(torch.optim.AdamW, lr=1e-4),
+            ...     LR_scheduler=partial(get_cosine_schedule_with_warmup),
+            ...     warmup_ratio=0.1,
+            ... )
+            >>> trainer = Mock(estimated_stepping_batches=10_000)
+            >>> module_warm.trainer = trainer
+            >>> sched_cfg = module_warm.configure_optimizers()['lr_scheduler']
+            >>> sched_cfg['interval'], sched_cfg['frequency']
+            ('step', 1)
+            >>> sched_cfg['scheduler'].lr_lambdas[0](500)
+            0.5
+
+            With the default ``warmup_ratio=0.0`` the schedule starts at full LR:
+
+            >>> module_no_warm = EveryQueryLightningModule(
+            ...     model=demo_model,
+            ...     optimizer=partial(torch.optim.AdamW, lr=1e-4),
+            ...     LR_scheduler=partial(get_cosine_schedule_with_warmup),
+            ... )
+            >>> module_no_warm.trainer = trainer
+            >>> module_no_warm.configure_optimizers()['lr_scheduler']['scheduler'].lr_lambdas[0](0)
+            1.0
+
             ``ReduceLROnPlateau`` gets epoch-level monitoring instead:
 
             >>> module_plateau = EveryQueryLightningModule(
@@ -541,7 +593,20 @@ class EveryQueryLightningModule(L.LightningModule):
         if self.LR_scheduler_factory is None:
             return optimizer
 
-        scheduler = self.LR_scheduler_factory(optimizer)
+        scheduler_kwargs = {}
+        # HF-style schedulers size warmup against the full schedule.  Both step counts
+        # are derived here at fit time — estimated_stepping_batches is Lightning's own
+        # accounting of epochs, accumulation, and world size — so the Hydra config only
+        # ever specifies warmup_ratio.  Torch schedulers (StepLR, ReduceLROnPlateau, ...)
+        # don't accept these kwargs, so only factories whose signature does get them.
+        if "num_training_steps" in inspect.signature(self.LR_scheduler_factory).parameters:
+            num_training_steps = self.trainer.estimated_stepping_batches
+            scheduler_kwargs = {
+                "num_warmup_steps": int(self.warmup_ratio * num_training_steps),
+                "num_training_steps": num_training_steps,
+            }
+
+        scheduler = self.LR_scheduler_factory(optimizer, **scheduler_kwargs)
 
         LR_config = {
             "scheduler": scheduler,
@@ -597,6 +662,37 @@ class EveryQueryLightningModule(L.LightningModule):
             >>> torch.equal(next(loaded.parameters()), next(demo_lightning_module.parameters()))
             True
 
+        ``warmup_ratio`` survives the round-trip too:
+
+            >>> module_warm = EveryQueryLightningModule(
+            ...     model=demo_model,
+            ...     optimizer=partial(torch.optim.AdamW, lr=1e-4),
+            ...     warmup_ratio=0.25,
+            ... )
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     warm_path = tmpdir + "/warm.ckpt"
+            ...     torch.save({
+            ...         'state_dict': module_warm.state_dict(),
+            ...         'hyper_parameters': dict(module_warm.hparams),
+            ...         'pytorch-lightning_version': L.__version__,
+            ...     }, warm_path)
+            ...     EveryQueryLightningModule.load_from_checkpoint(warm_path).warmup_ratio
+            0.25
+
+        Older checkpoints without a ``warmup_ratio`` hyper-parameter default to ``0.0``:
+
+            >>> old_hparams = dict(demo_lightning_module.hparams)
+            >>> _ = old_hparams.pop("warmup_ratio")
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     old_path = tmpdir + "/old.ckpt"
+            ...     torch.save({
+            ...         'state_dict': demo_lightning_module.state_dict(),
+            ...         'hyper_parameters': old_hparams,
+            ...         'pytorch-lightning_version': L.__version__,
+            ...     }, old_path)
+            ...     EveryQueryLightningModule.load_from_checkpoint(old_path).warmup_ratio
+            0.0
+
         A checkpoint missing a required hparam key raises ``KeyError``:
 
             >>> with tempfile.TemporaryDirectory() as tmpdir:
@@ -631,4 +727,6 @@ class EveryQueryLightningModule(L.LightningModule):
             model=model,
             optimizer=optimizer,
             LR_scheduler=LR_scheduler,
+            # Checkpoints predating warmup_ratio simply had no warmup.
+            warmup_ratio=hparams.get("warmup_ratio", 0.0),
         )
