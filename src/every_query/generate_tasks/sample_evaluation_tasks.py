@@ -167,7 +167,7 @@ def sample_prediction_times_per_subject(
 def build_evaluation_index_df(
     prediction_times: pl.DataFrame,
     codes: list[str],
-    durations: list[int],
+    durations: list[float],
 ) -> pl.DataFrame:
     """Cross-join prediction times with ``(codes x durations)`` into the evaluation grid.
 
@@ -208,8 +208,8 @@ def build_evaluation_index_df(
         raise ValueError("codes must be non-empty")
     if not durations:
         raise ValueError("durations must be non-empty")
-    if any(not isinstance(d, int) for d in durations):
-        raise TypeError(f"durations must all be ints (got {[type(d).__name__ for d in durations]})")
+    if any(isinstance(d, bool) or not isinstance(d, int | float) for d in durations):
+        raise TypeError(f"durations must all be numbers (got {[type(d).__name__ for d in durations]})")
 
     out_schema = {
         TaskQuerySchema.subject_id_name: prediction_times.schema.get(
@@ -309,7 +309,7 @@ def run_worker(
     split: str,
     input_shard: str,
     codes: list[str],
-    durations: list[int],
+    durations: list[float],
     prediction_times_per_subject: int,
     min_context_per_subject: int,
     seed: int,
@@ -433,32 +433,14 @@ def main(cfg: DictConfig) -> None:
     # Either an explicit list or a dir/path (query_codes=$TENSORIZED_COHORT_DIR loads the full universe).
     codes = read_query_codes(cfg.get("query_codes"))
 
-    # Durations must be whole-day ints — silent truncation (e.g. ``0.5 → 0``) would
-    # change the window semantics.  ``TaskQuerySchema.duration_days`` is float32 on
-    # disk, but the CLI contract here is integer days; fractional durations are a
-    # deliberate-future-feature (see #129), not a silent-today feature.
-    durations: list[int] = []
+    durations: list[float] = []
     for i, d in enumerate(cfg.durations):
         if isinstance(d, bool) or not isinstance(d, int | float):
             raise TypeError(f"cfg.durations[{i}] must be a number, got {type(d).__name__}: {d!r}")
-        if not float(d).is_integer():
-            raise ValueError(
-                f"cfg.durations[{i}] must be a whole-day integer, got {d!r}.  "
-                f"Fractional horizons aren't supported by this CLI yet — see #129."
-            )
-        durations.append(int(d))
+        durations.append(float(d))
 
     split = cfg.split
     shards = _split_shards(data_dir, split)
-    for prev_dir in (Path(out_dir) / "eval" / split, Path(out_dir) / "eval_unique" / split):
-        stale = sorted(p.name for p in prev_dir.glob("*.parquet") if p.stem not in shards)
-        if stale:
-            logger.warning(
-                "Outputs in %s match no discovered shard and will be neither rewritten nor "
-                "removed (downstream consumers read every parquet in this dir): %s",
-                prev_dir,
-                stale,
-            )
 
     # Reject booleans up front: Hydra/OmegaConf parses ``subject_subsample_fraction=true``
     # as a Python ``True``, which would otherwise become ``1.0`` and silently disable
