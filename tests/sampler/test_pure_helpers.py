@@ -16,10 +16,8 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from omegaconf import OmegaConf
-
-from every_query.generate_tasks import sample_tasks as st
-from every_query.generate_tasks.sample_tasks import (
+from meds_random_task_sampler import random_sample as st
+from meds_random_task_sampler.random_sample import (
     default_artifacts_dir,
     final_output_path,
     index_path,
@@ -28,6 +26,8 @@ from every_query.generate_tasks.sample_tasks import (
     resolve_training_task_paths,
     resolve_workers,
 )
+from omegaconf import OmegaConf
+
 from every_query.utils.seeds import derive_seed
 
 
@@ -99,7 +99,7 @@ class TestResolveTrainingTaskPaths:
 
     def test_resolves_from_cfg_keys(self):
         cfg = OmegaConf.create({"data_dir": "/cli/data", "out_dir": "/cli/tasks"})
-        data, tasks, arts = resolve_training_task_paths(cfg)
+        data, tasks, arts = resolve_training_task_paths(cfg.data_dir, cfg.out_dir)
         assert data == Path("/cli/data")
         assert tasks == Path("/cli/tasks")
         # artifacts root derives from out_dir and has no key/env var of its own.
@@ -108,17 +108,15 @@ class TestResolveTrainingTaskPaths:
     def test_missing_required_root_raises(self):
         # `???` is OmegaConf MISSING; it must raise a clear ValueError rather than fall back to any
         # env var or slip through as a literal `None`/empty path.
-        cfg = OmegaConf.create({"data_dir": "???", "out_dir": "/cli/tasks"})
         with pytest.raises(ValueError, match="data_dir is unset or empty"):
-            resolve_training_task_paths(cfg)
+            resolve_training_task_paths(None, "/cli/tasks")
 
     def test_empty_override_raises_not_silent_none(self):
         # `data_dir=$VAR` with an unexported $VAR expands to an empty override that Hydra parses as
         # None, overriding `???`.  Must raise up front, not become Path("None") and fail in Stage 0.
         for bad in (None, "", "   "):
-            cfg = OmegaConf.create({"data_dir": bad, "out_dir": "/cli/tasks"})
             with pytest.raises(ValueError, match="data_dir is unset or empty"):
-                resolve_training_task_paths(cfg)
+                resolve_training_task_paths(bad, "/cli/tasks")
 
 
 class TestArtifactLayout:

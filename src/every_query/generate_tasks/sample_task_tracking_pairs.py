@@ -24,10 +24,10 @@ from pathlib import Path
 
 import hydra
 import polars as pl
+from meds_random_task_sampler.random_sample import _atomic_write_parquet, _require_path_arg
 from omegaconf import DictConfig
 
 from every_query.data.schema import TaskQuerySchema
-from every_query.generate_tasks.sample_tasks import _atomic_write_parquet, _require_path_arg
 from every_query.utils.seeds import derive_seed
 
 logger = logging.getLogger(__name__)
