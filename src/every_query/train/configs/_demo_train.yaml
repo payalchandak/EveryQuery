@@ -15,7 +15,9 @@ do_resume: false
 seed: 1
 
 datamodule:
-  _target_: meds_torchdata.extensions.lightning_datamodule.Datamodule
+  # Match production (config.yaml): the stateful loader + a worker process, so the CLI
+  # resume tests exercise the checkpoint save/restore path the real config runs.
+  _target_: every_query.data.datamodule.ResumableDatamodule
   data_class: every_query.data.dataset.EveryQueryPytorchDataset
   config:
     _target_: meds_torchdata.MEDSTorchDataConfig
@@ -26,7 +28,7 @@ datamodule:
     max_seq_len: 64
     batch_mode: SM
   batch_size: 2
-  num_workers: 0
+  num_workers: 1
   pin_memory: false
 
 lightning_module:
