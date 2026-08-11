@@ -240,7 +240,7 @@ def oracle_trained_model_dir(
             # now platform-independent for a given `cfg.seed`.  Before that, an unlucky 3.12
             # init had the censor head stuck at AUROC 0.765 / flat duration means at 2000
             # steps; that can't happen anymore.
-            "trainer.max_steps=2000",
+            "+trainer.max_steps=2000",
             # CI runners are CPU-only and lack bf16 fast paths (AMX/AVX512-BF16), so the
             # _demo_train default of bf16-mixed runs ~3-4x slower than fp32 and blows the
             # 1800s timeout.  This test checks learning behavior, not AMP, so pin fp32.

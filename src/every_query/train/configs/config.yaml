@@ -117,8 +117,7 @@ trainer:
     task_auroc_tracking: null
   default_root_dir: ${hydra:runtime.output_dir} # single source of truth: run.dir OR sweep.dir/subdir
   min_epochs: 0 # prevents early stopping
-  max_epochs: null # We don't control the max epochs, we control the max steps.
-  max_steps: 80000
+  max_epochs: 1 # total steps come from the data: one pass over the train set
   accelerator: "auto"
   devices: 1
   strategy: "auto"

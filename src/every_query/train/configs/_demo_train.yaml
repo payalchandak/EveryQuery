@@ -71,7 +71,6 @@ trainer:
   default_root_dir: ${output_dir}
   min_epochs: 0
   max_epochs: 1
-  max_steps: 2
   accelerator: cpu
   devices: 1
   precision: "bf16-mixed"

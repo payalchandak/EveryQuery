@@ -99,7 +99,7 @@ class TestTrainResume:
             output_dir,
             do_resume=True,
             do_overwrite=False,
-            extra_overrides=["trainer.max_steps=4"],
+            extra_overrides=["+trainer.max_steps=4"],
         )
         assert resumed.returncode == 0, (
             f"Resumed training failed (rc={resumed.returncode}).\nstderr:\n{resumed.stderr}"
@@ -263,7 +263,7 @@ class TestWandbRunIdContinuity:
             output_dir,
             do_resume=True,
             do_overwrite=False,
-            extra_overrides=[logger_override, "trainer.max_steps=4"],
+            extra_overrides=[logger_override, "+trainer.max_steps=4"],
         )
         assert resumed.returncode == 0, (
             f"Resumed training failed (rc={resumed.returncode}).\nstderr:\n{resumed.stderr}"

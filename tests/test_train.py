@@ -69,14 +69,13 @@ def test_resolved_config_captures_overrides(
 
 
 def test_checkpoint_metadata(eq_trained_model_dir: Path) -> None:
-    """Lightning checkpoint carries the expected training-state keys and matches ``max_steps=2``."""
+    """Lightning checkpoint carries the expected training-state keys and shows training ran."""
     _, ckpt = _highest_step_checkpoint(eq_trained_model_dir)
     for key in ("state_dict", "optimizer_states", "global_step", "epoch", "hyper_parameters"):
         assert key in ckpt, f"checkpoint missing expected key {key!r}"
-    # Demo config has max_steps=2; global_step advances once per optimizer step.
-    assert ckpt["global_step"] == 2, (
-        f"demo training ran for {ckpt['global_step']} steps, expected 2 per _demo_train.yaml"
-    )
+    # Demo config trains one full epoch (max_epochs=1, no max_steps); the exact step count
+    # depends on the fixture dataset size, so just assert optimizer steps actually happened.
+    assert ckpt["global_step"] > 0, f"demo training ran for {ckpt['global_step']} steps, expected at least 1"
     # State dict is non-empty and carries the model-parameter keys Lightning persists
     # under the `HF_model.` / `model.` prefixes (loose check rather than a specific
     # architecture prefix — this test's job is to catch "checkpoint has no weights" as a
@@ -115,15 +114,17 @@ def test_resume_actually_loads_checkpoint_state(
     1. **No-op resume (``max_steps`` == starting ``global_step``)**: a real resume immediately
        exits ``trainer.fit`` because the max-steps budget is already spent — so both
        ``global_step`` and the weight tensors stay identical.  A silently-dropped resume
-       that started fresh training would run 2 new optimizer steps against random weights
-       and would land the state_dict somewhere completely different, with ``global_step``
-       back at 2 but tensors mismatching the pre-run snapshot.  Verifying **weights
+       that started fresh training would run new optimizer steps against random weights
+       and land the state_dict somewhere completely different.  Verifying **weights
        unchanged** here is what distinguishes "resume" from "coincidentally-same-step
-       fresh run" (both advance ``global_step`` to 2; only a real resume keeps the weights).
+       fresh run" (only a real resume keeps the weights).
     2. **Advancing resume (``max_steps`` > starting ``global_step``)**: after a real resume
-       from step 2 with ``max_steps=4``, at least one parameter tensor has to differ from
-       the starting snapshot (otherwise the optimizer isn't training anything — zero-lr
+       with ``max_steps = starting_step + 2``, at least one parameter tensor has to differ
+       from the starting snapshot (otherwise the optimizer isn't training anything — zero-lr
        bug, frozen params, or ``trainer.fit`` not actually running).
+
+    ``max_steps`` no longer lives in the demo config (steps come from the data), so both
+    overrides are added with ``+trainer.max_steps=...``.
 
     Bundling both into one test keeps them on the same staged resume-dir fixture so setup
     cost amortizes.  Pre-#86-style reinit-on-resume bugs fail the first check; zero-lr /
@@ -136,7 +137,7 @@ def test_resume_actually_loads_checkpoint_state(
 
     _, start_ckpt = _highest_step_checkpoint(resume_dir)
     starting_step = start_ckpt["global_step"]
-    assert starting_step == 2, f"sanity: fixture trained to step 2, got {starting_step}"
+    assert starting_step > 0, f"sanity: fixture checkpoint has no optimizer steps ({starting_step})"
     start_sd = start_ckpt["state_dict"]
 
     # ── (1) No-op resume — max_steps == starting global_step ─────────────────────
@@ -149,7 +150,7 @@ def test_resume_actually_loads_checkpoint_state(
             f"datamodule.config.task_labels_dir={eq_sampled_tasks_dir!s}",
             "do_overwrite=False",
             "do_resume=True",
-            f"trainer.max_steps={starting_step}",
+            f"+trainer.max_steps={starting_step}",
         ],
         timeout=300.0,
     )
@@ -180,7 +181,10 @@ def test_resume_actually_loads_checkpoint_state(
             f"datamodule.config.task_labels_dir={eq_sampled_tasks_dir!s}",
             "do_overwrite=False",
             "do_resume=True",
-            "trainer.max_steps=4",
+            # The fixture run spent its whole max_epochs=1 budget, so grant another epoch
+            # alongside the step bump — otherwise fit exits before taking any steps.
+            "trainer.max_epochs=2",
+            f"+trainer.max_steps={starting_step + 2}",
         ],
         timeout=300.0,
     )
