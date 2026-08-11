@@ -1,5 +1,4 @@
 import copy
-import inspect
 import logging
 import re
 from collections.abc import Callable, Iterator
@@ -499,7 +498,9 @@ class EveryQueryLightningModule(L.LightningModule):
         """Builds optimizer (and optional LR scheduler) with norm/bias weight-decay separation.
 
         Returns an optimizer when no LR scheduler factory is set, or a dict with
-        ``"optimizer"`` and ``"lr_scheduler"`` keys when one is provided.
+        ``"optimizer"`` and ``"lr_scheduler"`` keys when one is provided.  The factory
+        must be HF-style, i.e. accept ``num_warmup_steps`` and ``num_training_steps``
+        keyword arguments (e.g. ``transformers.get_cosine_schedule_with_warmup``).
 
         Raises:
             ValueError: If no optimizer factory was provided at init time.
@@ -523,20 +524,8 @@ class EveryQueryLightningModule(L.LightningModule):
                 ...
             ValueError: Optimizer factory is not set. Cannot configure optimizers.
 
-            With an LR scheduler, returns a dict containing optimizer and scheduler config:
-
-            >>> module_with_sched = EveryQueryLightningModule(
-            ...     model=demo_model,
-            ...     optimizer=partial(torch.optim.AdamW, lr=1e-4),
-            ...     LR_scheduler=partial(torch.optim.lr_scheduler.StepLR, step_size=1),
-            ... )
-            >>> result_sched = module_with_sched.configure_optimizers()
-            >>> sorted(result_sched.keys())
-            ['lr_scheduler', 'optimizer']
-            >>> result_sched['lr_scheduler']['interval']
-            'step'
-
-            HF-style schedulers get their step counts from the trainer at fit time:
+            With an LR scheduler, returns a dict containing optimizer and scheduler config.
+            The scheduler's step counts come from the trainer at fit time:
             ``warmup_ratio=0.1`` of 10,000 estimated stepping batches gives 1,000
             warmup steps, so the LR ramp is halfway done at step 500:
 
@@ -550,10 +539,12 @@ class EveryQueryLightningModule(L.LightningModule):
             ... )
             >>> trainer = Mock(estimated_stepping_batches=10_000)
             >>> module_warm.trainer = trainer
-            >>> sched_cfg = module_warm.configure_optimizers()['lr_scheduler']
-            >>> sched_cfg['interval'], sched_cfg['frequency']
+            >>> result_sched = module_warm.configure_optimizers()
+            >>> sorted(result_sched.keys())
+            ['lr_scheduler', 'optimizer']
+            >>> result_sched['lr_scheduler']['interval'], result_sched['lr_scheduler']['frequency']
             ('step', 1)
-            >>> sched_cfg['scheduler'].lr_lambdas[0](500)
+            >>> result_sched['lr_scheduler']['scheduler'].lr_lambdas[0](500)
             0.5
 
             With the default ``warmup_ratio=0.0`` the schedule starts at full LR:
@@ -566,19 +557,6 @@ class EveryQueryLightningModule(L.LightningModule):
             >>> module_no_warm.trainer = trainer
             >>> module_no_warm.configure_optimizers()['lr_scheduler']['scheduler'].lr_lambdas[0](0)
             1.0
-
-            ``ReduceLROnPlateau`` gets epoch-level monitoring instead:
-
-            >>> module_plateau = EveryQueryLightningModule(
-            ...     model=demo_model,
-            ...     optimizer=partial(torch.optim.AdamW, lr=1e-4),
-            ...     LR_scheduler=partial(torch.optim.lr_scheduler.ReduceLROnPlateau),
-            ... )
-            >>> result_plateau = module_plateau.configure_optimizers()
-            >>> result_plateau['lr_scheduler']['interval']
-            'epoch'
-            >>> result_plateau['lr_scheduler']['monitor']
-            'tuning/loss'
         """
         if self.optimizer_factory is None:
             raise ValueError("Optimizer factory is not set. Cannot configure optimizers.")
@@ -593,40 +571,21 @@ class EveryQueryLightningModule(L.LightningModule):
         if self.LR_scheduler_factory is None:
             return optimizer
 
-        scheduler_kwargs = {}
         # HF-style schedulers size warmup against the full schedule.  Both step counts
         # are derived here at fit time — estimated_stepping_batches is Lightning's own
         # accounting of epochs, accumulation, and world size — so the Hydra config only
-        # ever specifies warmup_ratio.  Torch schedulers (StepLR, ReduceLROnPlateau, ...)
-        # don't accept these kwargs, so only factories whose signature does get them.
-        if "num_training_steps" in inspect.signature(self.LR_scheduler_factory).parameters:
-            num_training_steps = self.trainer.estimated_stepping_batches
-            scheduler_kwargs = {
-                "num_warmup_steps": int(self.warmup_ratio * num_training_steps),
-                "num_training_steps": num_training_steps,
-            }
+        # ever specifies warmup_ratio.
+        num_training_steps = self.trainer.estimated_stepping_batches
+        scheduler = self.LR_scheduler_factory(
+            optimizer,
+            num_warmup_steps=int(self.warmup_ratio * num_training_steps),
+            num_training_steps=num_training_steps,
+        )
 
-        scheduler = self.LR_scheduler_factory(optimizer, **scheduler_kwargs)
-
-        LR_config = {
-            "scheduler": scheduler,
-            "frequency": 1,
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {"scheduler": scheduler, "interval": "step", "frequency": 1},
         }
-
-        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-            # ReduceLROnPlateau requires observing stable trends to make a conclusion about LR decay, so an
-            # epcoh level interval is more appropriate.
-
-            LR_config["monitor"] = "tuning/loss"
-            LR_config["strict"] = True
-            LR_config["interval"] = "epoch"
-        else:
-            # All other schedulers operate at a step level as they do not monitor the loss to make a
-            # conclusion about LR decay.
-
-            LR_config["interval"] = "step"
-
-        return {"optimizer": optimizer, "lr_scheduler": LR_config}
 
     @classmethod
     def load_from_checkpoint(cls, ckpt_path: str | None = None) -> "EveryQueryLightningModule":
