@@ -94,6 +94,56 @@ class TestWeightDecayParamGroupSeparation:
         )
 
 
+class TestWarmupStepsFromRatio:
+    """``configure_optimizers`` sizes warmup as ``warmup_ratio * estimated_stepping_batches``."""
+
+    @pytest.mark.parametrize(
+        ("total_steps", "ratio", "expected_warmup"),
+        [(100, 0.10, 10), (1000, 0.0, 0), (7, 0.5, 3)],  # last case: int() truncates 3.5
+    )
+    def test_warmup_steps(self, demo_model, total_steps, ratio, expected_warmup):
+        from unittest.mock import Mock
+
+        captured = {}
+
+        def spy_scheduler(optimizer, num_warmup_steps, num_training_steps):
+            captured["num_warmup_steps"] = num_warmup_steps
+            captured["num_training_steps"] = num_training_steps
+            return Mock()
+
+        module = EveryQueryLightningModule(
+            model=demo_model,
+            optimizer=partial(torch.optim.AdamW, lr=1e-4),
+            LR_scheduler=partial(spy_scheduler),
+            warmup_ratio=ratio,
+        )
+        module.trainer = Mock(estimated_stepping_batches=total_steps)
+
+        module.configure_optimizers()
+
+        assert captured == {"num_warmup_steps": expected_warmup, "num_training_steps": total_steps}
+
+    def test_production_scheduler_partial_ramps_over_warmup(self, demo_model):
+        """The exact config.yaml partial (cosine + num_cycles=0.5) accepts the derived step counts."""
+        from unittest.mock import Mock
+
+        from transformers import get_cosine_schedule_with_warmup
+
+        module = EveryQueryLightningModule(
+            model=demo_model,
+            optimizer=partial(torch.optim.AdamW, lr=1e-4),
+            LR_scheduler=partial(get_cosine_schedule_with_warmup, num_cycles=0.5),
+            warmup_ratio=0.10,
+        )
+        module.trainer = Mock(estimated_stepping_batches=100)
+
+        scheduler = module.configure_optimizers()["lr_scheduler"]["scheduler"]
+
+        lr_lambda = scheduler.lr_lambdas[0]
+        assert lr_lambda(5) == pytest.approx(0.5)  # halfway through the 10-step warmup
+        assert lr_lambda(10) == pytest.approx(1.0)  # warmup complete at step 10
+
+
 class TestPredictProbsEqualSigmoidOfLogits:
     """``predict_step`` probabilities must numerically equal ``sigmoid(logits).squeeze()``.
 

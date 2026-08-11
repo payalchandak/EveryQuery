@@ -1,5 +1,6 @@
 import copy
 import logging
+import math
 import re
 from collections.abc import Callable, Iterator
 from functools import partial
@@ -576,6 +577,13 @@ class EveryQueryLightningModule(L.LightningModule):
         # accounting of epochs, accumulation, and world size — so the Hydra config only
         # ever specifies warmup_ratio.
         num_training_steps = self.trainer.estimated_stepping_batches
+
+        if not math.isfinite(num_training_steps) or num_training_steps <= 0:
+            raise ValueError(
+                f"Cannot construct LR schedule with "
+                f"estimated_stepping_batches={num_training_steps}. "
+                "Set a finite Trainer(max_steps=...) or use a finite dataloader."
+            )
         scheduler = self.LR_scheduler_factory(
             optimizer,
             num_warmup_steps=int(self.warmup_ratio * num_training_steps),
