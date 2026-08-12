@@ -2,16 +2,16 @@
 
 Chains onto ``EQ_generate_evaluation_tasks(split=tuning)`` (already covered by
 ``test_generate_evaluation_tasks_cli.py``) to exercise the second, new stage that
-compacts a dense per-shard label grid down to one positive + one negative row per
-``(query, duration_days)`` task — the input ``EveryQueryLightningModule``'s optional
-task-tracking dataloader reads.
+compacts a dense per-shard label grid down to up to ``n_per_class`` positive + negative
+rows per ``(query, duration_days)`` task — the input ``EveryQueryLightningModule``'s
+optional task-tracking dataloader reads.
 
 Checks:
 1. Invokes both CLIs in sequence against the session's preprocessed cohort.
 2. Verifies the output parquet is ``TaskQuerySchema``-conformant.
-3. Verifies the pairing invariant: every surviving task has exactly one ``True`` row
-   and one ``False`` row (when the demo cohort produces any tasks at all — like the
-   sibling evaluation-tasks test, this is not guaranteed to be non-empty).
+3. Verifies the sampling invariant: every surviving task has both classes, with at most
+   ``n_per_class`` rows per class (when the demo cohort produces any tasks at all — like
+   the sibling evaluation-tasks test, this is not guaranteed to be non-empty).
 4. Verifies determinism — two runs with the same seed produce identical output.
 """
 
@@ -51,7 +51,7 @@ def test_eq_sample_task_tracking_pairs_end_to_end(
     eq_preprocessed_dataset: Path,
     tmp_path: Path,
 ) -> None:
-    """CLI writes a TaskQuerySchema parquet with exactly one pos + one neg row per surviving task."""
+    """CLI writes a TaskQuerySchema parquet with ≤ n_per_class pos/neg rows per surviving task."""
     intermediate = eq_preprocessed_dataset.parent / "intermediate"
     eval_out = tmp_path / "eval_tasks"
     tracking_out = tmp_path / "task_tracking"
@@ -82,14 +82,14 @@ def test_eq_sample_task_tracking_pairs_end_to_end(
     if pairs.height > 0:
         task_cols = [TaskQuerySchema.query_name, TaskQuerySchema.duration_days_name]
         per_task = pairs.group_by(task_cols).agg(
-            n_rows=pl.len(),
             n_classes=pl.col(TaskQuerySchema.boolean_value_name).n_unique(),
         )
-        assert (per_task["n_rows"] == 2).all(), (
-            f"every tracked task should contribute exactly 2 rows, got: {per_task}"
-        )
         assert (per_task["n_classes"] == 2).all(), (
-            f"every tracked task should have one positive and one negative row, got: {per_task}"
+            f"every tracked task should have both positive and negative rows, got: {per_task}"
+        )
+        per_class = pairs.group_by([*task_cols, TaskQuerySchema.boolean_value_name]).agg(n_rows=pl.len())
+        assert (per_class["n_rows"] <= 20).all(), (  # default n_per_class
+            f"no (task, class) should exceed n_per_class rows, got: {per_class}"
         )
 
 

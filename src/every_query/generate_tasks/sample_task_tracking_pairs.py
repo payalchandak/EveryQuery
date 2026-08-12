@@ -2,16 +2,16 @@
 
 Consumes the dense per-shard label parquets written by ``EQ_generate_evaluation_tasks``
 (typically with ``split=tuning``) and, for each ``(query, duration_days)`` task, samples
-exactly one row with ``boolean_value=True`` and one with ``boolean_value=False``.  Tasks
-missing either class are dropped (AUROC is undefined for a single-class task; mirrors
-``evaluate/metrics.py``'s ``_auroc_or_none``).
+up to ``n_per_class`` rows with ``boolean_value=True`` and ``n_per_class`` with
+``boolean_value=False``.  Tasks missing either class entirely are dropped (AUROC is
+undefined for a single-class task; mirrors ``evaluate/metrics.py``'s ``_auroc_or_none``).
 
-The output is a single small parquet — two rows per surviving task — meant to be read by
-the training-time ``TaskAurocTrackingCallback`` every validation pass.  Because
-AUROC for a task equals ``P(score(positive) > score(negative))`` for a random positive/
-negative pair, scoring this one pair per task gives an unbiased (if high-variance)
-per-task AUROC estimate; macro-averaging the resulting win/tie/loss indicators across
-tasks estimates macro AUROC at a cost of ``O(n_tasks)`` forward passes instead of
+The output is a single small parquet meant to be read by the training-time
+``TaskAurocTrackingCallback`` every validation pass.  Because AUROC for a task equals
+``P(score(positive) > score(negative))`` for a random positive/negative pair, the mean
+win/tie/loss indicator over the sampled pos x neg pairs is an unbiased per-task AUROC
+estimate (variance shrinks with ``n_per_class``); macro-averaging across tasks estimates
+macro AUROC at a cost of ``O(n_tasks * n_per_class)`` forward passes instead of
 ``O(tuning-split size)``.
 
 Pipeline position:
@@ -38,20 +38,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def sample_task_tracking_pairs(labels_df: pl.DataFrame, seed: int) -> pl.DataFrame:
-    """Sample one positive + one negative labeled row per ``(query, duration_days)`` task.
+def sample_task_tracking_pairs(labels_df: pl.DataFrame, seed: int, n_per_class: int = 1) -> pl.DataFrame:
+    """Sample up to ``n_per_class`` pos + neg labeled rows per ``(query, duration_days)`` task.
 
     Args:
         labels_df: ``TaskQuerySchema``-shaped rows with a non-null-filterable
             ``boolean_value`` column (rows with a null ``boolean_value``, i.e. censored,
             are dropped before sampling — the label is undefined there).
         seed: PRNG seed.  Deterministic in ``(labels_df, seed)``.
+        n_per_class: max rows to keep per ``(task, class)``; classes with fewer rows
+            contribute all they have.
 
     Returns:
-        A frame with the same columns as ``labels_df``, restricted to exactly two rows
-        (one ``True``, one ``False``) per task that had both classes available. Tasks
-        with only one class present are dropped entirely (a warning is logged with the
-        drop count). Sorted by ``(query, duration_days, boolean_value)``.
+        A frame with the same columns as ``labels_df``, restricted to at most
+        ``n_per_class`` ``True`` and ``n_per_class`` ``False`` rows per task that had both
+        classes available. Tasks with only one class present are dropped entirely (a
+        warning is logged with the drop count). Sorted by
+        ``(query, duration_days, boolean_value)``.
 
     Examples:
         >>> from datetime import datetime
@@ -73,6 +76,12 @@ def sample_task_tracking_pairs(labels_df: pl.DataFrame, seed: int) -> pl.DataFra
         2
         >>> sorted(out["boolean_value"].to_list())
         [False, True]
+
+        With ``n_per_class=2``, task ``A`` keeps both positives and its one negative:
+
+        >>> out2 = sample_task_tracking_pairs(df, seed=0, n_per_class=2)
+        >>> sorted(out2.filter(pl.col("query") == "A")["boolean_value"].to_list())
+        [False, True, True]
 
         Determinism — same seed, same output:
 
@@ -106,7 +115,7 @@ def sample_task_tracking_pairs(labels_df: pl.DataFrame, seed: int) -> pl.DataFra
 
     # Per-(task, class) sample: derive a per-row hash key from
     # (subject_id, prediction_time, query, duration_days, seed), rank within each
-    # (task, class) group by that key, and keep rank 0 — same deterministic-without-
+    # (task, class) group by that key, and keep the top n_per_class — same deterministic-without-
     # positional-bias trick as sample_evaluation_tasks.sample_prediction_times_per_subject.
     # (Not df.sample(): that's positional, so re-sharding/reordering the input changes the
     # pick for the same seed; hashing row identity is stable across both.)
@@ -129,7 +138,7 @@ def sample_task_tracking_pairs(labels_df: pl.DataFrame, seed: int) -> pl.DataFra
         .with_columns(pl.int_range(0, pl.len()).over([*task_cols, label_col]).alias("_rank"))
     )
 
-    selected = ranked.filter(pl.col("_rank") == 0).drop(["_sample_key", "_rank"])
+    selected = ranked.filter(pl.col("_rank") < n_per_class).drop(["_sample_key", "_rank"])
 
     counts = selected.group_by(task_cols).agg(pl.col(label_col).n_unique().alias("_n_classes"))
     complete_tasks = counts.filter(pl.col("_n_classes") == 2).select(task_cols)
@@ -172,6 +181,7 @@ def run(
     out_dir: Path,
     split: str,
     seed: int,
+    n_per_class: int = 20,
     overwrite: bool = False,
 ) -> Path | None:
     """Sample task-tracking pairs for one split and write them to a single parquet.
@@ -188,15 +198,15 @@ def run(
     logger.info("Loaded %d labeled eval rows from %s", labels_df.height, eval_labels_dir / split)
 
     sample_seed = derive_seed(seed, "task_tracking_pairs", split)
-    pairs = sample_task_tracking_pairs(labels_df, seed=sample_seed)
-    n_tasks = pairs.height // 2
+    pairs = sample_task_tracking_pairs(labels_df, seed=sample_seed, n_per_class=n_per_class)
+    n_tasks = pairs.select([TaskQuerySchema.query_name, TaskQuerySchema.duration_days_name]).n_unique()
     if n_tasks == 0:
         logger.warning(
             "No task survived tracking-pair sampling (every task lacked a positive or negative "
             "example); writing an empty file to %s — in-training AUROC tracking will be a no-op.",
             out_fp,
         )
-    logger.info("Sampled %d pos/neg pairs (%d tasks) for tracking.", pairs.height, n_tasks)
+    logger.info("Sampled %d tracking rows (%d tasks) for tracking.", pairs.height, n_tasks)
 
     aligned = TaskQuerySchema.align(pairs.to_arrow())
     _atomic_write_parquet(pl.from_arrow(aligned), out_fp)
@@ -228,6 +238,7 @@ def main(cfg: DictConfig) -> None:
         out_dir=out_dir,
         split=cfg.get("split", "tuning"),
         seed=int(cfg.seed),
+        n_per_class=int(cfg.get("n_per_class", 20)),
         overwrite=bool(cfg.get("overwrite", False)),
     )
 

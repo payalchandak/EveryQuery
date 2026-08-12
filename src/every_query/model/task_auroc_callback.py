@@ -1,12 +1,13 @@
 """Cheap in-training per-task AUROC tracking, as a Lightning ``Callback``.
 
-Scores a fixed, offline-sampled parquet of one positive + one negative row per
+Scores a fixed, offline-sampled parquet of positive + negative rows per
 ``(query, duration_days)`` task (see
 ``every_query.generate_tasks.sample_task_tracking_pairs``) every validation pass and logs
 ``tuning/occurs_auroc_macro_sampled``.  Because a task's AUROC equals
-``P(score(pos) > score(neg))`` for a random pos/neg pair, the win/tie/loss indicator on that
-one pair is an unbiased (high-variance) estimate; macro-averaging across tasks estimates
-macro AUROC at ``O(n_tasks)`` forward examples instead of ``O(tuning-split size)``.
+``P(score(pos) > score(neg))`` for a random pos/neg pair, the mean win/tie/loss indicator
+over the sampled pos x neg pairs is an unbiased estimate; macro-averaging across tasks
+estimates macro AUROC at ``O(n_tasks * n_per_class)`` forward examples instead of
+``O(tuning-split size)``.
 
 Lives as a ``Callback`` (not on the ``LightningModule``) so it wires in via
 ``trainer.callbacks`` like the other cross-cutting concerns, and so its typed ``__init__``
@@ -100,7 +101,7 @@ class TaskAurocTrackingCallback(Callback):
         Precondition: called inside Lightning's eval loop, so ``model`` is already in eval mode
         (``no_grad`` covers the numerics regardless).
         """
-        probs_by_task: dict[tuple[int, float], dict[int, float]] = {}
+        probs_by_task: dict[tuple[int, float], dict[int, list[float]]] = {}
         with torch.no_grad():
             for batch in self._loader:
                 batch = move_data_to_device(batch, device)
@@ -113,14 +114,16 @@ class TaskAurocTrackingCallback(Callback):
                 for query, duration, label, prob in zip(queries, durations, labels, probs, strict=True):
                     if query == EveryQueryBatch.PAD_INDEX:
                         continue  # OOV/pad — see setup() warning
-                    probs_by_task.setdefault((query, duration), {})[int(label)] = prob
+                    probs_by_task.setdefault((query, duration), {0: [], 1: []})[int(label)].append(prob)
 
         indicators = []
         for task_probs in probs_by_task.values():
-            if 1 not in task_probs or 0 not in task_probs:
+            pos_probs, neg_probs = task_probs[1], task_probs[0]
+            if not pos_probs or not neg_probs:
                 continue
-            pos_prob, neg_prob = task_probs[1], task_probs[0]
-            indicators.append(1.0 if pos_prob > neg_prob else 0.0 if pos_prob < neg_prob else 0.5)
+            # Mean win/tie/loss over all pos x neg pairs = exact Mann-Whitney AUROC on the sample.
+            wins = sum(1.0 if p > n else 0.0 if p < n else 0.5 for p in pos_probs for n in neg_probs)
+            indicators.append(wins / (len(pos_probs) * len(neg_probs)))
 
         if not indicators:
             return
