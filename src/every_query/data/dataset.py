@@ -277,9 +277,16 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
 
         Delegates to the upstream implementation (memory-efficient `join_asof`-based) and then
         hstacks EveryQuery's task-specific annotation columns (`occurs`, `query`, `duration_days`)
-        onto the result. Alignment relies on the upstream guarantee that surviving rows are
-        returned in `label_df` input order; we semi-filter `label_df` to the same surviving
-        subject set so row `i` of `base` corresponds to row `i` of `surviving`.
+        onto the result. Upstream documents that its output preserves `label_df` input order for
+        the rows that survive its inner-join on `subject_id`; we reproduce exactly that row set
+        *and* that order here, so row `i` of `base` corresponds to row `i` of `surviving`.
+
+        A key join on `(subject_id, prediction_time)` would sidestep the ordering question, but
+        that pair is not unique in EveryQuery label frames — one subject/prediction_time carries
+        many rows, one per query — so it would fan out rather than align. Instead we carry an
+        explicit row index through the semi-join and re-sort on it, which makes the alignment
+        independent of whatever row order the join engine happens to return (polars' join
+        `maintain_order` defaults to `None`, i.e. no guarantee; see #299).
 
         Args:
             label_df: The DataFrame containing the task labels, in the MEDS Label DF schema.
@@ -295,10 +302,18 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         if not extras:
             return base
         sid = DataSchema.subject_id_name
-        # Upstream guarantees input-order preservation for surviving rows (inner-join on subject_id).
-        # hstack-align the extras by semi-filtering label_df to the same surviving row set.
-        surviving = label_df.join(schema_df.lazy().select(sid).unique().collect(), on=sid, how="semi")
-        return base.hstack(surviving.select(extras))
+        surviving = (
+            label_df.lazy()
+            .with_row_index("_row")
+            .join(schema_df.lazy().select(sid).unique(), on=sid, how="semi")
+            # The join may return rows in any order; `_row` is unique, so sorting on it
+            # restores `label_df` input order deterministically -- the same order upstream
+            # restores internally before returning `base`.
+            .sort("_row")
+            .select(extras)
+            .collect()
+        )
+        return base.hstack(surviving)
 
     def __init__(self, cfg: MEDSTorchDataConfig, split: str):
         super().__init__(cfg, split)
