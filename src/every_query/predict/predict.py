@@ -137,12 +137,11 @@ def _validate_tasks_dir(tasks_dir: Path) -> None:
 def _check_vocab(task_codes: set[str], train_cfg: DictConfig) -> None:
     """Raise if any task-query codes are missing from the trained model's vocabulary.
 
-    Out-of-vocab query codes survive the predict loop (``encode_query`` silently falls
-    back to ``PAD_INDEX``) but produce effectively-uniform (garbage) predictions — so
-    the caller's ``predictions.parquet`` would silently contain rows whose probabilities
-    have no relationship to the model.  Raise at startup rather than write misleading
-    output.  Missing metadata is also a hard error: without the training vocab we can't
-    validate inputs at all.
+    ``encode_query`` raises on an out-of-vocab code, but that fires mid-loop, per row, with
+    no view of how much of the task file is affected.  Checking the whole task-code set up
+    front turns that into one actionable startup error naming every missing code, before any
+    batches are scored.  Missing metadata is also a hard error: without the training vocab we
+    can't validate inputs at all.
 
     Examples:
         Happy path — every task code is present in the training vocab:
@@ -191,8 +190,8 @@ def _check_vocab(task_codes: set[str], train_cfg: DictConfig) -> None:
     if missing:
         raise ValueError(
             f"{len(missing)} of {len(task_codes)} task-query codes are not in the model's training "
-            f"vocabulary.  Out-of-vocab codes would be PAD-encoded and produce near-uniform "
-            f"probabilities; refuse rather than write misleading predictions.  Missing codes: "
+            f"vocabulary.  Out-of-vocab codes cannot be encoded, so those rows could not be "
+            f"predicted at all; refuse up front rather than fail partway through.  Missing codes: "
             f"{sorted(missing)[:10]}{'...' if len(missing) > 10 else ''}"
         )
 

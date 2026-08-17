@@ -351,19 +351,17 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         self.duration_days = (
             self.schema_df[TaskQuerySchema.duration_days_name] if self.has_duration_days else None
         )
-        # Load code vocabulary mapping (string code -> integer vocab index) for encoding queries
-        try:
-            code_meta = pl.read_parquet(
-                self.config.code_metadata_fp, columns=["code", "code/vocab_index"], use_pyarrow=True
-            )
-            codes = code_meta["code"].to_list()
-            vocab_indices = code_meta["code/vocab_index"].to_list()
-            self.code_to_index: dict[str, int] = {
-                c: int(i) for c, i in zip(codes, vocab_indices, strict=False)
-            }
-        except Exception as e:
-            logger.warning(f"Failed to load code metadata for query encoding: {e}")
-            self.code_to_index = {}
+        # Load code vocabulary mapping (string code -> integer vocab index) for encoding queries.
+        # Deliberately unguarded: an empty mapping would PAD-encode every query, and a PAD query
+        # token is dropped from the attention mask while its position is still pooled as "the
+        # query embedding" — so a stale/missing metadata path would silently degrade an entire
+        # run into confident answers about queries the model never saw.  Fail loud instead.
+        code_meta = pl.read_parquet(
+            self.config.code_metadata_fp, columns=["code", "code/vocab_index"], use_pyarrow=True
+        )
+        codes = code_meta["code"].to_list()
+        vocab_indices = code_meta["code/vocab_index"].to_list()
+        self.code_to_index: dict[str, int] = {c: int(i) for c, i in zip(codes, vocab_indices, strict=False)}
 
     @property
     def labels_df(self) -> pl.DataFrame:
@@ -395,11 +393,32 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         return pl.concat([read_df(fp) for fp in self.config.task_labels_fps], how="vertical")
 
     def encode_query(self, code_name: str) -> int:
-        """Encode query using the canonical code vocabulary mapping."""
-        try:
-            return int(self.code_to_index.get(code_name, EveryQueryBatch.PAD_INDEX))
-        except Exception:
-            return EveryQueryBatch.PAD_INDEX
+        """Encode query using the canonical code vocabulary mapping.
+
+        Raises:
+            KeyError: if ``code_name`` is not in the cohort's code vocabulary.  Falling back to
+                ``PAD_INDEX`` would be silent corruption rather than a missing feature: the query
+                token is masked out of attention (``attention_mask = code != PAD_INDEX``) while
+                position 0 is still pooled as the query embedding, so the model would answer a
+                query it never saw with plausible-looking, near-uniform probabilities.
+
+        Examples:
+            >>> from unittest.mock import Mock
+            >>> EveryQueryPytorchDataset.encode_query(Mock(code_to_index={"A//B": 3}), "A//B")
+            3
+            >>> EveryQueryPytorchDataset.encode_query(Mock(code_to_index={"A//B": 3}), "typo")
+            Traceback (most recent call last):
+                ...
+            KeyError: "Query code 'typo' is not in the code vocabulary...
+        """
+        if code_name not in self.code_to_index:
+            raise KeyError(
+                f"Query code {code_name!r} is not in the code vocabulary ({len(self.code_to_index)} "
+                f"codes).  Out-of-vocab queries cannot be encoded: PAD-encoding them would mask the "
+                f"query token out of attention while still pooling its position, silently producing "
+                f"meaningless predictions.  Check the task queries and the code metadata path."
+            )
+        return int(self.code_to_index[code_name])
 
     def _seeded_getitem(self, idx: int, seed: int | None = None) -> dict[str, torch.Tensor]:
         out = super()._seeded_getitem(idx, seed)

@@ -7,7 +7,9 @@ the ``collate`` method correctly maps label fields to batch annotations.
 
 import copy
 
+import pytest
 import torch
+from meds import train_split
 
 from every_query.data.dataset import EveryQueryBatch, EveryQueryPytorchDataset
 
@@ -231,3 +233,38 @@ class TestDifferentQueryStringProducesDifferentIndex:
             f"Position 0 for sample 1 should carry encoded {query_b!r} ({enc_b}), "
             f"got {batch.code[1, 0].item()}"
         )
+
+
+class TestUnknownQueryCodesFailLoud:
+    """Out-of-vocab query codes must raise, not silently PAD-encode (issue #292).
+
+    A PAD-encoded query token is excluded from attention (``attention_mask = code != PAD_INDEX``)
+    while position 0 is still pooled as "the query embedding", so a typo'd code or a stale
+    metadata path would otherwise degrade a whole run into confident, near-uniform nonsense with
+    no error anywhere.
+    """
+
+    def test_encode_query_raises_on_unknown_code(self, demo_dataset):
+        with pytest.raises(KeyError, match="not in the code vocabulary"):
+            demo_dataset.encode_query("NOT//A//REAL//CODE")
+
+    def test_collate_raises_on_unknown_query(self, demo_dataset):
+        item = copy.copy(demo_dataset[0])
+        item["query"] = "NOT//A//REAL//CODE"
+
+        with pytest.raises(KeyError, match="not in the code vocabulary"):
+            demo_dataset.collate([item])
+
+    def test_missing_code_metadata_propagates(self, demo_dataset, tmp_path):
+        """Unreadable code metadata must fail construction, not degrade to an empty vocab."""
+        import dataclasses
+        import shutil
+
+        cohort_copy = tmp_path / "cohort"
+        shutil.copytree(demo_dataset.config.tensorized_cohort_dir, cohort_copy)
+        (cohort_copy / "metadata" / "codes.parquet").unlink()
+
+        cfg = dataclasses.replace(demo_dataset.config, tensorized_cohort_dir=cohort_copy)
+
+        with pytest.raises(Exception):  # noqa: B017 — polars' read error type is not part of the contract
+            EveryQueryPytorchDataset(cfg, split=train_split)

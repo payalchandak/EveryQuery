@@ -298,3 +298,41 @@ class TestCallbackHydraWiring:
         assert isinstance(callback, TaskAurocTrackingCallback)
         assert callback.batch_size == 256
         assert isinstance(callback.config, MEDSTorchDataConfig)
+
+
+class TestTrackingSetupDropsOOVRows:
+    """``TaskAurocTrackingCallback.setup`` must drop out-of-vocab tracking rows (issue #292).
+
+    ``encode_query`` now raises on an unknown code rather than PAD-encoding it, so an OOV row left
+    in the tracking set would blow up the whole training run over an auxiliary metric.  They're
+    untrainable anyway, so ``setup`` filters them out (and warns) instead.
+    """
+
+    def test_oov_rows_are_filtered_out_of_the_loader(self, tensorized_cohort_dir, task_labels_dir, tmp_path):
+        import polars as pl
+        from meds import tuning_split
+
+        tracking_dir = tmp_path / "tracking"
+        (tracking_dir / tuning_split).mkdir(parents=True)
+        in_vocab = pl.read_parquet(task_labels_dir / tuning_split / "0.parquet")
+        oov = in_vocab.head(1).with_columns(pl.lit("NOT//A//REAL//CODE").alias("query"))
+        pl.concat([in_vocab, oov]).write_parquet(tracking_dir / tuning_split / "0.parquet")
+
+        cfg = MEDSTorchDataConfig(
+            tensorized_cohort_dir=str(tensorized_cohort_dir),
+            task_labels_dir=str(tracking_dir),
+            max_seq_len=64,
+            seq_sampling_strategy="to_end",
+            static_inclusion_mode="omit",
+            batch_mode="SM",
+        )
+        callback = TaskAurocTrackingCallback(config=cfg, batch_size=8)
+        callback.setup(trainer=None, pl_module=None, stage="fit")
+
+        assert callback._loader is not None, "In-vocab rows remain, so a loader must be built"
+        assert len(callback._loader.dataset) == in_vocab.height, (
+            f"Expected the {oov.height} OOV row(s) to be dropped, leaving {in_vocab.height}"
+        )
+        # Iterating must not raise: every surviving row encodes against the cohort vocabulary.
+        n_scored = sum(batch.query.numel() for batch in callback._loader)
+        assert n_scored == in_vocab.height
