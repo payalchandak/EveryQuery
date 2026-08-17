@@ -152,17 +152,27 @@ class EveryQueryLightningModule(L.LightningModule):
         # checkpoints load unchanged and load_from_checkpoint needs no edits.
         self.grad_norm_log_every_n_steps = grad_norm_log_every_n_steps
 
-        self.metrics = {
-            train_split: {},
-            tuning_split: {
-                "censor_auc": BinaryAUROC().cpu(),
-                "occurs_auc": BinaryAUROC().cpu(),
-            },
-            held_out_split: {
-                "censor_auc": BinaryAUROC().cpu(),
-                "occurs_auc": BinaryAUROC().cpu(),
-            },
-        }
+        # Registered as submodules (not a plain dict) so the metrics follow the module onto its
+        # device: torchmetrics can only all-gather its states under NCCL if they live on the GPU.
+        # Splits without metrics (train, predict) are simply absent -- `_split_metrics` handles
+        # that, and `train_split` in particular cannot be a key here as `train` collides with
+        # `torch.nn.Module.train`.
+        self.metrics = torch.nn.ModuleDict(
+            {
+                tuning_split: torch.nn.ModuleDict(
+                    {
+                        "censor_auc": BinaryAUROC(),
+                        "occurs_auc": BinaryAUROC(),
+                    }
+                ),
+                held_out_split: torch.nn.ModuleDict(
+                    {
+                        "censor_auc": BinaryAUROC(),
+                        "occurs_auc": BinaryAUROC(),
+                    }
+                ),
+            }
+        )
 
         self.save_hyperparameters(
             {
@@ -173,20 +183,29 @@ class EveryQueryLightningModule(L.LightningModule):
             }
         )
 
-    def setup(self, stage=None):
-        # keep metrics on CPU even if model moves to GPU
-        for split in (tuning_split, held_out_split, "predict"):
-            for m in self.metrics.get(split, {}).values():
-                m.to("cpu")
+    def _split_metrics(self, split: str) -> dict[str, BinaryAUROC]:
+        """The metrics registered for ``split``, or an empty mapping if the split has none.
+
+        Examples:
+            >>> sorted(demo_lightning_module._split_metrics(tuning_split))
+            ['censor_auc', 'occurs_auc']
+            >>> demo_lightning_module._split_metrics(train_split)
+            {}
+            >>> demo_lightning_module._split_metrics("predict")
+            {}
+        """
+        if split not in self.metrics:
+            return {}
+        return dict(self.metrics[split].items())
 
     def _update_metric(self, name: str, split: str, **kwargs):
-        metric = self.metrics.get(split, {}).get(name)
+        metric = self._split_metrics(split).get(name)
         if metric is None:
             return
         safe = {}
         for k, v in kwargs.items():
             if isinstance(v, torch.Tensor):
-                v = v.detach().cpu()
+                v = v.detach().to(metric.device)
                 if k == "preds":
                     v = v.float()
                 elif k == "target":
@@ -194,26 +213,67 @@ class EveryQueryLightningModule(L.LightningModule):
             safe[k] = v
         metric.update(**safe)
 
+    def _epoch_end_metric_value(self, metric: BinaryAUROC, label: str) -> float | None:
+        """The metric's value over the epoch, or ``None`` if it cannot be computed on this epoch's data.
+
+        ``metric.compute()`` all-gathers the metric states across ranks, so the decision to call it has
+        to be *collective*: if one rank skipped it because its own slice looked unusable, the ranks that
+        did call it would block forever inside the gather. Every rank therefore reduces its label counts
+        first and branches on the same global numbers. ``None`` (on every rank at once) means either:
+
+        * the epoch saw only one class globally, so AUROC is undefined; or
+        * some rank contributed no data at all. torchmetrics pads such a rank with a placeholder in the
+          metric's own (float) dtype, which mismatches the int64 ``target`` state gathered from the ranks
+          that do have data and aborts the collective, so this case is skipped rather than synced.
+
+        Examples:
+            >>> metric = BinaryAUROC()
+            >>> print(demo_lightning_module._epoch_end_metric_value(metric, "tuning/demo_auc"))
+            None
+            >>> metric.update(torch.tensor([0.1, 0.2]), torch.tensor([0, 0]))  # one class only
+            >>> print(demo_lightning_module._epoch_end_metric_value(metric, "tuning/demo_auc"))
+            None
+            >>> metric.update(torch.tensor([0.9]), torch.tensor([1]))  # both classes present
+            >>> demo_lightning_module._epoch_end_metric_value(metric, "tuning/demo_auc")
+            1.0
+        """
+        target_state = getattr(metric, "target", None)
+        if isinstance(target_state, list) and target_state:
+            all_targets = torch.cat([t.flatten() for t in target_state], dim=0)
+            n_pos = int((all_targets > 0).sum())
+            n_neg = int(all_targets.numel()) - n_pos
+        else:
+            n_pos = n_neg = 0
+
+        world_size = 1
+        counts = torch.tensor([n_pos, n_neg, int(n_pos + n_neg > 0)], device=self.device)
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            world_size = torch.distributed.get_world_size()
+            torch.distributed.all_reduce(counts, op=torch.distributed.ReduceOp.SUM)
+        n_pos, n_neg, ranks_with_data = (int(c) for c in counts)
+
+        if n_pos == 0 or n_neg == 0:
+            logger.warning(
+                f"Not logging {label}: this epoch saw {n_pos} positive and {n_neg} negative labels, "
+                "so AUROC is undefined."
+            )
+            return None
+        if ranks_with_data < world_size:
+            logger.warning(
+                f"Not logging {label}: only {ranks_with_data} of {world_size} ranks saw any data, and "
+                "the metric states of a rank with no data cannot be synced."
+            )
+            return None
+        return float(metric.compute())
+
     def _on_epoch_end(self, split: str):
-        for metric_name, metric in self.metrics.get(split, {}).items():
-            try:
-                preds_state = getattr(metric, "preds", None)
-                target_state = getattr(metric, "target", None)
-                has_state = (
-                    isinstance(preds_state, list)
-                    and isinstance(target_state, list)
-                    and len(preds_state) > 0
-                    and len(target_state) > 0
-                )
-
-                all_targets = torch.cat([t.flatten() for t in target_state], dim=0)
-                has_both_classes = all_targets.numel() >= 1 and all_targets.unique().numel() >= 2
-
-                if has_state and has_both_classes:
-                    self.log(f"{split}/{metric_name}", float(metric.compute()), sync_dist=True)
-
-            except Exception:
-                pass
+        for metric_name, metric in self._split_metrics(split).items():
+            label = f"{split}/{metric_name}"
+            value = self._epoch_end_metric_value(metric, label)
+            if value is not None:
+                # `value` is already reduced over ranks by the metric's own state sync, so re-reducing
+                # it via `sync_dist` would be a second (needless) collective over an identical number.
+                self.log(label, value, sync_dist=False)
 
             metric.reset()
 
@@ -273,16 +333,16 @@ class EveryQueryLightningModule(L.LightningModule):
                 self._update_metric(
                     name="censor_auc",
                     split=split,
-                    preds=outputs.censor_logits.detach().cpu().squeeze(1).float().sigmoid(),
-                    target=batch.censor.detach().cpu().long(),
+                    preds=outputs.censor_logits.detach().squeeze(1).float().sigmoid(),
+                    target=batch.censor.detach().long(),
                 )
             if (
                 getattr(outputs, "occurs_logits", None) is not None
                 and getattr(batch, "occurs", None) is not None
             ):
-                mask = (~batch.censor).detach().cpu().bool() if hasattr(batch, "censor") else None
-                preds = outputs.occurs_logits.detach().cpu().squeeze(1).float().sigmoid()
-                target = batch.occurs.detach().cpu().long()
+                mask = (~batch.censor).detach().bool() if hasattr(batch, "censor") else None
+                preds = outputs.occurs_logits.detach().squeeze(1).float().sigmoid()
+                target = batch.occurs.detach().long()
                 if mask is not None:
                     preds = preds[mask]
                     target = target[mask]
