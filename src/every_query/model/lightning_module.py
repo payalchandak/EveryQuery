@@ -439,7 +439,7 @@ class EveryQueryLightningModule(L.LightningModule):
 
     @staticmethod
     def _is_norm_bias_param(n: str) -> bool:
-        """True when *n* is a bias or layer-norm weight (these get zero weight decay).
+        """True when *n* is a bias or norm weight (these get zero weight decay).
 
         Examples:
             >>> EveryQueryLightningModule._is_norm_bias_param("encoder.attention.self.query.bias")
@@ -456,15 +456,28 @@ class EveryQueryLightningModule(L.LightningModule):
             >>> EveryQueryLightningModule._is_norm_bias_param("bert.encoder.layer.0.output.LayerNorm.weight")
             True
 
-        The regex requires a ``layer`` prefix, so ModernBERT-style norm names
-        (``attn_norm``, ``mlp_norm``, ``final_norm``, bare ``norm``) are **not** matched:
+        Any ``*norm``-named component counts, so ModernBERT-style norm names
+        (``attn_norm``, ``mlp_norm``, ``final_norm``, bare ``norm``) match too:
 
             >>> EveryQueryLightningModule._is_norm_bias_param("layers.1.attn_norm.weight")
-            False
+            True
+            >>> EveryQueryLightningModule._is_norm_bias_param("layers.1.mlp_norm.weight")
+            True
             >>> EveryQueryLightningModule._is_norm_bias_param("final_norm.weight")
+            True
+            >>> EveryQueryLightningModule._is_norm_bias_param("model.embeddings.norm.weight")
+            True
+
+        Ordinary projection weights are still decayed:
+
+            >>> EveryQueryLightningModule._is_norm_bias_param("layers.1.attn.Wqkv.weight")
+            False
+            >>> EveryQueryLightningModule._is_norm_bias_param("layers.1.mlp.Wo.weight")
+            False
+            >>> EveryQueryLightningModule._is_norm_bias_param("encoder.layer.0.output.dense.weight")
             False
         """
-        return bool(re.search(r"(bias|layer(_?)norm(\d*)\.weight)", n, re.IGNORECASE))
+        return bool(re.search(r"(bias|(^|[._])[a-z0-9_]*norm(\d*)\.weight)", n, re.IGNORECASE))
 
     def _norm_bias_params(self) -> Iterator[torch.nn.parameter.Parameter]:
         for name, p in self.named_parameters():
