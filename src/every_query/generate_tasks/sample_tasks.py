@@ -357,8 +357,10 @@ def _truncate_at_death(events_df: pl.DataFrame) -> pl.DataFrame:
 
     ``<=`` keeps the death row itself, so ``MEDS_DEATH`` remains answerable as a query code and the
     death timestamp remains a valid prediction time.  Subjects with no death row are unaffected.
-    Shared by Stage 4 labeling (:func:`evaluate_index_df`) and Stage 0
-    (:func:`_read_prediction_time_shard`) so the two stages can't drift on the death rule.
+    Shared by Stage 4 labeling (:func:`evaluate_index_df`), Stage 0
+    (:func:`_read_prediction_time_shard`), and the evaluation sampler
+    (``sample_evaluation_tasks.run_worker``, #290) so no stage or pipeline can drift on the
+    death rule.
     """
     death_time = (
         pl.col(DataSchema.time_name)
