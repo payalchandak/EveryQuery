@@ -219,7 +219,11 @@ def _embedding_batch_to_arrow(query_embed: torch.Tensor, hidden_size: int) -> pa
         >>> len(arr)
         3
     """
-    flat = pa.array(query_embed.reshape(-1).numpy().astype("float32"), type=pa.float32())
+    # ``.float()`` before ``.numpy()``: under ``bf16-mixed``/``bf16-true`` inference the
+    # module's outputs are bfloat16, which ``torch.Tensor.numpy()`` refuses ("Got
+    # unsupported ScalarType BFloat16").  It's a no-op on the fp32 path, which was
+    # already narrowing to float32 here anyway.
+    flat = pa.array(query_embed.reshape(-1).float().numpy().astype("float32"), type=pa.float32())
     return pa.FixedSizeListArray.from_arrays(flat, hidden_size)
 
 
@@ -350,14 +354,15 @@ class _StreamingPredictionWriter(BasePredictionWriter):
 
         identifiers = _identifiers_from_schema_df(self._schema_df.slice(self._offset, n))
         # Cast to Float32 here so the per-batch ``PredictionSchema.align`` doesn't have
-        # to coerce f64 → f32 every row group.
+        # to coerce f64 → f32 every row group.  The ``.float()`` widens bfloat16 outputs
+        # (``bf16-mixed``/``bf16-true`` inference) that ``numpy()`` cannot represent.
         probs = pl.DataFrame(
             {
                 PredictionSchema.censor_prob_name: pl.Series(
-                    prediction["censor_probs"].reshape(-1).numpy()
+                    prediction["censor_probs"].reshape(-1).float().numpy()
                 ).cast(pl.Float32),
                 PredictionSchema.occurs_prob_name: pl.Series(
-                    prediction["occurs_probs"].reshape(-1).numpy()
+                    prediction["occurs_probs"].reshape(-1).float().numpy()
                 ).cast(pl.Float32),
             }
         )
