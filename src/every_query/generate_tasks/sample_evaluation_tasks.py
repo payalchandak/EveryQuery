@@ -11,7 +11,7 @@ Pipeline:
     1. For each shard discovered under ``{data_dir}/data/{split}/*.parquet``,
        sample up to ``K`` candidate prediction times per subject (any event time
        at which the subject has accumulated at least ``min_context_per_subject``
-       prior events).
+       strictly prior events — the candidate event itself does not count).
     2. Cross-join with the full ``(codes x durations)`` grid.
     3. Label via :func:`every_query.generate_tasks.sample_tasks.evaluate_index_df`
        (single ``join_asof`` across the whole index frame).
@@ -62,7 +62,8 @@ def sample_prediction_times_per_subject(
     """Sample up to ``k`` prediction times per subject from event times.
 
     A candidate prediction time is any event time at which the subject has
-    accumulated at least ``min_context_per_subject`` prior events.  Sampling is
+    accumulated at least ``min_context_per_subject`` strictly prior events — the
+    event at the candidate time itself is not counted as context.  Sampling is
     without replacement within each subject; subjects with fewer than ``k``
     candidates contribute all of them.
 
@@ -70,9 +71,12 @@ def sample_prediction_times_per_subject(
         events_df: Shard events with columns ``subject_id``, ``time``, ``code``
             (sorted by ``(subject_id, time)``).
         k: Max prediction times per subject.
-        min_context_per_subject: Minimum prior events a subject must have
-            accumulated before a given event time can be used as a prediction
-            time.
+        min_context_per_subject: Minimum number of events strictly before a given
+            event time that a subject must have accumulated for that time to be
+            usable as a prediction time.  A subject with exactly
+            ``min_context_per_subject`` events therefore has *no* eligible
+            prediction times; one with ``min_context_per_subject + 1`` has
+            exactly one (its last event).
         seed: PRNG seed.  Deterministic in ``(events_df, k, min_context_per_subject, seed)``.
 
     Returns:
@@ -93,9 +97,45 @@ def sample_prediction_times_per_subject(
         >>> out = sample_prediction_times_per_subject(events, k=2, min_context_per_subject=2, seed=0)
         >>> sorted(out["subject_id"].unique().to_list())
         [1, 2]
-        >>> # Each subject gets at most 2 sampled times
+        >>> # Subject 1's 3rd and 4th events have >= 2 prior events; subject 2 only
+        >>> # has a qualifying 3rd event.  Each subject gets at most 2 sampled times.
         >>> out.group_by("subject_id").len().sort("subject_id")["len"].to_list()
-        [2, 2]
+        [2, 1]
+
+        The context count is of events *strictly prior* to the prediction time, so
+        the qualifying times start at event ``min_context_per_subject + 1``:
+
+        >>> out.sort(["subject_id", "prediction_time"])["prediction_time"].dt.day().to_list()
+        [3, 4, 3]
+
+        Boundary: a subject with exactly ``min_context_per_subject`` events has no
+        eligible prediction time (its last event has only
+        ``min_context_per_subject - 1`` prior events)...
+
+        >>> exact = pl.DataFrame({
+        ...     "subject_id": [1, 1, 1],
+        ...     "time": [datetime(2024, 1, 1), datetime(2024, 1, 2), datetime(2024, 1, 3)],
+        ...     "code": ["A"] * 3,
+        ... })
+        >>> sample_prediction_times_per_subject(exact, k=5, min_context_per_subject=3, seed=0).height
+        0
+
+        ...while one more event yields exactly one eligible prediction time — that
+        last event, at which the subject has exactly ``min_context_per_subject``
+        prior events:
+
+        >>> one_more = pl.DataFrame({
+        ...     "subject_id": [1, 1, 1, 1],
+        ...     "time": [
+        ...         datetime(2024, 1, 1), datetime(2024, 1, 2),
+        ...         datetime(2024, 1, 3), datetime(2024, 1, 4),
+        ...     ],
+        ...     "code": ["A"] * 4,
+        ... })
+        >>> sample_prediction_times_per_subject(one_more, k=5, min_context_per_subject=3, seed=0)[
+        ...     "prediction_time"
+        ... ].to_list()
+        [datetime.datetime(2024, 1, 4, 0, 0)]
 
         ``min_context_per_subject`` filters out subjects who don't have enough
         history yet:
@@ -114,11 +154,17 @@ def sample_prediction_times_per_subject(
     if k < 0:
         raise ValueError(f"k must be >= 0 (got {k})")
 
+    # ``cum_count`` is inclusive of the current row, so the count of events *strictly
+    # prior* to a candidate prediction time is ``cum_count - 1``.  Gating on the
+    # inclusive count would admit prediction times with only
+    # ``min_context_per_subject - 1`` prior events (#298).
+    prior_events = (
+        pl.col(DataSchema.time_name).cum_count().over(DataSchema.subject_id_name).cast(pl.Int64) - 1
+    )
+
     candidates = (
-        events_df.with_columns(
-            pl.col(DataSchema.time_name).cum_count().over(DataSchema.subject_id_name).alias("_ccs")
-        )
-        .filter(pl.col("_ccs") >= min_context_per_subject)
+        events_df.with_columns(prior_events.alias("_prior_events"))
+        .filter(pl.col("_prior_events") >= min_context_per_subject)
         .select([DataSchema.subject_id_name, DataSchema.time_name])
         .unique()
         .rename({DataSchema.time_name: TaskQuerySchema.prediction_time_name})
