@@ -318,13 +318,17 @@ def main(cfg: DictConfig) -> float | None:
             )
 
     # Ensure run_dir exists *after* any overwrite rmtree above, then write the config for this
-    # run.  On resume (without overwrite) we keep the original run's config untouched so the
-    # resumed run stays bit-identical to the first.  On overwrite the previous rmtree wiped the
-    # old config; writing it here restores reproducibility for downstream tools that load
-    # ``resolved_config.yaml`` from the run dir.  Fixes #31.
+    # run.  The gate is "is there a config here already?", *not* the resume flag: resuming into a
+    # populated dir keeps the original run's config untouched so the resumed run stays
+    # bit-identical to the first, while a *fresh* dir gets a config written even under
+    # ``do_resume=True`` — the natural crash-safe invocation for a long job.  Without that, the
+    # first launch left no ``config.yaml``, so a post-crash relaunch failed the ``cfg_path.exists()``
+    # check above, discovered no checkpoint, and silently restarted from step 0 (#294).  On
+    # overwrite the rmtree above already wiped the old config, so this writes a fresh one and
+    # keeps ``resolved_config.yaml`` available to downstream tools that load it (#31).
     os.makedirs(run_dir, exist_ok=True)
-    if not cfg.do_resume or cfg.do_overwrite:
-        OmegaConf.save(cfg, run_dir / "config.yaml")
+    if not cfg_path.exists():
+        OmegaConf.save(cfg, cfg_path)
         save_resolved_config(cfg, run_dir / "resolved_config.yaml")
 
     # Kept in step with ``utils/model_loader.py`` so training and scoring use the same matmuls.
