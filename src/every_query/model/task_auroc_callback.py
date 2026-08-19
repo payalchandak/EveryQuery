@@ -20,7 +20,7 @@ from lightning.pytorch import Callback
 from lightning.pytorch.utilities import move_data_to_device
 from meds import tuning_split
 from meds_torchdata import MEDSTorchDataConfig
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from every_query.data.dataset import EveryQueryBatch, EveryQueryPytorchDataset
 
@@ -54,20 +54,22 @@ class TaskAurocTrackingCallback(Callback):
 
         dataset = EveryQueryPytorchDataset(self.config, split=tuning_split)
 
-        # Out-of-vocab query codes encode to PAD_INDEX (0); distinct OOV tasks would otherwise
-        # collide there and corrupt the estimate, so they're skipped at scoring — warn here so
-        # a silently-shrunk tracking set is visible.
-        queries = dataset.query.to_list() if dataset.query is not None else []
-        n_oov = sum(1 for q in queries if q not in dataset.code_to_index)
-        if n_oov:
-            logger.warning(
-                "%d/%d task-tracking rows have out-of-vocab query codes; they are skipped "
-                "(untrainable, and would otherwise collide at PAD_INDEX).",
-                n_oov,
-                len(queries),
-            )
+        # Out-of-vocab query codes can't be encoded at all (``encode_query`` raises), and they're
+        # untrainable anyway — drop those rows from the tracking set rather than fail the run over
+        # an auxiliary metric, and warn so a silently-shrunk tracking set is visible.
+        keep = list(range(len(dataset)))
+        if dataset.query is not None:
+            queries = dataset.query.to_list()
+            keep = [i for i, q in enumerate(queries) if q in dataset.code_to_index]
+            if len(keep) < len(queries):
+                logger.warning(
+                    "%d/%d task-tracking rows have out-of-vocab query codes; they are dropped "
+                    "(untrainable, and not encodable against this cohort's vocabulary).",
+                    len(queries) - len(keep),
+                    len(queries),
+                )
 
-        if len(dataset) == 0:
+        if not keep:
             logger.warning(
                 "Task-tracking dataset (tuning split) is empty; %r will not be logged.",
                 "tuning/occurs_auroc_macro_sampled",
@@ -75,7 +77,7 @@ class TaskAurocTrackingCallback(Callback):
             return
 
         self._loader = DataLoader(
-            dataset,
+            dataset if len(keep) == len(dataset) else Subset(dataset, keep),
             batch_size=self.batch_size,
             shuffle=False,
             collate_fn=dataset.collate,
@@ -112,7 +114,10 @@ class TaskAurocTrackingCallback(Callback):
                 labels = batch.occurs.detach().cpu().tolist()
                 for query, duration, label, prob in zip(queries, durations, labels, probs, strict=True):
                     if query == EveryQueryBatch.PAD_INDEX:
-                        continue  # OOV/pad — see setup() warning
+                        # setup() already drops OOV rows, so this is belt-and-braces for a
+                        # hand-built loader: distinct PAD-encoded tasks would collide into one
+                        # bogus (0, duration) task and corrupt the estimate.
+                        continue
                     probs_by_task.setdefault((query, duration), {})[int(label)] = prob
 
         indicators = []
