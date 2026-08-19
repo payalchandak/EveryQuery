@@ -143,12 +143,8 @@ def test_streaming_writer_empty_cohort_produces_valid_empty_parquet(tmp_path: Pa
     assert table.num_rows == 0
 
 
-@pytest.mark.parametrize(
-    "dtype", [torch.float32, torch.float64, torch.bfloat16, torch.float16]
-)
-def test_streaming_writer_accepts_any_inference_precision(
-    dtype: torch.dtype, tmp_path: Path
-) -> None:
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.bfloat16, torch.float16])
+def test_streaming_writer_accepts_any_inference_precision(dtype: torch.dtype, tmp_path: Path) -> None:
     """Predictions stream out as float32 whatever precision inference produced.
 
     Regression guard for #293: under ``trainer.precision=bf16-mixed``/``bf16-true`` the
