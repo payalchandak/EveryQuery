@@ -143,14 +143,21 @@ def test_streaming_writer_empty_cohort_produces_valid_empty_parquet(tmp_path: Pa
     assert table.num_rows == 0
 
 
-def test_streaming_writer_accepts_bfloat16_predictions(tmp_path: Path) -> None:
-    """bf16 predictions stream out as float32 — ``numpy()`` can't represent bfloat16.
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.bfloat16, torch.float16]
+)
+def test_streaming_writer_accepts_any_inference_precision(
+    dtype: torch.dtype, tmp_path: Path
+) -> None:
+    """Predictions stream out as float32 whatever precision inference produced.
 
-    Under ``trainer.precision=bf16-mixed``/``bf16-true`` the module's sigmoid outputs and
-    query embeddings come back as bfloat16, and ``torch.Tensor.numpy()`` raises
-    ``TypeError: Got unsupported ScalarType BFloat16``.  Regression guard for #293: every
-    tensor→numpy hop in the writer widens to float32 first.  Values are chosen to be
-    exactly representable in bfloat16 so the round-trip is a strict equality check.
+    Regression guard for #293: under ``trainer.precision=bf16-mixed``/``bf16-true`` the
+    module's sigmoid outputs and query embeddings come back as bfloat16, and
+    ``torch.Tensor.numpy()`` raises ``TypeError: Got unsupported ScalarType BFloat16`` —
+    so no bf16-trained checkpoint could be predicted at all.  Parametrized over every
+    dtype inference can hand the writer, since the fix (:func:`_to_float32_numpy`) claims
+    to be precision-agnostic rather than bf16-specific.  Values are exactly representable
+    in all four dtypes, so the round-trip assertions are strict equality.
     """
     schema_df = _make_schema_df(2)
     output = tmp_path / "predictions.parquet"
@@ -163,9 +170,9 @@ def test_streaming_writer_accepts_bfloat16_predictions(tmp_path: Path) -> None:
         trainer=None,
         pl_module=None,
         prediction={
-            "censor_probs": torch.tensor([0.25, 0.5], dtype=torch.bfloat16),
-            "occurs_probs": torch.tensor([0.75, 0.125], dtype=torch.bfloat16),
-            "query_embed": torch.arange(8, dtype=torch.bfloat16).reshape(2, hidden_size),
+            "censor_probs": torch.tensor([0.25, 0.5], dtype=dtype),
+            "occurs_probs": torch.tensor([0.75, 0.125], dtype=dtype),
+            "query_embed": torch.arange(8, dtype=dtype).reshape(2, hidden_size),
         },
         batch_indices=None,
         batch=None,
