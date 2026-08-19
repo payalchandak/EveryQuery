@@ -38,6 +38,7 @@ from importlib.resources import files
 from pathlib import Path
 
 import hydra
+import numpy as np
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -200,6 +201,41 @@ def _check_vocab(task_codes: set[str], train_cfg: DictConfig) -> None:
 _EMBEDDING_COLUMN = "embedding"
 
 
+def _to_float32_numpy(t: torch.Tensor) -> np.ndarray:
+    """Move a prediction tensor to host memory as float32, whatever precision it arrived in.
+
+    ``torch.Tensor.numpy()`` cannot represent bfloat16 ("Got unsupported ScalarType
+    BFloat16"), and under ``trainer.precision=bf16-mixed``/``bf16-true`` — the training
+    default, which ``setup_model`` restores for inference — the module's sigmoid outputs
+    and query embeddings are bfloat16.  Widening first makes every tensor -> numpy hop in
+    the writer precision-agnostic; it is a no-op on the fp32 path, which already narrowed
+    to float32 at each site (``PredictionSchema`` pins ``occurs_prob``/``censor_prob`` to
+    float32).
+
+    ``.cpu()`` is here for the same reason: Lightning's prediction loop fires
+    ``on_predict_batch_end`` — and so this writer — *before* it moves predictions to host
+    memory, so under ``trainer.accelerator=auto`` on a GPU the tensors are still on the
+    accelerator and ``numpy()`` would refuse them.
+
+    Examples:
+        >>> _to_float32_numpy(torch.tensor([0.25, 0.75])).dtype
+        dtype('float32')
+        >>> _to_float32_numpy(torch.tensor([0.25, 0.75], dtype=torch.float64)).dtype
+        dtype('float32')
+
+        The case a bare ``.numpy()`` cannot handle:
+
+        >>> _to_float32_numpy(torch.tensor([0.25, 0.75], dtype=torch.bfloat16))
+        array([0.25, 0.75], dtype=float32)
+
+        Half precision round-trips through the same path:
+
+        >>> _to_float32_numpy(torch.tensor([0.5], dtype=torch.float16))
+        array([0.5], dtype=float32)
+    """
+    return t.to(dtype=torch.float32).cpu().numpy()
+
+
 def _embedding_batch_to_arrow(query_embed: torch.Tensor, hidden_size: int) -> pa.FixedSizeListArray:
     """Build a single-batch ``fixed_size_list<float32>[hidden_size]`` array from ``query_embed``.
 
@@ -218,8 +254,14 @@ def _embedding_batch_to_arrow(query_embed: torch.Tensor, hidden_size: int) -> pa
         FixedSizeListType(fixed_size_list<item: float>[4])
         >>> len(arr)
         3
+
+        Half-precision inference output converts too — see :func:`_to_float32_numpy`:
+
+        >>> arr = _embedding_batch_to_arrow(torch.zeros(3, 4, dtype=torch.bfloat16), 4)
+        >>> arr.type
+        FixedSizeListType(fixed_size_list<item: float>[4])
     """
-    flat = pa.array(query_embed.reshape(-1).numpy().astype("float32"), type=pa.float32())
+    flat = pa.array(_to_float32_numpy(query_embed.reshape(-1)), type=pa.float32())
     return pa.FixedSizeListArray.from_arrays(flat, hidden_size)
 
 
@@ -350,14 +392,15 @@ class _StreamingPredictionWriter(BasePredictionWriter):
 
         identifiers = _identifiers_from_schema_df(self._schema_df.slice(self._offset, n))
         # Cast to Float32 here so the per-batch ``PredictionSchema.align`` doesn't have
-        # to coerce f64 → f32 every row group.
+        # to coerce f64 → f32 every row group.  ``_to_float32_numpy`` handles the other
+        # direction: bfloat16 outputs that ``numpy()`` cannot represent at all.
         probs = pl.DataFrame(
             {
                 PredictionSchema.censor_prob_name: pl.Series(
-                    prediction["censor_probs"].reshape(-1).numpy()
+                    _to_float32_numpy(prediction["censor_probs"].reshape(-1))
                 ).cast(pl.Float32),
                 PredictionSchema.occurs_prob_name: pl.Series(
-                    prediction["occurs_probs"].reshape(-1).numpy()
+                    _to_float32_numpy(prediction["occurs_probs"].reshape(-1))
                 ).cast(pl.Float32),
             }
         )

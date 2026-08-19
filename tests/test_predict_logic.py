@@ -143,6 +143,54 @@ def test_streaming_writer_empty_cohort_produces_valid_empty_parquet(tmp_path: Pa
     assert table.num_rows == 0
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.bfloat16, torch.float16])
+def test_streaming_writer_accepts_any_inference_precision(dtype: torch.dtype, tmp_path: Path) -> None:
+    """Predictions stream out as float32 whatever precision inference produced.
+
+    Regression guard for #293: under ``trainer.precision=bf16-mixed``/``bf16-true`` the
+    module's sigmoid outputs and query embeddings come back as bfloat16, and
+    ``torch.Tensor.numpy()`` raises ``TypeError: Got unsupported ScalarType BFloat16`` —
+    so no bf16-trained checkpoint could be predicted at all.  Parametrized over every
+    dtype inference can hand the writer, since the fix (:func:`_to_float32_numpy`) claims
+    to be precision-agnostic rather than bf16-specific.  Values are exactly representable
+    in all four dtypes, so the round-trip assertions are strict equality.
+    """
+    schema_df = _make_schema_df(2)
+    output = tmp_path / "predictions.parquet"
+    emb_output = tmp_path / "embeddings.parquet"
+    hidden_size = 4
+    writer = _StreamingPredictionWriter(output, schema_df, emb_output, hidden_size)
+
+    writer.setup(trainer=None, pl_module=None, stage="predict")
+    writer.write_on_batch_end(
+        trainer=None,
+        pl_module=None,
+        prediction={
+            "censor_probs": torch.tensor([0.25, 0.5], dtype=dtype),
+            "occurs_probs": torch.tensor([0.75, 0.125], dtype=dtype),
+            "query_embed": torch.arange(8, dtype=dtype).reshape(2, hidden_size),
+        },
+        batch_indices=None,
+        batch=None,
+        batch_idx=0,
+        dataloader_idx=0,
+    )
+    writer.teardown(trainer=None, pl_module=None, stage="predict")
+
+    table = pq.read_table(output)
+    PredictionSchema.align(table)  # raises if non-conformant
+    df = pl.from_arrow(table)
+    assert df["censor_prob"].to_list() == [0.25, 0.5]
+    assert df["occurs_prob"].to_list() == [0.75, 0.125]
+
+    emb_df = pl.from_arrow(pq.read_table(emb_output))
+    assert emb_df.height == 2
+    assert [list(row) for row in emb_df["embedding"].to_list()] == [
+        [0.0, 1.0, 2.0, 3.0],
+        [4.0, 5.0, 6.0, 7.0],
+    ]
+
+
 def test_check_single_process_trainer_accepts_single_device() -> None:
     """The guard is a no-op for the canonical single-device trainer config."""
     trainer = L.Trainer(devices=1, accelerator="cpu", logger=False)
