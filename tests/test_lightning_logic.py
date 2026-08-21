@@ -5,10 +5,14 @@ specifically optimizer parameter-group construction via ``configure_optimizers``
 and the relationship between raw logits and predicted probabilities.
 """
 
+import contextlib
+import os
+import socket
 from functools import partial
 
 import pytest
 import torch
+from meds import tuning_split
 from meds_torchdata import MEDSTorchDataConfig
 
 from every_query.data.dataset import EveryQueryBatch
@@ -298,3 +302,159 @@ class TestCallbackHydraWiring:
         assert isinstance(callback, TaskAurocTrackingCallback)
         assert callback.batch_size == 256
         assert isinstance(callback.config, MEDSTorchDataConfig)
+
+
+def _stub_module() -> EveryQueryLightningModule:
+    """A lightning module with a throwaway model, for exercising the metric plumbing only."""
+    return EveryQueryLightningModule(model=_StubOccursModel([]))
+
+
+class TestEpochEndAUROCLogging:
+    """``_on_epoch_end`` must log the epoch AUROCs, and fail loudly instead of dropping them.
+
+    The metrics used to be plain CPU ``BinaryAUROC`` objects held in a plain dict, computed inside a bare
+    ``except Exception: pass`` — so under DDP the states never followed the module onto the GPU and every
+    failure of the distributed all-gather was swallowed silently.
+    """
+
+    @staticmethod
+    def _log_calls(module) -> dict[str, float]:
+        """Run ``_on_epoch_end`` for the tuning split, capturing what it logged."""
+        logged = {}
+        module.log = lambda name, value, **kw: logged.__setitem__(name, value)
+        module._on_epoch_end(tuning_split)
+        return logged
+
+    def test_metrics_are_registered_submodules(self):
+        """Registration is what makes torchmetrics' DDP sync work — a plain dict is invisible to ``.to()``."""
+        module = _stub_module()
+        named = dict(module.named_modules())
+
+        assert f"metrics.{tuning_split}.censor_auc" in named
+        assert f"metrics.{tuning_split}.occurs_auc" in named
+
+    def test_metric_states_follow_the_module_device(self):
+        module = _stub_module().to(torch.float64)
+        metric = module.metrics[tuning_split]["censor_auc"]
+
+        # CPU-only CI cannot check a real device move, so check the update path coerces onto the metric.
+        module._update_metric("censor_auc", tuning_split, preds=torch.tensor([0.1]), target=torch.tensor([0]))
+        assert metric.target[0].device == metric.device
+
+    def test_no_new_persistent_checkpoint_keys(self):
+        """Existing checkpoints must keep loading: metric states are non-persistent, so nothing is added."""
+        assert [k for k in _stub_module().state_dict() if "metrics" in k] == []
+
+    def test_logs_auroc_when_both_classes_present(self):
+        module = _stub_module()
+        module._update_metric(
+            "censor_auc", tuning_split, preds=torch.tensor([0.1, 0.9]), target=torch.tensor([0, 1])
+        )
+
+        logged = self._log_calls(module)
+
+        assert logged[f"{tuning_split}/censor_auc"] == pytest.approx(1.0)
+        # occurs_auc never got data, so it is undefined and simply absent.
+        assert f"{tuning_split}/occurs_auc" not in logged
+
+    def test_skips_and_resets_when_only_one_class_present(self):
+        module = _stub_module()
+        module._update_metric(
+            "censor_auc", tuning_split, preds=torch.tensor([0.1, 0.9]), target=torch.tensor([0, 0])
+        )
+
+        logged = self._log_calls(module)
+
+        assert logged == {}
+        assert module.metrics[tuning_split]["censor_auc"].target == []
+
+    def test_state_is_reset_between_epochs(self):
+        module = _stub_module()
+        module._update_metric(
+            "censor_auc", tuning_split, preds=torch.tensor([0.1, 0.9]), target=torch.tensor([0, 1])
+        )
+        self._log_calls(module)
+
+        assert module.metrics[tuning_split]["censor_auc"].target == []
+
+    def test_compute_failures_are_not_swallowed(self):
+        """The old bare ``except Exception: pass`` is what made the DDP breakage invisible."""
+        module = _stub_module()
+        metric = module.metrics[tuning_split]["censor_auc"]
+        module._update_metric(
+            "censor_auc", tuning_split, preds=torch.tensor([0.1, 0.9]), target=torch.tensor([0, 1])
+        )
+        metric.compute = lambda: (_ for _ in ()).throw(RuntimeError("all-gather blew up"))
+
+        with pytest.raises(RuntimeError, match="all-gather blew up"):
+            self._log_calls(module)
+
+
+def _free_port() -> int:
+    with contextlib.closing(socket.socket()) as s:
+        s.bind(("localhost", 0))
+        return s.getsockname()[1]
+
+
+def _ddp_epoch_end_worker(rank: int, world_size: int, port: int, queue) -> None:
+    """One rank of the DDP epoch-end test: update rank-specific data, then log the epoch metrics."""
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = str(port)
+    torch.distributed.init_process_group("gloo", rank=rank, world_size=world_size)
+    try:
+        module = _stub_module()
+        if rank == 0:
+            # Both classes locally, plus the only data `occurs_auc` ever sees.
+            preds, target = torch.tensor([0.1, 0.9]), torch.tensor([0, 1])
+            module._update_metric(
+                "occurs_auc", tuning_split, preds=torch.tensor([0.1, 0.9]), target=torch.tensor([0, 1])
+            )
+        else:
+            # Negatives only: rank-dependent branching here is what used to hang the all-gather.
+            preds, target = torch.tensor([0.2, 0.95]), torch.tensor([0, 0])
+        module._update_metric("censor_auc", tuning_split, preds=preds, target=target)
+
+        logged = {}
+        module.log = lambda name, value, **kw: logged.__setitem__(name, value)
+        module._on_epoch_end(tuning_split)
+        queue.put((rank, logged))
+    finally:
+        torch.distributed.destroy_process_group()
+
+
+@pytest.mark.skipif(not torch.distributed.is_available(), reason="torch.distributed unavailable")
+class TestEpochEndAUROCUnderDDP:
+    """Two gloo ranks with rank-uneven, rank-degenerate data must both log the *global* AUROC.
+
+    Regression test for the reported multi-GPU failure: the per-rank ``has_both_classes`` guard let one
+    rank skip ``compute()`` while the other entered its blocking all-gather.
+    """
+
+    def test_both_ranks_log_the_global_auroc(self):
+        ctx = torch.multiprocessing.get_context("spawn")
+        queue = ctx.Queue()
+        port = _free_port()
+        procs = [ctx.Process(target=_ddp_epoch_end_worker, args=(r, 2, port, queue)) for r in range(2)]
+        for p in procs:
+            p.start()
+
+        results = {}
+        try:
+            for _ in procs:
+                results.update(dict([queue.get(timeout=180)]))
+        except Exception as e:  # pragma: no cover - only hit if the all-gather hangs
+            raise AssertionError(f"DDP epoch-end did not complete on both ranks: {e}") from e
+        finally:
+            for p in procs:
+                p.join(timeout=30)
+                if p.is_alive():
+                    p.terminate()
+
+        assert set(results) == {0, 1}
+        for rank, logged in results.items():
+            # Global pool: one positive (0.9) against negatives 0.1, 0.2 and 0.95 -> 2/3.
+            # Rank 0 alone would score 1.0, so this also proves the states really were gathered.
+            assert logged[f"{tuning_split}/censor_auc"] == pytest.approx(2 / 3), f"rank {rank}"
+            # Only rank 0 updated `occurs_auc`; syncing a rank with no data at all is unsupported, so
+            # every rank must skip it identically rather than one hanging or aborting the collective.
+            assert f"{tuning_split}/occurs_auc" not in logged, f"rank {rank}"
