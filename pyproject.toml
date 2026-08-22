@@ -43,6 +43,9 @@ dependencies = [
   "wandb>=0.22.3,<1",
   "ipykernel>=7.2,<8",
   "scikit-learn>=1.6,<2",
+  # Already present transitively via scikit-learn; declared because we import it directly.
+  # >=1.15 is where `bootstrap` accepts `rng=` (the `random_state=` rename).
+  "scipy>=1.15,<2",
   "matplotlib>=3.9,<4",
 ] # Add your runtime dependencies here
 

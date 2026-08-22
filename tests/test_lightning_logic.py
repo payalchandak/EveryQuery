@@ -262,6 +262,58 @@ class TestSampledTaskAurocTracking:
 
         assert self._run(_StubOccursModel(logits), [batch]) == {}
 
+    @staticmethod
+    def _outcome_batch(outcomes: list[str]) -> tuple[EveryQueryBatch, list[float]]:
+        """One task per entry, each a neg then a pos row scored to the named win/loss outcome."""
+        queries, occurs, logits = [], [], []
+        for i, outcome in enumerate(outcomes):
+            queries += [i + 1, i + 1]  # 1-based: query 0 is PAD_INDEX and would be skipped
+            occurs += [0, 1]
+            logits += [-10.0, 10.0] if outcome == "win" else [10.0, -10.0]
+        return _make_tracking_batch(queries, [7.0] * len(queries), occurs), logits
+
+    def test_ci_brackets_estimate_and_stays_in_unit_interval(self):
+        batch, logits = self._outcome_batch(["win", "loss"] * 50)
+
+        logged = self._run(_StubOccursModel(logits), [batch])
+
+        assert logged["tuning/occurs_auroc_macro_sampled"] == pytest.approx(0.5)
+        lo = logged["tuning/occurs_auroc_macro_sampled_ci_lo"]
+        hi = logged["tuning/occurs_auroc_macro_sampled_ci_hi"]
+        assert lo < 0.5 < hi, f"CI [{lo}, {hi}] must bracket the point estimate"
+        # AUROC is a probability; percentile bounds are means of observed scores, so this holds
+        # by construction rather than by clamping.
+        assert lo >= 0.0 and hi <= 1.0, f"CI [{lo}, {hi}] escaped [0, 1]"
+
+    def test_ci_is_reproducible_for_fixed_scores(self):
+        # Seeded resampler: an epoch-to-epoch CI move must mean the model changed, not the RNG.
+        batch, logits = self._outcome_batch(["win", "loss"] * 50)
+        first = self._run(_StubOccursModel(logits), [batch])
+
+        batch, logits = self._outcome_batch(["win", "loss"] * 50)
+        assert self._run(_StubOccursModel(logits), [batch]) == first
+
+    def test_ci_degenerates_when_every_task_wins(self):
+        # Zero spread breaks BCa's acceleration term, and a model that wins every sampled pair is
+        # reachable in training — the percentile method must return a zero-width CI, not raise.
+        batch, logits = self._outcome_batch(["win"] * 50)
+
+        logged = self._run(_StubOccursModel(logits), [batch])
+
+        assert logged["tuning/occurs_auroc_macro_sampled"] == pytest.approx(1.0)
+        assert logged["tuning/occurs_auroc_macro_sampled_ci_lo"] == pytest.approx(1.0)
+        assert logged["tuning/occurs_auroc_macro_sampled_ci_hi"] == pytest.approx(1.0)
+
+    def test_single_task_gets_a_zero_width_ci(self):
+        # scipy rejects n=1 outright, so the guard has to short-circuit before the bootstrap.
+        batch, logits = self._outcome_batch(["win"])
+
+        logged = self._run(_StubOccursModel(logits), [batch])
+
+        assert logged["tuning/occurs_auroc_macro_sampled_n_tasks"] == 1.0
+        assert logged["tuning/occurs_auroc_macro_sampled_ci_lo"] == pytest.approx(1.0)
+        assert logged["tuning/occurs_auroc_macro_sampled_ci_hi"] == pytest.approx(1.0)
+
 
 class TestCallbackHydraWiring:
     """The ``trainer.callbacks.task_auroc_tracking`` block ships commented out, so nothing else ever resolves
