@@ -5,6 +5,7 @@ specifically optimizer parameter-group construction via ``configure_optimizers``
 and the relationship between raw logits and predicted probabilities.
 """
 
+import re
 from functools import partial
 
 import pytest
@@ -75,6 +76,25 @@ class TestWeightDecayParamGroupSeparation:
             assert not EveryQueryLightningModule._is_norm_bias_param(name), (
                 f"{name!r} is in the non-norm/bias group but _is_norm_bias_param returns True"
             )
+
+    def test_group1_contains_norm_weights_not_only_biases(self, demo_model):
+        """The no-decay group must hold norm *weights*, not just biases.
+
+        Regression guard for #297: the no-decay regex used to require a ``layer``
+        prefix, so every ModernBERT norm weight (``attn_norm``, ``mlp_norm``,
+        ``final_norm``, ``embeddings.norm``) was silently weight-decayed while the
+        biases kept the group non-empty and all other assertions green.
+        """
+        module, optimizer = self._build_module_and_optimizer(demo_model)
+        ptr_to_name = self._param_name_map(module)
+
+        group1_names = [ptr_to_name[p.data_ptr()] for p in optimizer.param_groups[1]["params"]]
+        norm_weights = [n for n in group1_names if re.search(r"norm.*\.weight$", n, re.IGNORECASE)]
+
+        assert norm_weights, (
+            "no-decay group contains no norm weights, only "
+            f"{group1_names!r} — norm params are being weight-decayed"
+        )
 
     def test_all_params_accounted_for(self, demo_model):
         module, optimizer = self._build_module_and_optimizer(demo_model)
