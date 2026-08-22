@@ -15,16 +15,17 @@ Checks:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import polars as pl
 import pyarrow.parquet as pq
 import pytest
-from meds import DataSchema
+from meds import DataSchema, death_code
 
 from conftest import run_and_check
 from every_query.data.schema import TaskQuerySchema
-from every_query.generate_tasks.sample_evaluation_tasks import subsample_subject_ids
+from every_query.generate_tasks.sample_evaluation_tasks import run_worker, subsample_subject_ids
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -287,3 +288,127 @@ def test_subsample_subject_ids_handles_empty_frame() -> None:
     df = _events([])
     out = subsample_subject_ids(df, 0.1, seed=0)
     assert out.height == 0
+
+
+# ---------------------------------------------------------------------------
+# Death truncation of eval prediction times (#290)
+# ---------------------------------------------------------------------------
+
+
+_BASE = datetime(2024, 1, 1)
+
+
+def _write_eval_shard(root: Path, split: str, shard: str, events: pl.DataFrame) -> Path:
+    """Write ``events`` as ``{root}/data/{split}/{shard}.parquet`` and return ``root``."""
+    shard_fp = root / "data" / split / f"{shard}.parquet"
+    shard_fp.parent.mkdir(parents=True, exist_ok=True)
+    events.write_parquet(shard_fp)
+    return root
+
+
+def _subject_rows(subject_id: int, n_days: int, code: str = "HR") -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            DataSchema.subject_id_name: [subject_id] * n_days,
+            DataSchema.time_name: [_BASE + timedelta(days=i) for i in range(n_days)],
+            DataSchema.code_name: [code] * n_days,
+        }
+    )
+
+
+def _death_row(subject_id: int, day: int) -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            DataSchema.subject_id_name: [subject_id],
+            DataSchema.time_name: [_BASE + timedelta(days=day)],
+            DataSchema.code_name: [death_code],
+        }
+    )
+
+
+def test_run_worker_never_samples_post_death_prediction_times(tmp_path: Path) -> None:
+    """Post-death timestamps must not become evaluation prediction times (#290).
+
+    Training's Stage 0 truncates each subject's candidate times at ``MEDS_DEATH`` (#265); the
+    eval sampler must do the same or the two pipelines disagree about which contexts exist,
+    deflating measured prevalence on death-adjacent tasks.  Subject 1 dies on day 2 but carries
+    administrative rows on days 3-4; only days 0-2 are legal prediction times.  The death
+    timestamp itself stays eligible (truncation is ``<=``).
+    """
+    data_dir = _write_eval_shard(
+        tmp_path / "cohort",
+        "held_out",
+        "0",
+        pl.concat([_subject_rows(1, 5), _death_row(1, 2), _subject_rows(2, 4)]),
+    )
+
+    labels_fp = run_worker(
+        data_dir=data_dir,
+        out_dir=tmp_path / "eval_tasks",
+        split="held_out",
+        input_shard="0",
+        codes=["HR"],
+        durations=[1.0],
+        prediction_times_per_subject=10,  # > candidates, so every legal time is sampled
+        min_context_per_subject=1,
+        seed=0,
+        write_unique_prediction_times=False,
+    )
+    assert labels_fp is not None
+
+    labels = pl.read_parquet(labels_fp)
+    dead_times = sorted(
+        labels.filter(pl.col(TaskQuerySchema.subject_id_name) == 1)[TaskQuerySchema.prediction_time_name]
+        .unique()
+        .to_list()
+    )
+    assert dead_times == [_BASE, _BASE + timedelta(days=1), _BASE + timedelta(days=2)], (
+        f"subject 1 died on day 2; post-death days 3-4 must not be prediction times: {dead_times}"
+    )
+
+    # The living subject is untouched by truncation (uncensored windows only: day 3 closes past
+    # the record's end and is dropped as censored).
+    alive_times = sorted(
+        labels.filter(pl.col(TaskQuerySchema.subject_id_name) == 2)[TaskQuerySchema.prediction_time_name]
+        .unique()
+        .to_list()
+    )
+    assert alive_times == [_BASE, _BASE + timedelta(days=1), _BASE + timedelta(days=2)]
+
+
+def test_run_worker_post_death_events_dont_count_toward_min_context(tmp_path: Path) -> None:
+    """Post-death rows must not push a subject over ``min_context_per_subject`` (#290).
+
+    Subject 1 has 4 rows through death (days 0-2 plus the death row) and 2 post-death rows.  At
+    ``min_context_per_subject=5`` it has no legal prediction time at all; untruncated, days 3-4
+    would clear the bar on post-death context alone.  Subject 2 (no death) still contributes, so
+    an empty output can't pass this test vacuously.
+    """
+    data_dir = _write_eval_shard(
+        tmp_path / "cohort",
+        "held_out",
+        "0",
+        pl.concat([_subject_rows(1, 5), _death_row(1, 2), _subject_rows(2, 7)]),
+    )
+
+    labels_fp = run_worker(
+        data_dir=data_dir,
+        out_dir=tmp_path / "eval_tasks",
+        split="held_out",
+        input_shard="0",
+        codes=["HR"],
+        durations=[1.0],
+        prediction_times_per_subject=10,
+        min_context_per_subject=5,
+        seed=0,
+        write_unique_prediction_times=False,
+    )
+    assert labels_fp is not None
+
+    labels = pl.read_parquet(labels_fp)
+    assert labels.filter(pl.col(TaskQuerySchema.subject_id_name) == 1).height == 0, (
+        "subject 1 has < 5 events before death; post-death rows must not make it eligible"
+    )
+    assert labels.filter(pl.col(TaskQuerySchema.subject_id_name) == 2).height > 0, (
+        "subject 2 (no death, 7 events) should still contribute prediction times"
+    )

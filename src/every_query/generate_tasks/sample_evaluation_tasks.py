@@ -11,7 +11,9 @@ Pipeline:
     1. For each shard discovered under ``{data_dir}/data/{split}/*.parquet``,
        sample up to ``K`` candidate prediction times per subject (any event time
        at which the subject has accumulated at least ``min_context_per_subject``
-       prior events).
+       prior events), after truncating each subject's record at ``MEDS_DEATH``
+       so post-death timestamps are neither prediction times nor context (#290,
+       matching training's Stage 0).
     2. Cross-join with the full ``(codes x durations)`` grid.
     3. Label via :func:`every_query.generate_tasks.sample_tasks.evaluate_index_df`
        (single ``join_asof`` across the whole index frame).
@@ -40,6 +42,7 @@ from every_query.generate_tasks.sample_tasks import (
     _read_event_shard,
     _require_path_arg,
     _split_shards,
+    _truncate_at_death,
     evaluate_index_df,
     read_query_codes,
 )
@@ -347,9 +350,25 @@ def run_worker(
             subject_subsample_fraction,
         )
 
+    # Death is terminal (#257/#265/#290): a timestamp strictly after a subject's earliest
+    # ``MEDS_DEATH`` row must not become a prediction time, nor count as context toward
+    # ``min_context_per_subject``.  Training's Stage 0 truncates before sampling
+    # (:func:`~every_query.generate_tasks.sample_tasks._read_prediction_time_shard`); doing the
+    # same here keeps the eval prediction-time distribution matched to training's instead of
+    # scoring the model on post-death contexts it never saw.  Labeling below still receives the
+    # untruncated ``events_df`` — :func:`evaluate_index_df` applies its own truncation, mirroring
+    # the training pipeline's split between prediction-time truncation and labeling.
+    pt_events_df = _truncate_at_death(events_df)
+    if pt_events_df.height != events_df.height:
+        logger.info(
+            "Dropped %d post-death events before prediction-time sampling (%d remain)",
+            events_df.height - pt_events_df.height,
+            pt_events_df.height,
+        )
+
     pt_seed = derive_seed(seed, "prediction_times", split, input_shard)
     pred_times = sample_prediction_times_per_subject(
-        events_df=events_df,
+        events_df=pt_events_df,
         k=prediction_times_per_subject,
         min_context_per_subject=min_context_per_subject,
         seed=pt_seed,
