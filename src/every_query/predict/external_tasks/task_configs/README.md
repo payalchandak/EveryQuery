@@ -14,7 +14,8 @@ Each file is a standalone ACES config (`predicates`, `trigger`, `windows`) prece
 header giving the clinical question in plain English plus the trigger, prediction time, label, and
 cohort restrictions. The header is the spec; the YAML below it is the operationalisation.
 
-Conventions every config in here follows, enforced by `tests/test_aces_task_configs.py`:
+`tests/test_aces_task_configs.py` loads every file here with ACES' own parser, so a broken
+config fails CI rather than a cluster run. Conventions the configs follow by hand:
 
 - **The file stem is the task name.** `aces_to_eq.yaml` interpolates `task_name` into
     `${ACES_SHARDS_DIR}/${task_name}/held_out`, so extract `icu/mortality_90d.yaml` into
