@@ -1,0 +1,52 @@
+# Imminent ICU mortality
+#
+# Clinical question:
+#   Given any event during an ICU stay, and restricting to cases where the patient is not
+#   discharged from the hospital within the next 24 hours, will they die within those
+#   24 hours?
+#
+# Trigger:         every event during an open ICU stay.
+# Prediction time: the triggering event (`input.index_timestamp: end`).
+# Label:           `death` in the `target` window.
+# Cohort:          ICU stay still open at trigger, patient still alive, and no hospital
+#                  discharge in the 24h horizon.
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+  hospital_discharge:
+    code: HOSPITAL_DISCHARGE
+  death:
+    code: DEATH
+
+trigger: _ANY_EVENT
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+      death: (None, 0)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  target:
+    start: trigger
+    end: start + 24h
+    start_inclusive: false
+    end_inclusive: true
+    has:
+      hospital_discharge: (None, 0)
+    label: death

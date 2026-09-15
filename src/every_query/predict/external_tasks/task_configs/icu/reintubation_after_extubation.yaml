@@ -1,0 +1,72 @@
+# Reintubation after extubation
+#
+# Clinical question:
+#   Given any event while a patient is receiving ventilation in the ICU, and given that
+#   they are extubated within 48 hours, will they be reintubated within 72 hours of that
+#   extubation?
+#
+# Trigger:         every event during an open ICU stay and an open ventilation episode.
+# Prediction time: the triggering event (`input.index_timestamp: end`).
+# Label:           `intubation` in the `reintubation` window, which is anchored to the
+#                  actual extubation (`to_extubation.end`), not to the trigger.
+# Cohort:          ventilation episode still open at trigger (`vent_context`), and an
+#                  extubation occurring within 48h of the trigger (`extubation_soon`).
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+  intubation:
+    code: INTUBATION
+  extubation:
+    code: EXTUBATION
+
+trigger: _ANY_EVENT
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+
+  vent_context:
+    start: end <- intubation
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      extubation: (None, 0)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  extubation_soon:
+    start: trigger
+    end: start + 48h
+    start_inclusive: false
+    end_inclusive: true
+    has:
+      extubation: (1, None)
+
+  to_extubation:
+    start: trigger
+    end: start -> extubation
+    start_inclusive: false
+    end_inclusive: true
+
+  reintubation:
+    start: to_extubation.end
+    end: start + 72h
+    start_inclusive: false
+    end_inclusive: true
+    label: intubation

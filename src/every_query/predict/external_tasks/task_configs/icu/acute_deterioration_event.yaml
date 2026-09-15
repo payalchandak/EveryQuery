@@ -1,0 +1,57 @@
+# Acute deterioration event
+#
+# Clinical question:
+#   Given any event during an ICU stay, and restricting to cases where the patient is not
+#   discharged from the hospital within the next 24 hours, will a cardiac arrest, code
+#   blue, or rapid response be documented within those 24 hours?
+#
+# Trigger:         every event during an open ICU stay.
+# Prediction time: the triggering event (`input.index_timestamp: end`).
+# Label:           `deterioration` in the `target` window: the disjunction of cardiac
+#                  arrest, code blue, and rapid response.
+# Cohort:          ICU stay still open at trigger, no hospital discharge in the 24h horizon.
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+  hospital_discharge:
+    code: HOSPITAL_DISCHARGE
+  cardiac_arrest:
+    code: { any: [PROC//CPR, PROC//DEFIBRILLATION] }
+  code_blue:
+    code: CODE_BLUE
+  rapid_response:
+    code: RAPID_RESPONSE
+  deterioration:
+    expr: or(cardiac_arrest, code_blue, rapid_response)
+
+trigger: _ANY_EVENT
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  target:
+    start: trigger
+    end: start + 24h
+    start_inclusive: false
+    end_inclusive: true
+    has:
+      hospital_discharge: (None, 0)
+    label: deterioration

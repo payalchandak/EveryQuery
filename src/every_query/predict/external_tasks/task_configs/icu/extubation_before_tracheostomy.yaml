@@ -1,0 +1,62 @@
+# Extubation before tracheostomy
+#
+# Clinical question:
+#   Given any event while a patient is receiving invasive ventilation in the ICU with no
+#   tracheostomy yet, will the ventilation episode end in extubation rather than
+#   tracheostomy?
+#
+# Trigger:         every event during an open ICU stay and an open ventilation episode.
+# Prediction time: the triggering event (`input.index_timestamp: end`).
+# Label:           `extubation` in the `target` window, which runs to whichever endpoint
+#                  comes first (`vent_endpoint` = extubation or tracheostomy).
+# Cohort:          ventilation episode still open at trigger and no tracheostomy yet.
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+  intubation:
+    code: INTUBATION
+  extubation:
+    code: EXTUBATION
+  tracheostomy:
+    code: PROC//TRACHEOSTOMY
+  vent_endpoint:
+    expr: or(extubation, tracheostomy)
+
+trigger: _ANY_EVENT
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+
+  vent_context:
+    start: end <- intubation
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      extubation: (None, 0)
+      tracheostomy: (None, 0)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  target:
+    start: trigger
+    end: start -> vent_endpoint
+    start_inclusive: false
+    end_inclusive: true
+    label: extubation

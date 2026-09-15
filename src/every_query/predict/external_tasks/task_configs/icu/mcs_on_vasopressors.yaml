@@ -1,0 +1,88 @@
+# Mechanical circulatory support on vasopressors
+#
+# Clinical question:
+#   Given any event while a patient is on vasopressors in the ICU with no mechanical
+#   circulatory support in place, and restricting to cases where the patient is not
+#   discharged from the hospital within the next 48 hours, will mechanical circulatory
+#   support be initiated within those 48 hours?
+#
+# Trigger:         every event during an open ICU stay and an open vasopressor episode.
+# Prediction time: the triggering event (`input.index_timestamp: end`).
+# Label:           `mcs` in the `target` window: IABP, Impella, VA-ECMO, or LVAD.
+# Cohort:          ICU stay still open at trigger with no MCS yet, an open vasopressor
+#                  episode (`pressor_context`), and no hospital discharge in the 48h
+#                  horizon.
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+  hospital_discharge:
+    code: HOSPITAL_DISCHARGE
+  pressor_start:
+    code:
+      {
+        any:
+          [
+            MED_START//NOREPINEPHRINE,
+            MED_START//EPINEPHRINE,
+            MED_START//VASOPRESSIN,
+            MED_START//PHENYLEPHRINE,
+            MED_START//DOPAMINE,
+            MED_START//ANGIOTENSIN_II,
+          ],
+      }
+  pressor_stop:
+    code:
+      {
+        any:
+          [
+            MED_END//NOREPINEPHRINE,
+            MED_END//EPINEPHRINE,
+            MED_END//VASOPRESSIN,
+            MED_END//PHENYLEPHRINE,
+            MED_END//DOPAMINE,
+            MED_END//ANGIOTENSIN_II,
+          ],
+      }
+  mcs:
+    code: { any: [PROC//IABP, PROC//IMPELLA, PROC//ECMO_VA, PROC//LVAD] }
+
+trigger: _ANY_EVENT
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+      mcs: (None, 0)
+
+  pressor_context:
+    start: end <- pressor_start
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      pressor_stop: (None, 0)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  target:
+    start: trigger
+    end: start + 48h
+    start_inclusive: false
+    end_inclusive: true
+    has:
+      hospital_discharge: (None, 0)
+    label: mcs
