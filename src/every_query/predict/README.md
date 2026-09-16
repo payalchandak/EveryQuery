@@ -36,11 +36,11 @@ probabilities.
 │           ├── mcs_on_vasopressors.yaml
 │           ├── mortality_90d.yaml
 │           ├── new_onset_atrial_fibrillation.yaml
+│           ├── prolonged_ventilation_past_day14.yaml
 │           ├── prolonged_ventilation_past_day21.yaml
 │           ├── reintubation_after_extubation.yaml
 │           ├── second_vasopressor_added.yaml
-│           ├── vasopressor_reinitiation_after_weaning.yaml
-│           └── vent_liberation_before_day14.yaml
+│           └── vasopressor_reinitiation_after_weaning.yaml
 ├── predict.py
 └── schema.py
 

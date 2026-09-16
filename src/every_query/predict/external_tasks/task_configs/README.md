@@ -39,14 +39,14 @@ qualifying window and then measure from it.
 | ---------------------------------------- | ----------------------------------------------------------------------------- | ----------------------- | ------------------- |
 | `consecutive_low_map`                    | Will the next charted MAP after a MAP < 65 also be < 65?                      | `map_low`               | next MAP, ≤ 6h      |
 | `imminent_icu_mortality`                 | Will the patient die in the next 24h?                                         | `death`                 | 24h                 |
-| `imminent_hypoglycemia`                  | Will a glucose < 70 mg/dL be charted in the next 12h?                         | `glucose_low`           | 12h                 |
+| `imminent_hypoglycemia`                  | Given a glucose is drawn in the next 12h, will any reading be < 70 mg/dL?     | `glucose_low`           | 12h                 |
 | `new_onset_atrial_fibrillation`          | Will afib be documented in the next 24h, with none earlier in the stay?       | `afib`                  | 24h                 |
 | `acute_deterioration_event`              | Will a cardiac arrest, code blue, or rapid response occur in the next 24h?    | `deterioration`         | 24h                 |
 | `mortality_90d`                          | Will the patient die within 90 days?                                          | `death`                 | 90d                 |
 | `icu_bounceback`                         | Given ICU discharge within 48h, will they return within 48h of leaving?       | `icu_admission`         | 48h post-discharge  |
 | `reintubation_after_extubation`          | Given extubation within 48h, will they be reintubated within 72h of it?       | `intubation`            | 72h post-extubation |
-| `vent_liberation_before_day14`           | Will they be extubated before day 14 of the ventilation episode?              | `extubation`            | day 14 of episode   |
-| `extubation_before_tracheostomy`         | Will the ventilation episode end in extubation rather than tracheostomy?      | `extubation`            | episode end         |
+| `prolonged_ventilation_past_day14`       | Will they be extubated before day 14, among patients alive at day 14?         | `extubation`            | day 14 of episode   |
+| `extubation_before_tracheostomy`         | Among survivors, will the episode end in extubation rather than tracheostomy? | `extubation`            | episode end         |
 | `prolonged_ventilation_past_day21`       | Will they be extubated before day 21, among patients alive at day 21?         | `extubation`            | day 21 of episode   |
 | `discharge_to_facility_ventilated`       | Will the episode end with discharge to a facility while still ventilated?     | `discharge_to_facility` | episode end         |
 | `mcs_on_vasopressors`                    | On pressors with no MCS, will MCS be initiated in the next 48h?               | `mcs`                   | 48h                 |
@@ -55,13 +55,22 @@ qualifying window and then measure from it.
 
 ### Codes these configs assume
 
-The configs are written against MEDS code names that are **not** yet uniform across the cohorts
-EveryQuery is evaluated on. `ICU_ADMISSION`, `ICU_DISCHARGE`, `HOSPITAL_DISCHARGE`, `DEATH`,
-`INTUBATION`, `EXTUBATION`, `CODE_BLUE`, `RAPID_RESPONSE`, the `MED_START//` / `MED_END//` pressor
-codes, and the `PROC//` procedure codes are the intended canonical names; `LAB//220052` (MAP),
-`LAB//50931` / `LAB//50809` / `LAB//225664` (glucose), and the `CHART//220048//` afib regex are
-MIMIC itemids. Expect to remap per cohort before extraction rather than assuming every code
-resolves as written.
+Hospital discharge is coded with an explicit disposition suffix,
+`HOSPITAL_DISCHARGE//<DISPOSITION>`. Configs that use discharge as a censoring gate
+enumerate the live dispositions (`HOME`, `SNF`, `REHAB`, `LTACH`, `AMA`) rather than
+matching every discharge, so the gate does not fire on the discharge record that
+accompanies a death and delete exactly the rows where the outcome occurred.
+`discharge_to_facility_ventilated` matches all dispositions with a regex, because there
+any discharge ends the ventilation episode.
+
+The remaining names are the intended canonical ones: `ICU_ADMISSION`, `ICU_DISCHARGE`,
+`DEATH`, `INTUBATION`, `EXTUBATION`, `CODE_BLUE`, `RAPID_RESPONSE`, the `MED_START//` and
+`MED_END//` pressor codes, and the `PROC//` procedure codes. `LAB//220052` (MAP),
+`LAB//50931` / `LAB//50809` / `LAB//225664` (glucose) and the `CHART//220048//` afib
+regex are MIMIC itemids. Expect to remap per cohort before extraction.
+
+Note that polars, which ACES uses for predicate matching, compiles regexes with the Rust
+regex crate: `\b` works, but look-ahead and look-behind are not supported at all.
 
 ## Usage
 

@@ -10,6 +10,12 @@
 # Label:           `map_low` in the `target` window.
 # Cohort:          restricted to triggers with a follow-up MAP within 6h
 #                  (`followup_exists`) and no intervening ICU discharge.
+#
+# `target` starts one second after the trigger rather than at it.  A `map_low` event is
+# also a `map` event, and ACES resolves `->` by scanning forward from the window start
+# inclusive of that row, so an unoffset `start: trigger` makes `end: start -> map` match
+# the trigger itself and collapse the window to zero length.  The offset must stay
+# smaller than the shortest real interval between two MAP readings.
 
 predicates:
   icu_admission:
@@ -30,7 +36,7 @@ windows:
     start: end <- icu_admission
     end: trigger
     start_inclusive: true
-    end_inclusive: false
+    end_inclusive: true
     has:
       icu_discharge: (None, 0)
 
@@ -52,7 +58,7 @@ windows:
       map: (1, None)
 
   target:
-    start: trigger
+    start: trigger + 1s
     end: start -> map
     start_inclusive: false
     end_inclusive: true

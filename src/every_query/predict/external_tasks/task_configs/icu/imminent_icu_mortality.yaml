@@ -2,14 +2,19 @@
 #
 # Clinical question:
 #   Given any event during an ICU stay, and restricting to cases where the patient is not
-#   discharged from the hospital within the next 24 hours, will they die within those
-#   24 hours?
+#   discharged alive from the hospital within the next 24 hours, will they die within
+#   those 24 hours?
 #
 # Trigger:         every event during an open ICU stay.
 # Prediction time: the triggering event (`input.index_timestamp: end`).
 # Label:           `death` in the `target` window.
-# Cohort:          ICU stay still open at trigger, patient still alive, and no hospital
-#                  discharge in the 24h horizon.
+# Cohort:          ICU stay still open at trigger, patient still alive, and no live
+#                  hospital discharge in the 24h horizon.
+#
+# `hospital_discharge` enumerates the live dispositions rather than matching every
+# discharge.  The gate exists to drop triggers censored by the patient leaving, so it must
+# not fire on the discharge record that accompanies a death, which would delete exactly
+# the rows where the outcome occurred.
 
 predicates:
   icu_admission:
@@ -17,7 +22,13 @@ predicates:
   icu_discharge:
     code: ICU_DISCHARGE
   hospital_discharge:
-    code: HOSPITAL_DISCHARGE
+    code:
+      any:
+        - HOSPITAL_DISCHARGE//HOME
+        - HOSPITAL_DISCHARGE//SNF
+        - HOSPITAL_DISCHARGE//REHAB
+        - HOSPITAL_DISCHARGE//LTACH
+        - HOSPITAL_DISCHARGE//AMA
   death:
     code: DEATH
 

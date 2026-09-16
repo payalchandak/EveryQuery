@@ -2,15 +2,18 @@
 #
 # Clinical question:
 #   Given any event during an ICU stay with no atrial fibrillation documented earlier in
-#   that stay, and restricting to cases where the patient is not discharged from the
-#   hospital within the next 24 hours, will atrial fibrillation be documented within
-#   those 24 hours?
+#   that stay, and restricting to cases where the patient is not discharged alive from the
+#   hospital within the next 24 hours, will atrial fibrillation be documented within those
+#   24 hours?
 #
 # Trigger:         every event during an open ICU stay.
 # Prediction time: the triggering event (`input.index_timestamp: end`).
 # Label:           `afib` in the `target` window.
 # Cohort:          ICU stay still open at trigger, no prior afib in that stay
-#                  (`icu_context`), no hospital discharge in the 24h horizon.
+#                  (`icu_context`), no live hospital discharge in the 24h horizon.
+#
+# `hospital_discharge` enumerates the live dispositions so the censoring gate does not
+# fire on the discharge record that accompanies a death.
 
 predicates:
   icu_admission:
@@ -18,7 +21,13 @@ predicates:
   icu_discharge:
     code: ICU_DISCHARGE
   hospital_discharge:
-    code: HOSPITAL_DISCHARGE
+    code:
+      any:
+        - HOSPITAL_DISCHARGE//HOME
+        - HOSPITAL_DISCHARGE//SNF
+        - HOSPITAL_DISCHARGE//REHAB
+        - HOSPITAL_DISCHARGE//LTACH
+        - HOSPITAL_DISCHARGE//AMA
   afib:
     code: { regex: "^CHART//220048//.*(AF|Atrial Fib).*" }
 

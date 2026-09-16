@@ -3,15 +3,18 @@
 # Clinical question:
 #   Given any event while a patient is on vasopressors in the ICU with no mechanical
 #   circulatory support in place, and restricting to cases where the patient is not
-#   discharged from the hospital within the next 48 hours, will mechanical circulatory
-#   support be initiated within those 48 hours?
+#   discharged alive from the hospital within the next 48 hours, will mechanical
+#   circulatory support be initiated within those 48 hours?
 #
 # Trigger:         every event during an open ICU stay and an open vasopressor episode.
 # Prediction time: the triggering event (`input.index_timestamp: end`).
 # Label:           `mcs` in the `target` window: IABP, Impella, VA-ECMO, or LVAD.
 # Cohort:          ICU stay still open at trigger with no MCS yet, an open vasopressor
-#                  episode (`pressor_context`), and no hospital discharge in the 48h
+#                  episode (`pressor_context`), and no live hospital discharge in the 48h
 #                  horizon.
+#
+# `hospital_discharge` enumerates the live dispositions so the censoring gate does not
+# fire on the discharge record that accompanies a death.
 
 predicates:
   icu_admission:
@@ -19,33 +22,31 @@ predicates:
   icu_discharge:
     code: ICU_DISCHARGE
   hospital_discharge:
-    code: HOSPITAL_DISCHARGE
+    code:
+      any:
+        - HOSPITAL_DISCHARGE//HOME
+        - HOSPITAL_DISCHARGE//SNF
+        - HOSPITAL_DISCHARGE//REHAB
+        - HOSPITAL_DISCHARGE//LTACH
+        - HOSPITAL_DISCHARGE//AMA
   pressor_start:
     code:
-      {
-        any:
-          [
-            MED_START//NOREPINEPHRINE,
-            MED_START//EPINEPHRINE,
-            MED_START//VASOPRESSIN,
-            MED_START//PHENYLEPHRINE,
-            MED_START//DOPAMINE,
-            MED_START//ANGIOTENSIN_II,
-          ],
-      }
+      any:
+        - MED_START//NOREPINEPHRINE
+        - MED_START//EPINEPHRINE
+        - MED_START//VASOPRESSIN
+        - MED_START//PHENYLEPHRINE
+        - MED_START//DOPAMINE
+        - MED_START//ANGIOTENSIN_II
   pressor_stop:
     code:
-      {
-        any:
-          [
-            MED_END//NOREPINEPHRINE,
-            MED_END//EPINEPHRINE,
-            MED_END//VASOPRESSIN,
-            MED_END//PHENYLEPHRINE,
-            MED_END//DOPAMINE,
-            MED_END//ANGIOTENSIN_II,
-          ],
-      }
+      any:
+        - MED_END//NOREPINEPHRINE
+        - MED_END//EPINEPHRINE
+        - MED_END//VASOPRESSIN
+        - MED_END//PHENYLEPHRINE
+        - MED_END//DOPAMINE
+        - MED_END//ANGIOTENSIN_II
   mcs:
     code: { any: [PROC//IABP, PROC//IMPELLA, PROC//ECMO_VA, PROC//LVAD] }
 

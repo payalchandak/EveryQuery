@@ -2,16 +2,19 @@
 #
 # Clinical question:
 #   Given any event during an ICU stay in which exactly one vasopressor has been started
-#   and none stopped, and restricting to cases where the patient is not discharged from
-#   the hospital within the next 6 hours, will a second vasopressor be started within
+#   and none stopped, and restricting to cases where the patient is not discharged alive
+#   from the hospital within the next 6 hours, will a second vasopressor be started within
 #   those 6 hours?
 #
 # Trigger:         every event during an open ICU stay.
 # Prediction time: the triggering event (`input.index_timestamp: end`).
 # Label:           `pressor_start` in the `target` window.
 # Cohort:          ICU stay still open at trigger with exactly one pressor start and no
-#                  pressor stop so far (`pressor_start: (1, 1)`), and no hospital
+#                  pressor stop so far (`pressor_start: (1, 1)`), and no live hospital
 #                  discharge in the 6h horizon.
+#
+# `hospital_discharge` enumerates the live dispositions so the censoring gate does not
+# fire on the discharge record that accompanies a death.
 
 predicates:
   icu_admission:
@@ -19,33 +22,31 @@ predicates:
   icu_discharge:
     code: ICU_DISCHARGE
   hospital_discharge:
-    code: HOSPITAL_DISCHARGE
+    code:
+      any:
+        - HOSPITAL_DISCHARGE//HOME
+        - HOSPITAL_DISCHARGE//SNF
+        - HOSPITAL_DISCHARGE//REHAB
+        - HOSPITAL_DISCHARGE//LTACH
+        - HOSPITAL_DISCHARGE//AMA
   pressor_start:
     code:
-      {
-        any:
-          [
-            MED_START//NOREPINEPHRINE,
-            MED_START//EPINEPHRINE,
-            MED_START//VASOPRESSIN,
-            MED_START//PHENYLEPHRINE,
-            MED_START//DOPAMINE,
-            MED_START//ANGIOTENSIN_II,
-          ],
-      }
+      any:
+        - MED_START//NOREPINEPHRINE
+        - MED_START//EPINEPHRINE
+        - MED_START//VASOPRESSIN
+        - MED_START//PHENYLEPHRINE
+        - MED_START//DOPAMINE
+        - MED_START//ANGIOTENSIN_II
   pressor_stop:
     code:
-      {
-        any:
-          [
-            MED_END//NOREPINEPHRINE,
-            MED_END//EPINEPHRINE,
-            MED_END//VASOPRESSIN,
-            MED_END//PHENYLEPHRINE,
-            MED_END//DOPAMINE,
-            MED_END//ANGIOTENSIN_II,
-          ],
-      }
+      any:
+        - MED_END//NOREPINEPHRINE
+        - MED_END//EPINEPHRINE
+        - MED_END//VASOPRESSIN
+        - MED_END//PHENYLEPHRINE
+        - MED_END//DOPAMINE
+        - MED_END//ANGIOTENSIN_II
 
 trigger: _ANY_EVENT
 
