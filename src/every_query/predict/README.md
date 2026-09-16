@@ -30,7 +30,7 @@ probabilities.
 │           ├── consecutive_low_map.yaml
 │           ├── discharge_to_facility_ventilated.yaml
 │           ├── extubation_before_tracheostomy.yaml
-│           ├── icu_bounceback.yaml
+│           ├── icu_bounceback_or_death.yaml
 │           ├── imminent_hypoglycemia.yaml
 │           ├── imminent_icu_mortality.yaml
 │           ├── mcs_on_vasopressors.yaml

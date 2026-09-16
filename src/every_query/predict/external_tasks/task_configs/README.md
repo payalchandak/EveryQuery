@@ -35,23 +35,23 @@ can't be censored away by discharge; the ones anchored to a downstream event (bo
 reintubation, vasopressor reinitiation) instead condition on that event happening within a
 qualifying window and then measure from it.
 
-| Task                                     | Clinical question                                                             | Label                   | Horizon             |
-| ---------------------------------------- | ----------------------------------------------------------------------------- | ----------------------- | ------------------- |
-| `consecutive_low_map`                    | Will the next charted MAP after a MAP < 65 also be < 65?                      | `map_low`               | next MAP, ≤ 6h      |
-| `imminent_icu_mortality`                 | Will the patient die in the next 24h?                                         | `death`                 | 24h                 |
-| `imminent_hypoglycemia`                  | Given a glucose is drawn in the next 12h, will any reading be < 70 mg/dL?     | `glucose_low`           | 12h                 |
-| `new_onset_atrial_fibrillation`          | Will afib be documented in the next 24h, with none earlier in the stay?       | `afib`                  | 24h                 |
-| `acute_deterioration_event`              | Will a cardiac arrest, code blue, or rapid response occur in the next 24h?    | `deterioration`         | 24h                 |
-| `mortality_90d`                          | Will the patient die within 90 days?                                          | `death`                 | 90d                 |
-| `icu_bounceback`                         | Given ICU discharge within 48h, will they return within 48h of leaving?       | `icu_admission`         | 48h post-discharge  |
-| `reintubation_after_extubation`          | Given extubation within 48h, will they be reintubated within 72h of it?       | `intubation`            | 72h post-extubation |
-| `prolonged_ventilation_past_day14`       | Will they be extubated before day 14, among patients alive at day 14?         | `extubation`            | day 14 of episode   |
-| `extubation_before_tracheostomy`         | Among survivors, will the episode end in extubation rather than tracheostomy? | `extubation`            | episode end         |
-| `prolonged_ventilation_past_day21`       | Will they be extubated before day 21, among patients alive at day 21?         | `extubation`            | day 21 of episode   |
-| `discharge_to_facility_ventilated`       | Will the episode end with discharge to a facility while still ventilated?     | `discharge_to_facility` | episode end         |
-| `mcs_on_vasopressors`                    | On pressors with no MCS, will MCS be initiated in the next 48h?               | `mcs`                   | 48h                 |
-| `second_vasopressor_added`               | On exactly one pressor, will a second be started in the next 6h?              | `pressor_start`         | 6h                  |
-| `vasopressor_reinitiation_after_weaning` | Given pressors stopped within 48h, will they restart within 72h of that stop? | `pressor_start`         | 72h post-stop       |
+| Task                                     | Clinical question                                                              | Label                   | Horizon             |
+| ---------------------------------------- | ------------------------------------------------------------------------------ | ----------------------- | ------------------- |
+| `consecutive_low_map`                    | Will the next charted MAP after a MAP < 65 also be < 65?                       | `map_low`               | next MAP, ≤ 6h      |
+| `imminent_icu_mortality`                 | Will the patient die in the next 24h?                                          | `death`                 | 24h                 |
+| `imminent_hypoglycemia`                  | Given a glucose is drawn in the next 12h, will any reading be < 70 mg/dL?      | `glucose_low`           | 12h                 |
+| `new_onset_atrial_fibrillation`          | Will afib be documented in the next 24h, with none earlier in the stay?        | `afib`                  | 24h                 |
+| `acute_deterioration_event`              | Will a cardiac arrest, code blue, or rapid response occur in the next 24h?     | `deterioration`         | 24h                 |
+| `mortality_90d`                          | Will the patient die within 90 days?                                           | `death`                 | 90d                 |
+| `icu_bounceback_or_death`                | Given ICU discharge within 48h, will they return or die within 48h of leaving? | `bounceback_or_death`   | 48h post-discharge  |
+| `reintubation_after_extubation`          | Given extubation within 48h, will they be reintubated within 72h of it?        | `intubation`            | 72h post-extubation |
+| `prolonged_ventilation_past_day14`       | Will they be extubated before day 14, among patients alive at day 14?          | `extubation`            | day 14 of episode   |
+| `extubation_before_tracheostomy`         | Among survivors, will the episode end in extubation rather than tracheostomy?  | `extubation`            | episode end         |
+| `prolonged_ventilation_past_day21`       | Will they be extubated before day 21, among patients alive at day 21?          | `extubation`            | day 21 of episode   |
+| `discharge_to_facility_ventilated`       | Will the episode end with discharge to a facility while still ventilated?      | `discharge_to_facility` | episode end         |
+| `mcs_on_vasopressors`                    | On pressors with no MCS, will MCS be initiated in the next 48h?                | `mcs`                   | 48h                 |
+| `second_vasopressor_added`               | On exactly one pressor, will a second be started in the next 6h?               | `pressor_start`         | 6h                  |
+| `vasopressor_reinitiation_after_weaning` | Given pressors stopped within 48h, will they restart within 72h of that stop?  | `pressor_start`         | 72h post-stop       |
 
 ### Codes these configs assume
 

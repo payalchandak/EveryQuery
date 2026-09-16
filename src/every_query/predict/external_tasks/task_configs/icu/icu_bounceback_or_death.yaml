@@ -1,21 +1,31 @@
-# ICU bounceback
+# ICU bounceback or death
 #
 # Clinical question:
 #   Given any event during an ICU stay, and given that the patient leaves the ICU within
-#   48 hours, will they return to the ICU within 48 hours of that departure?
+#   48 hours, will they deteriorate within 48 hours of that departure, meaning either a
+#   return to the ICU or death?
 #
 # Trigger:         every event during an open ICU stay.
 # Prediction time: the triggering event (`input.index_timestamp: end`).
-# Label:           `icu_admission` in the `readmission` window, which is anchored to the
-#                  actual ICU discharge (`to_discharge.end`), not to the trigger.
+# Label:           `bounceback_or_death` in the `readmission` window, which is anchored to
+#                  the actual ICU discharge (`to_discharge.end`), not to the trigger.
 # Cohort:          ICU stay still open at trigger, and an ICU discharge occurring within
 #                  48h of the trigger (`discharge_soon`).
+#
+# The label is a composite because death competes with readmission: a patient who
+# deteriorates on the ward and dies can never be readmitted, so scoring them alongside
+# patients who recovered would put two clinically opposite groups in the same class.
+# Grouping death with readmission makes the task about deterioration after ICU discharge.
 
 predicates:
   icu_admission:
     code: ICU_ADMISSION
   icu_discharge:
     code: ICU_DISCHARGE
+  death:
+    code: DEATH
+  bounceback_or_death:
+    expr: or(icu_admission, death)
 
 trigger: _ANY_EVENT
 
@@ -56,4 +66,4 @@ windows:
     end: start + 48h
     start_inclusive: false
     end_inclusive: true
-    label: icu_admission
+    label: bounceback_or_death
