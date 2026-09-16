@@ -1,0 +1,59 @@
+# ICU bounceback
+#
+# Clinical question:
+#   Given any event during an ICU stay, and given that the patient leaves the ICU within
+#   48 hours, will they return to the ICU within 48 hours of that departure?
+#
+# Trigger:         every event during an open ICU stay.
+# Prediction time: the triggering event (`input.index_timestamp: end`).
+# Label:           `icu_admission` in the `readmission` window, which is anchored to the
+#                  actual ICU discharge (`to_discharge.end`), not to the trigger.
+# Cohort:          ICU stay still open at trigger, and an ICU discharge occurring within
+#                  48h of the trigger (`discharge_soon`).
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+
+trigger: _ANY_EVENT
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  discharge_soon:
+    start: trigger
+    end: start + 48h
+    start_inclusive: false
+    end_inclusive: true
+    has:
+      icu_discharge: (1, None)
+
+  to_discharge:
+    start: trigger
+    end: start -> icu_discharge
+    start_inclusive: false
+    end_inclusive: true
+
+  readmission:
+    start: to_discharge.end
+    end: start + 48h
+    start_inclusive: false
+    end_inclusive: true
+    label: icu_admission

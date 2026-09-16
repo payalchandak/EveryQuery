@@ -1,0 +1,75 @@
+# Prolonged ventilation past day 14
+#
+# Clinical question:
+#   Given any event within the first 14 days of a ventilation episode in the ICU, and
+#   restricting to patients alive at day 14, will they be extubated before day 14 of that
+#   episode?
+#
+# Trigger:         every event during an open ICU stay and an open ventilation episode.
+# Prediction time: the triggering event (`input.index_timestamp: end`).
+# Label:           `extubation` in the `day14` window, measured from the start of the
+#                  ventilation episode (`vent_context.start`), not from the trigger.
+# Cohort:          ventilation episode still open at trigger, the trigger falling within
+#                  the first 14 days of it (`within_first_14d`), and no death in the
+#                  14-day window.
+#
+# Paired with `prolonged_ventilation_past_day21`, which is the same construction at a
+# 21-day horizon.  Both restrict to survivors so that "not extubated by the horizon"
+# means still ventilated rather than died on the ventilator.
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+  intubation:
+    code: INTUBATION
+  extubation:
+    code: EXTUBATION
+  death:
+    code: DEATH
+
+trigger: _ANY_EVENT
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+
+  vent_context:
+    start: end <- intubation
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      extubation: (None, 0)
+
+  within_first_14d:
+    start: end - 14 days
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      intubation: (1, None)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  day14:
+    start: vent_context.start
+    end: start + 14 days
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      death: (None, 0)
+    label: extubation

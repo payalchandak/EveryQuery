@@ -1,0 +1,47 @@
+# 90-day mortality
+#
+# Clinical question:
+#   Given any event during an ICU stay, will the patient die within 90 days of that event?
+#
+# Trigger:         every event during an open ICU stay.
+# Prediction time: the triggering event (`input.index_timestamp: end`).
+# Label:           `death` in the `target` window.
+# Cohort:          ICU stay still open at trigger and patient still alive.  Unlike the
+#                  24h-horizon tasks there is no discharge restriction, because the horizon
+#                  extends past the hospital stay by design.
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+  death:
+    code: DEATH
+
+trigger: _ANY_EVENT
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+      death: (None, 0)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  target:
+    start: trigger
+    end: start + 90 days
+    start_inclusive: false
+    end_inclusive: true
+    label: death
