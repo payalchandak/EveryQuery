@@ -10,7 +10,14 @@
 # Label:           `discharge_to_facility` in the `target` window, which runs to whichever
 #                  episode endpoint comes first (`episode_end` = extubation, any hospital
 #                  discharge, or death).
-# Cohort:          ventilation episode still open at trigger.
+# Cohort:          ventilation episode still open at trigger, meaning none of the three
+#                  `episode_end` events has happened yet.
+#
+# `vent_context` bars every arm of `episode_end`, not just extubation.  ACES resolves `->`
+# by scanning forward from the anchor row inclusive, so a trigger that is itself an
+# endpoint would make `target` match that same row and collapse to a zero-length window,
+# scoring a facility discharge as a negative.  Barring all three arms keeps the endpoint
+# strictly in the future of every prediction time.
 
 predicates:
   icu_admission:
@@ -27,14 +34,10 @@ predicates:
     code: { regex: "^HOSPITAL_DISCHARGE//.*" }
   discharge_to_facility:
     code:
-      {
-        any:
-          [
-            HOSPITAL_DISCHARGE//SNF,
-            HOSPITAL_DISCHARGE//LTACH,
-            HOSPITAL_DISCHARGE//REHAB,
-          ],
-      }
+      any:
+        - HOSPITAL_DISCHARGE//SNF
+        - HOSPITAL_DISCHARGE//LTACH
+        - HOSPITAL_DISCHARGE//REHAB
   episode_end:
     expr: or(extubation, hospital_discharge, death)
 
@@ -56,6 +59,8 @@ windows:
     end_inclusive: true
     has:
       extubation: (None, 0)
+      hospital_discharge: (None, 0)
+      death: (None, 0)
 
   input:
     start: null
