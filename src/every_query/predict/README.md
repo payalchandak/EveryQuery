@@ -24,7 +24,6 @@ probabilities.
 │   ├── get_per_code_from_composite.py
 │   ├── process_composite.py
 │   └── task_configs
-│       ├── README.md
 │       └── icu
 │           ├── acute_deterioration_event.yaml
 │           ├── consecutive_low_map.yaml
@@ -51,7 +50,7 @@ Key files:
 - `schema.py` — `PredictionSchema` (`TaskQuerySchema` + `censor_prob` + `occurs_prob`).
 - `configs/predict.yaml` — required: `model_run_dir`, `tasks_dir`, `output_parquet`; optional: `ckpt_name`, `split` (`held_out` | `tuning`), `overwrite` (default `false` — refuses to clobber an existing `output_parquet`; pass `overwrite=true` to replace).
 - `external_tasks/` — convert + aggregate tasks outside EQ's native vocabulary (`aces_to_eq.py`, `process_composite.py`, `get_per_code_from_composite.py`).
-- `external_tasks/task_configs/`: the ACES task-definition YAMLs those conversions start from, one file per task ([`task_configs/README.md`](external_tasks/task_configs/README.md)).
+- `external_tasks/task_configs/`: the ACES task-definition YAMLs those conversions start from, one file per task, each carrying its clinical question in a header comment.
 
 ## Pipeline position
 
