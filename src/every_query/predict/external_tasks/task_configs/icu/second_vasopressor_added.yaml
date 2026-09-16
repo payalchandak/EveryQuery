@@ -1,0 +1,80 @@
+# Second vasopressor added
+#
+# Clinical question:
+#   Given any event during an ICU stay in which exactly one vasopressor has been started
+#   and none stopped, and restricting to cases where the patient is not discharged alive
+#   from the hospital within the next 6 hours, will a second vasopressor be started within
+#   those 6 hours?
+#
+# Trigger:         every event during an open ICU stay.
+# Prediction time: the triggering event (`input.index_timestamp: end`).
+# Label:           `pressor_start` in the `target` window.
+# Cohort:          ICU stay still open at trigger with exactly one pressor start and no
+#                  pressor stop so far (`pressor_start: (1, 1)`), and no live hospital
+#                  discharge in the 6h horizon.
+#
+# `hospital_discharge` enumerates the live dispositions so the censoring gate does not
+# fire on the discharge record that accompanies a death.
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+  hospital_discharge:
+    code:
+      any:
+        - HOSPITAL_DISCHARGE//HOME
+        - HOSPITAL_DISCHARGE//SNF
+        - HOSPITAL_DISCHARGE//REHAB
+        - HOSPITAL_DISCHARGE//LTACH
+        - HOSPITAL_DISCHARGE//AMA
+  pressor_start:
+    code:
+      any:
+        - MED_START//NOREPINEPHRINE
+        - MED_START//EPINEPHRINE
+        - MED_START//VASOPRESSIN
+        - MED_START//PHENYLEPHRINE
+        - MED_START//DOPAMINE
+        - MED_START//ANGIOTENSIN_II
+  pressor_stop:
+    code:
+      any:
+        - MED_END//NOREPINEPHRINE
+        - MED_END//EPINEPHRINE
+        - MED_END//VASOPRESSIN
+        - MED_END//PHENYLEPHRINE
+        - MED_END//DOPAMINE
+        - MED_END//ANGIOTENSIN_II
+
+trigger: _ANY_EVENT
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+      pressor_start: (1, 1)
+      pressor_stop: (None, 0)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  target:
+    start: trigger
+    end: start + 6h
+    start_inclusive: false
+    end_inclusive: true
+    has:
+      hospital_discharge: (None, 0)
+    label: pressor_start

@@ -173,6 +173,15 @@ wheels = [
 ]
 
 [[package]]
+name = "bigtree"
+version = "0.31.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fc/c1/5a539f8fb3c85478794fa8f22d589260f44d982f3866952eb589cc5a3b76/bigtree-0.31.2.tar.gz", hash = "sha256:36eed144132149f9425babbc174dad0f5bcccfa4a705ec9668f7a12e5f63396d", size = 1345201, upload-time = "2025-09-25T15:47:23.886Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/36/c5/e4f51b20402967ca0303dd7ed3b808db45089b3fc906bf3665867d05bcdd/bigtree-0.31.2-py3-none-any.whl", hash = "sha256:f63c0aba038ae863ba5c59c36805da7bb232f68f57bc20ef98ad499453209291", size = 106321, upload-time = "2025-09-25T15:47:25.359Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.4.22"
 source = { registry = "https://pypi.org/simple" }
@@ -698,6 +707,26 @@ wheels = [
 ]
 
 [[package]]
+name = "es-aces"
+version = "0.7.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "bigtree" },
+    { name = "hydra-core" },
+    { name = "meds" },
+    { name = "networkx" },
+    { name = "numpy" },
+    { name = "polars" },
+    { name = "pyarrow" },
+    { name = "pytimeparse" },
+    { name = "ruamel-yaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/69/25/c434866e9de99bb9560d435e4db8137592b5f68f6c58780fd7e5e5befaaf/es_aces-0.7.3.tar.gz", hash = "sha256:180099dda1a35737245804253a62f81dd93f575159e04da539b464b3b1527d2f", size = 2654607, upload-time = "2026-04-21T21:19:51.049Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e3/b1/6e2dbec4ec004c30500fd83865101b083f9449c0310e6ddc5579a9a529c0/es_aces-0.7.3-py3-none-any.whl", hash = "sha256:4bd48c5558379a8b3c22c6b600f1c3e1582ef465b3ad8f0f72a6ce4b12f244d7", size = 61766, upload-time = "2026-04-21T21:19:49.505Z" },
+]
+
+[[package]]
 name = "everyquery"
 source = { editable = "." }
 dependencies = [
@@ -723,6 +752,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "es-aces" },
     { name = "hydra-submitit-launcher" },
     { name = "meds-testing-helpers" },
     { name = "pre-commit" },
@@ -757,6 +787,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "es-aces", specifier = ">=0.7,<0.8" },
     { name = "hydra-submitit-launcher", specifier = ">=1.2.0" },
     { name = "meds-testing-helpers", specifier = "==0.3.0" },
     { name = "pre-commit", specifier = "<4" },
@@ -3028,6 +3059,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/13/64/b4d76f227d5c45a7e0b796c674fd81b0a6c4fbd48dc29271857d8219571c/rpds_py-0.30.0-pp311-pypy311_pp73-musllinux_1_2_aarch64.whl", hash = "sha256:dff13836529b921e22f15cb099751209a60009731a68519630a24d61f0b1b30a", size = 573981, upload-time = "2025-11-30T20:24:32.934Z" },
     { url = "https://files.pythonhosted.org/packages/20/91/092bacadeda3edf92bf743cc96a7be133e13a39cdbfd7b5082e7ab638406/rpds_py-0.30.0-pp311-pypy311_pp73-musllinux_1_2_i686.whl", hash = "sha256:1b151685b23929ab7beec71080a8889d4d6d9fa9a983d213f07121205d48e2c4", size = 599782, upload-time = "2025-11-30T20:24:35.169Z" },
     { url = "https://files.pythonhosted.org/packages/d1/b7/b95708304cd49b7b6f82fdd039f1748b66ec2b21d6a45180910802f1abf1/rpds_py-0.30.0-pp311-pypy311_pp73-musllinux_1_2_x86_64.whl", hash = "sha256:ac37f9f516c51e5753f27dfdef11a88330f04de2d564be3991384b2f3535d02e", size = 562191, upload-time = "2025-11-30T20:24:36.853Z" },
+]
+
+[[package]]
+name = "ruamel-yaml"
+version = "0.19.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c7/3b/ebda527b56beb90cb7652cb1c7e4f91f48649fbcd8d2eb2fb6e77cd3329b/ruamel_yaml-0.19.1.tar.gz", hash = "sha256:53eb66cd27849eff968ebf8f0bf61f46cdac2da1d1f3576dd4ccee9b25c31993", size = 142709, upload-time = "2026-01-02T16:50:31.84Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/0c/51f6841f1d84f404f92463fc2b1ba0da357ca1e3db6b7fbda26956c3b82a/ruamel_yaml-0.19.1-py3-none-any.whl", hash = "sha256:27592957fedf6e0b62f281e96effd28043345e0e66001f97683aa9a40c667c93", size = 118102, upload-time = "2026-01-02T16:50:29.201Z" },
 ]
 
 [[package]]

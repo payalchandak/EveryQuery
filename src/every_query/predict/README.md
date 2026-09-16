@@ -22,7 +22,23 @@ probabilities.
 │   │   ├── get_per_code_from_composite_config.yaml
 │   │   └── process_composite_config.yaml
 │   ├── get_per_code_from_composite.py
-│   └── process_composite.py
+│   ├── process_composite.py
+│   └── task_configs
+│       └── icu
+│           ├── acute_deterioration_event.yaml
+│           ├── consecutive_low_map.yaml
+│           ├── discharge_to_facility_ventilated.yaml
+│           ├── extubation_before_tracheostomy.yaml
+│           ├── icu_bounceback_or_death.yaml
+│           ├── imminent_hypoglycemia.yaml
+│           ├── imminent_icu_mortality.yaml
+│           ├── mcs_on_vasopressors.yaml
+│           ├── mortality_90d.yaml
+│           ├── new_onset_atrial_fibrillation.yaml
+│           ├── prolonged_ventilation_past_day21.yaml
+│           ├── reintubation_after_extubation.yaml
+│           ├── second_vasopressor_added.yaml
+│           └── vasopressor_reinitiation_after_weaning.yaml
 ├── predict.py
 └── schema.py
 
@@ -34,6 +50,7 @@ Key files:
 - `schema.py` — `PredictionSchema` (`TaskQuerySchema` + `censor_prob` + `occurs_prob`).
 - `configs/predict.yaml` — required: `model_run_dir`, `tasks_dir`, `output_parquet`; optional: `ckpt_name`, `split` (`held_out` | `tuning`), `overwrite` (default `false` — refuses to clobber an existing `output_parquet`; pass `overwrite=true` to replace).
 - `external_tasks/` — convert + aggregate tasks outside EQ's native vocabulary (`aces_to_eq.py`, `process_composite.py`, `get_per_code_from_composite.py`).
+- `external_tasks/task_configs/`: the ACES task-definition YAMLs those conversions start from, one file per task, each carrying its clinical question in a header comment.
 
 ## Pipeline position
 

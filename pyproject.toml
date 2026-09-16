@@ -59,6 +59,13 @@ dev = [
   "meds_testing_helpers==0.3.0",
   "yaml_to_disk",
   "hydra-submitit-launcher>=1.2.0",
+  # Dev-only: tests/test_aces_task_configs.py parses the shipped ACES task configs with
+  # ACES' own loader, so a broken config fails CI instead of a cluster extraction hours in.
+  # Not a runtime dep: EveryQuery consumes ACES *output* parquets, never runs ACES itself.
+  # Cheap: it shares polars/meds/pyarrow/hydra/numpy with EveryQuery, and adds only three
+  # entries to uv.lock (es-aces, bigtree, ruamel-yaml) since networkx and pytimeparse were
+  # already transitively present.
+  "es-aces>=0.7,<0.8",
 ] # Add your development (lint, test) dependencies here
 docs = [] # Add your documentation dependencies here (I recommend mkdocs-material)
 
