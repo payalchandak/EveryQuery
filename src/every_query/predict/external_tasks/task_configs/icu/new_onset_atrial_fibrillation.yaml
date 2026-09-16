@@ -1,16 +1,21 @@
 # New-onset atrial fibrillation
 #
 # Clinical question:
-#   Given any event during an ICU stay with no atrial fibrillation documented earlier in
-#   that stay, and restricting to cases where the patient is not discharged alive from the
-#   hospital within the next 24 hours, will atrial fibrillation be documented within those
-#   24 hours?
+#   Given any event during an ICU stay for a patient with no atrial fibrillation anywhere
+#   earlier in their record, and restricting to cases where the patient is not discharged
+#   alive from the hospital within the next 24 hours, will atrial fibrillation be
+#   documented within those 24 hours?
 #
 # Trigger:         every event during an open ICU stay.
 # Prediction time: the triggering event (`input.index_timestamp: end`).
 # Label:           `afib` in the `target` window.
-# Cohort:          ICU stay still open at trigger, no prior afib in that stay
-#                  (`icu_context`), no live hospital discharge in the 24h horizon.
+# Cohort:          ICU stay still open at trigger, no afib anywhere in the record up to
+#                  the trigger (`no_prior_afib`), no live hospital discharge in the 24h
+#                  horizon.
+#
+# `no_prior_afib` spans the whole record rather than the current stay.  Scoping it to
+# `icu_context` would let a patient with atrial fibrillation documented in an earlier
+# admission re-enter the cohort and have their next episode scored as new onset.
 #
 # `hospital_discharge` enumerates the live dispositions so the censoring gate does not
 # fire on the discharge record that accompanies a death.
@@ -41,6 +46,13 @@ windows:
     end_inclusive: true
     has:
       icu_discharge: (None, 0)
+
+  no_prior_afib:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
       afib: (None, 0)
 
   input:

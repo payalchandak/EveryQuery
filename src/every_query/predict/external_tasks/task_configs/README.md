@@ -29,7 +29,7 @@ config fails CI rather than a cluster run. Conventions the configs follow by han
 
 ## ICU tasks
 
-All 15 trigger inside an open ICU stay and predict from the triggering event. The ones with a fixed
+All 14 trigger inside an open ICU stay and predict from the triggering event. The ones with a fixed
 horizon exclude triggers whose patient leaves the hospital inside that horizon, so a positive label
 can't be censored away by discharge; the ones anchored to a downstream event (bounceback,
 reintubation, vasopressor reinitiation) instead condition on that event happening within a
@@ -45,7 +45,6 @@ qualifying window and then measure from it.
 | `mortality_90d`                          | Will the patient die within 90 days?                                           | `death`                 | 90d                 |
 | `icu_bounceback_or_death`                | Given ICU discharge within 48h, will they return or die within 48h of leaving? | `bounceback_or_death`   | 48h post-discharge  |
 | `reintubation_after_extubation`          | Given extubation within 48h, will they be reintubated within 72h of it?        | `intubation`            | 72h post-extubation |
-| `prolonged_ventilation_past_day14`       | Will they be extubated before day 14, among patients alive at day 14?          | `extubation`            | day 14 of episode   |
 | `extubation_before_tracheostomy`         | Among survivors, will the episode end in extubation rather than tracheostomy?  | `extubation`            | episode end         |
 | `prolonged_ventilation_past_day21`       | Will they be extubated before day 21, among patients alive at day 21?          | `extubation`            | day 21 of episode   |
 | `discharge_to_facility_ventilated`       | Will the episode end with discharge to a facility while still ventilated?      | `discharge_to_facility` | episode end         |
