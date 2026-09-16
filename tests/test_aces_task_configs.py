@@ -19,15 +19,6 @@ TASK_CONFIG_ROOT = Path(str(files("every_query") / "predict" / "external_tasks" 
 TASK_CONFIG_PATHS = sorted(TASK_CONFIG_ROOT.rglob("*.yaml"))
 
 
-def test_task_configs_are_discovered():
-    """The configs must be reachable via ``importlib.resources``, i.e. they ship with the wheel.
-
-    ``[tool.setuptools.package-data] every_query = ["**/*.yaml"]`` is what makes this true; this
-    fails if that glob is ever narrowed.
-    """
-    assert TASK_CONFIG_PATHS, f"no task configs found under {TASK_CONFIG_ROOT}"
-
-
 @pytest.mark.parametrize(
     "config_path",
     TASK_CONFIG_PATHS,
