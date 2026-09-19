@@ -1,14 +1,17 @@
 """ICU organ-support tasks, anchored at ICU hour 24.
 
-Five vasopressors and three airway/ventilation interventions, each asked at 12 and 24
-hours.  Both guards are load-bearing and distinct: ``MEDS_DEATH`` enforces the
+Five vasopressors and three airway/ventilation interventions at 12 and 24 hours, plus
+intermittent hemodialysis at 48 hours and two transfusion products at 24 hours.  Both
+guards are load-bearing and distinct: ``MEDS_DEATH`` enforces the
 question's own "conditional on surviving the window", while ``TIMELINE//END`` catches a
 record that runs out while the patient is still alive.  Unlike the mortality tasks, the
 target here is not death, so neither guard can delete the positive class.
 
 Procedure codes take the build's three-part ``PROCEDURE//START//<itemid>`` form, not the
 ``PROCEDURE_START//<itemid>`` of the spec; infusions really do use the two-part
-``INFUSION_START//<itemid>``.  The itemids are unchanged.
+``INFUSION_START//<itemid>``.  The itemids are unchanged.  The two transfusion itemids
+carry no description in the build (40 of 119 ``INFUSION_START`` codes do not), so their
+mapping to red cells and platelets rests on the spec, not on anything checkable here.
 """
 
 TASKS = {
@@ -538,6 +541,108 @@ TASKS = {
             },
             {
                 "query": "PROCEDURE//START//225794",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 1,
+                "forced_answer": None,
+            },
+        ],
+    },
+    "At ICU hour 24, does intermittent hemodialysis occur within 48 hours, conditional on surviving the window?": {
+        "metadata": {
+            "setting": "icu",
+            "anchor": "ICU hour 24",
+            "horizon": "48h",
+            "intervention": "intermittent hemodialysis",
+        },
+        "query": [
+            {
+                "query": "TIMELINE//END",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 2,
+                "forced_answer": False,
+            },
+            {
+                "query": "MEDS_DEATH",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 2,
+                "forced_answer": False,
+            },
+            {
+                "query": "PROCEDURE//START//225441",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 2,
+                "forced_answer": None,
+            },
+        ],
+    },
+    "At ICU hour 24, does red blood cell transfusion occur within 24 hours, conditional on surviving the window?": {
+        "metadata": {
+            "setting": "icu",
+            "anchor": "ICU hour 24",
+            "horizon": "24h",
+            "intervention": "red blood cell transfusion",
+        },
+        "query": [
+            {
+                "query": "TIMELINE//END",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 1,
+                "forced_answer": False,
+            },
+            {
+                "query": "MEDS_DEATH",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 1,
+                "forced_answer": False,
+            },
+            {
+                "query": "INFUSION_START//225168",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 1,
+                "forced_answer": None,
+            },
+        ],
+    },
+    "At ICU hour 24, does platelet transfusion occur within 24 hours, conditional on surviving the window?": {
+        "metadata": {
+            "setting": "icu",
+            "anchor": "ICU hour 24",
+            "horizon": "24h",
+            "intervention": "platelet transfusion",
+        },
+        "query": [
+            {
+                "query": "TIMELINE//END",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 1,
+                "forced_answer": False,
+            },
+            {
+                "query": "MEDS_DEATH",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 1,
+                "forced_answer": False,
+            },
+            {
+                "query": "INFUSION_START//225170",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
