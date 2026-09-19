@@ -2,6 +2,10 @@
 
 Each target is a specific ``HOSPITAL_DISCHARGE//<disposition>`` code, bounded by the
 next hospital admission.
+
+These carry no ``TIMELINE//END`` censoring guard.  A patient who dies before the bound
+has their record end there, so such a guard would exclude them, when dying is instead
+proof the discharge never happened and should score a genuine negative (#278).
 """
 
 TASKS = {
@@ -13,14 +17,6 @@ TASKS = {
             "disposition": "HOME",
         },
         "query": [
-            {
-                "query": "TIMELINE//END",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": "HOSPITAL_ADMISSION",
-                "duration_days": None,
-                "forced_answer": False,
-            },
             {
                 "query": "HOSPITAL_DISCHARGE//HOME",
                 "start_event": None,
@@ -40,14 +36,6 @@ TASKS = {
         },
         "query": [
             {
-                "query": "TIMELINE//END",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": "HOSPITAL_ADMISSION",
-                "duration_days": None,
-                "forced_answer": False,
-            },
-            {
                 "query": "HOSPITAL_DISCHARGE//SKILLED NURSING FACILITY",
                 "start_event": None,
                 "start_duration_days": 0,
@@ -65,14 +53,6 @@ TASKS = {
             "disposition": "HOSPICE",
         },
         "query": [
-            {
-                "query": "TIMELINE//END",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": "HOSPITAL_ADMISSION",
-                "duration_days": None,
-                "forced_answer": False,
-            },
             {
                 "query": "HOSPITAL_DISCHARGE//HOSPICE",
                 "start_event": None,
