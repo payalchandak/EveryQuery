@@ -1,8 +1,8 @@
 """ICU organ-support tasks, anchored at ICU hour 24.
 
 Five vasopressors and three airway/ventilation interventions at 12 and 24 hours, plus
-intermittent hemodialysis at 48 hours and two transfusion products at 24 hours.  Both
-guards are load-bearing and distinct: ``MEDS_DEATH`` enforces the
+intermittent hemodialysis at 48 hours, two transfusion products at 24 hours, and
+enteral nutrition at 24 hours.  Both guards are load-bearing and distinct: ``MEDS_DEATH`` enforces the
 question's own "conditional on surviving the window", while ``TIMELINE//END`` catches a
 record that runs out while the patient is still alive.  Unlike the mortality tasks, the
 target here is not death, so neither guard can delete the positive class.
@@ -643,6 +643,40 @@ TASKS = {
             },
             {
                 "query": "INFUSION_START//225170",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 1,
+                "forced_answer": None,
+            },
+        ],
+    },
+    "At ICU hour 24, does enteral nutrition occur within 24 hours, conditional on surviving the window?": {
+        "metadata": {
+            "setting": "icu",
+            "anchor": "ICU hour 24",
+            "horizon": "24h",
+            "intervention": "enteral nutrition",
+        },
+        "query": [
+            {
+                "query": "TIMELINE//END",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 1,
+                "forced_answer": False,
+            },
+            {
+                "query": "MEDS_DEATH",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 1,
+                "forced_answer": False,
+            },
+            {
+                "query": "DERIVED//ENTERAL_NUTRITION",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
