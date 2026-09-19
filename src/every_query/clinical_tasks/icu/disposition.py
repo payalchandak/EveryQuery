@@ -7,6 +7,7 @@ Each key is the clinical question verbatim.  Each value carries the question's
 """
 
 TASKS = {
+    # I1. ICU discharge
     "At ICU hour 24, does ICU discharge occur within 24 hours, conditional on being discharged from the ICU alive?": {
         "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "24h"},
         "query": [
@@ -119,6 +120,112 @@ TASKS = {
                 "start_duration_days": 0,
                 "bound_event": None,
                 "duration_days": 7,
+                "forced_answer": None,
+            },
+        ],
+    },
+    # I2. Death, duration-bounded
+    "At ICU hour 24, does death occur within 24 hours?": {
+        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "24h"},
+        "query": [
+            {
+                "query": "TIMELINE//END",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 1,
+                "forced_answer": False,
+            },
+            {
+                "query": "MEDS_DEATH",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 1,
+                "forced_answer": None,
+            },
+        ],
+    },
+    "At ICU hour 24, does death occur within 72 hours?": {
+        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "72h"},
+        "query": [
+            {
+                "query": "TIMELINE//END",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 3,
+                "forced_answer": False,
+            },
+            {
+                "query": "MEDS_DEATH",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 3,
+                "forced_answer": None,
+            },
+        ],
+    },
+    "At ICU hour 24, does death occur within 28 days?": {
+        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "28d"},
+        "query": [
+            {
+                "query": "TIMELINE//END",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 28,
+                "forced_answer": False,
+            },
+            {
+                "query": "MEDS_DEATH",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 28,
+                "forced_answer": None,
+            },
+        ],
+    },
+    "At ICU hour 24, does death occur within 90 days?": {
+        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "90d"},
+        "query": [
+            {
+                "query": "TIMELINE//END",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 90,
+                "forced_answer": False,
+            },
+            {
+                "query": "MEDS_DEATH",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 90,
+                "forced_answer": None,
+            },
+        ],
+    },
+    "At ICU hour 24, does death occur within 1 year?": {
+        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "1y"},
+        "query": [
+            {
+                "query": "TIMELINE//END",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 365,
+                "forced_answer": False,
+            },
+            {
+                "query": "MEDS_DEATH",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 365,
                 "forced_answer": None,
             },
         ],
