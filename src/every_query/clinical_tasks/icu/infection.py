@@ -1,20 +1,22 @@
 """ICU antibiotic-exposure tasks, anchored at ICU hour 24.
 
-Eleven agents, each asked at 24 hours.  Guard pair matches ``organ_support``:
+Nine agents, each asked at 24 hours.  Guard pair matches ``organ_support``:
 ``MEDS_DEATH`` implements "conditional on surviving the window" and ``TIMELINE//END``
 catches a record running out while the patient is alive.
 
-Every target is a ``DERIVED//ABX_*`` code whose membership is **not yet defined**.  Nine
-of the eleven agents are present in the build under ``MEDICATION//*`` names, but folding
-those names into a derived code requires two decisions per agent that the spec does not
-make: which event forms count as administration (``//Administered`` versus
-``MEDICATION//START//`` order starts, which differ by up to 17k subjects), and which
-name variants belong (``Piperacillin-Tazobactam Na``, the ``LevoFLOXacin`` casing,
-``Ciprofloxacin HCl``, and the exclusions of ``Vancomycin Oral Liquid`` and
-``Ciprofloxacin 0.3% Ophth Soln``).
+Targets are the literal ``MEDICATION//START//<name>`` order-start codes.  Note this is
+the order start, which is a larger population than the ``//Administered`` event, since
+an order can be placed and never given.
 
-Imipenem and ertapenem do not appear in the build under any alias, so those two tasks
-can never resolve to a positive.
+Where the build carries an agent under more than one name, the task takes the dominant
+one only.  This drops roughly 8% of exposed subjects for piperacillin-tazobactam
+(``Piperacillin-Tazobactam Na``), 9% for levofloxacin (the ``LevoFLOXacin`` casing), and
+20% for ciprofloxacin (plain ``Ciprofloxacin`` alongside ``Ciprofloxacin HCl``).
+Vancomycin needs no exclusion rule: ``Vancomycin Oral Liquid`` is a separate code and an
+exact match on ``Vancomycin`` already leaves it out.
+
+Imipenem and ertapenem are absent from this build under every alias, so they carry no
+task.
 """
 
 TASKS = {
@@ -43,7 +45,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "DERIVED//ABX_PIPERACILLIN_TAZOBACTAM",
+                "query": "MEDICATION//START//Piperacillin-Tazobactam",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -72,7 +74,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "DERIVED//ABX_CEFEPIME",
+                "query": "MEDICATION//START//CefePIME",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -106,7 +108,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "DERIVED//ABX_CEFTAZIDIME",
+                "query": "MEDICATION//START//CefTAZidime",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -140,70 +142,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "DERIVED//ABX_MEROPENEM",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": None,
-                "duration_days": 1,
-                "forced_answer": None,
-            },
-        ],
-    },
-    "At ICU hour 24, does imipenem administration occur within 24 hours, conditional on surviving the window?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "24h", "intervention": "imipenem"},
-        "query": [
-            {
-                "query": "TIMELINE//END",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": None,
-                "duration_days": 1,
-                "forced_answer": False,
-            },
-            {
-                "query": "MEDS_DEATH",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": None,
-                "duration_days": 1,
-                "forced_answer": False,
-            },
-            {
-                "query": "DERIVED//ABX_IMIPENEM",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": None,
-                "duration_days": 1,
-                "forced_answer": None,
-            },
-        ],
-    },
-    "At ICU hour 24, does ertapenem administration occur within 24 hours, conditional on surviving the window?": {
-        "metadata": {
-            "setting": "icu",
-            "anchor": "ICU hour 24",
-            "horizon": "24h",
-            "intervention": "ertapenem",
-        },
-        "query": [
-            {
-                "query": "TIMELINE//END",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": None,
-                "duration_days": 1,
-                "forced_answer": False,
-            },
-            {
-                "query": "MEDS_DEATH",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": None,
-                "duration_days": 1,
-                "forced_answer": False,
-            },
-            {
-                "query": "DERIVED//ABX_ERTAPENEM",
+                "query": "MEDICATION//START//Meropenem",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -237,7 +176,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "DERIVED//ABX_VANCOMYCIN_IV",
+                "query": "MEDICATION//START//Vancomycin",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -271,7 +210,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "DERIVED//ABX_LINEZOLID",
+                "query": "MEDICATION//START//Linezolid",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -305,7 +244,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "DERIVED//ABX_DAPTOMYCIN",
+                "query": "MEDICATION//START//Daptomycin",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -339,7 +278,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "DERIVED//ABX_LEVOFLOXACIN",
+                "query": "MEDICATION//START//Levofloxacin",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -373,7 +312,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "DERIVED//ABX_CIPROFLOXACIN",
+                "query": "MEDICATION//START//Ciprofloxacin HCl",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
