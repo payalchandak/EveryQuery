@@ -1,25 +1,23 @@
 """Hospital discharge-disposition tasks, anchored at ICU hour 24.
 
-Each target is a specific ``HOSPITAL_DISCHARGE//<disposition>`` code, bounded by the
-next hospital admission.
+The question is simply which disposition this admission's hospital discharge carries.
+Each target is a specific ``HOSPITAL_DISCHARGE//<disposition>`` code.
 
-These carry no ``TIMELINE//END`` censoring guard.  Most patients are never readmitted,
-so the bound never fires and the censoring window runs to the end of the record, which
-puts ``TIMELINE//END`` inside it by construction.  The guard therefore excluded every
-never-readmitted patient, including those discharged to the destination in question who
-simply never came back, who are positives.  It could not separate "the record ended
-before anything happened" from "the outcome happened, then the record ended".  Censoring
-is left to the labeler (#278).
+``bound_event: HOSPITAL_ADMISSION`` is a scoping device, not part of the clinical
+question.  Hospital events alternate, so the next discharge always precedes the next
+admission; bounding there confines the target to *this* admission's discharge.  Without
+it a later admission's discharge also matches, inflating positives in this shard from
+48 to 71 (HOME), 33 to 44 (SNF), and 8 to 15 (HOSPICE).
+
+These carry no ``TIMELINE//END`` censoring guard.  Only 7 of 187 subjects lack a
+discharge altogether, while the guard discarded every never-readmitted patient (107 of
+187), taking 40 to 88% of the positives with it.  Censoring is left to the labeler
+(#278).
 """
 
 TASKS = {
-    "At ICU hour 24, does a hospital discharge with disposition HOME occur before hospital readmission?": {
-        "metadata": {
-            "setting": "icu",
-            "anchor": "ICU hour 24",
-            "boundary": "hospital readmission",
-            "disposition": "HOME",
-        },
+    "At ICU hour 24, is the hospital discharge disposition HOME?": {
+        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "disposition": "HOME"},
         "query": [
             {
                 "query": "HOSPITAL_DISCHARGE//HOME",
@@ -31,13 +29,8 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does a hospital discharge with disposition SKILLED NURSING FACILITY occur before hospital readmission?": {
-        "metadata": {
-            "setting": "icu",
-            "anchor": "ICU hour 24",
-            "boundary": "hospital readmission",
-            "disposition": "SKILLED NURSING FACILITY",
-        },
+    "At ICU hour 24, is the hospital discharge disposition SKILLED NURSING FACILITY?": {
+        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "disposition": "SKILLED NURSING FACILITY"},
         "query": [
             {
                 "query": "HOSPITAL_DISCHARGE//SKILLED NURSING FACILITY",
@@ -49,13 +42,8 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does a hospital discharge with disposition HOSPICE occur before hospital readmission?": {
-        "metadata": {
-            "setting": "icu",
-            "anchor": "ICU hour 24",
-            "boundary": "hospital readmission",
-            "disposition": "HOSPICE",
-        },
+    "At ICU hour 24, is the hospital discharge disposition HOSPICE?": {
+        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "disposition": "HOSPICE"},
         "query": [
             {
                 "query": "HOSPITAL_DISCHARGE//HOSPICE",
