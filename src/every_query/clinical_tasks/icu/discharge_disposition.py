@@ -3,9 +3,13 @@
 Each target is a specific ``HOSPITAL_DISCHARGE//<disposition>`` code, bounded by the
 next hospital admission.
 
-These carry no ``TIMELINE//END`` censoring guard.  A patient who dies before the bound
-has their record end there, so such a guard would exclude them, when dying is instead
-proof the discharge never happened and should score a genuine negative (#278).
+These carry no ``TIMELINE//END`` censoring guard.  Most patients are never readmitted,
+so the bound never fires and the censoring window runs to the end of the record, which
+puts ``TIMELINE//END`` inside it by construction.  The guard therefore excluded every
+never-readmitted patient, including those discharged to the destination in question who
+simply never came back, who are positives.  It could not separate "the record ended
+before anything happened" from "the outcome happened, then the record ended".  Censoring
+is left to the labeler (#278).
 """
 
 TASKS = {
