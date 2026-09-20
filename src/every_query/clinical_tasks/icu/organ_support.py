@@ -1,36 +1,49 @@
 """ICU organ-support tasks, anchored at ICU hour 24.
 
-Five vasopressors and three airway/ventilation interventions at 12 and 24 hours, plus
-intermittent hemodialysis at 48 hours, two transfusion products at 24 hours, and
-enteral nutrition at 24 hours.  Both guards are load-bearing and distinct: ``MEDS_DEATH`` enforces the
+Vasopressors and airway/ventilation interventions at 12 and 24 hours, plus intermittent
+hemodialysis at 48 hours, two transfusion products at 24 hours, and enteral nutrition at
+24 hours.  Both guards are load-bearing and distinct: ``MEDS_DEATH`` implements the
 question's own "conditional on surviving the window", while ``TIMELINE//END`` catches a
-record that runs out while the patient is still alive.  Unlike the mortality tasks, the
-target here is not death, so neither guard can delete the positive class.
+record that runs out while the patient is alive.  The target is never death, so neither
+guard can delete the positive class.
 
-.. warning::
+**Infusions are dose-binned, so these ask about dose, not mere exposure.**  The model
+vocabulary splits every infusion into dose deciles,
+``INFUSION_START//<itemid>//value_[lo,hi)``, with no unbinned token, exactly as it does
+for labs.  "Does norepinephrine start at all" would need a union of ten bins, so each
+infusion task instead takes the top bin and asks a question that stands on its own:
+escalation to a high-dose vasopressor, or a large-volume transfusion.
 
-    The seven ``INFUSION_START//<itemid>`` targets here (five vasopressors, two
-    transfusion products) are **not in the model vocabulary** and cannot be queried as
-    written.  They exist in ``intermediate/metadata/codes.parquet`` but ``processed/``
-    splits every infusion into dose deciles,
-    ``INFUSION_START//<itemid>//value_[lo,hi)``, exactly as it does for labs.  Asking
-    "does norepinephrine start at all" needs a union of ten bins.  Pending a decision;
-    the ``PROCEDURE//START//`` targets in this file are unaffected and verify fine.
+======================  ==========================  ===========================
+agent                   top bin starts at           plausible unit
+======================  ==========================  ===========================
+norepinephrine          0.320514                    mcg/kg/min
+epinephrine             0.354919                    mcg/kg/min
+phenylephrine           3.00137                     mcg/kg/min
+vasopressin             3.6                         units/hr
+dopamine                15.0093                     mcg/kg/min
+red blood cells         700                         mL
+platelets               705.882                     mL
+======================  ==========================  ===========================
+
+The units are **not recorded in the build** (``valueuom`` is null for all seven), so the
+readings above are inferred from magnitude and are not confirmed.  The bin boundaries
+themselves are exact.
 
 Procedure codes take the build's three-part ``PROCEDURE//START//<itemid>`` form, not the
-``PROCEDURE_START//<itemid>`` of the spec; infusions really do use the two-part
-``INFUSION_START//<itemid>``.  The itemids are unchanged.  The two transfusion itemids
-carry no description in the build (40 of 119 ``INFUSION_START`` codes do not), so their
-mapping to red cells and platelets rests on the spec, not on anything checkable here.
+``PROCEDURE_START//<itemid>`` of the spec.  The itemids are unchanged.
+
+``DERIVED//ENTERAL_NUTRITION`` is still undefined: the tube-feed itemids carry no
+description in the build, so they cannot be identified by name.
 """
 
 TASKS = {
-    "At ICU hour 24, does norepinephrine administration occur within 12 hours, conditional on surviving the window?": {
+    "At ICU hour 24, does high-dose norepinephrine administration occur within 12 hours, conditional on surviving the window?": {
         "metadata": {
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "12h",
-            "intervention": "norepinephrine",
+            "intervention": "high-dose norepinephrine",
         },
         "query": [
             {
@@ -50,7 +63,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "INFUSION_START//221906",
+                "query": "INFUSION_START//221906//value_[0.32051384,inf)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -59,12 +72,12 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does norepinephrine administration occur within 24 hours, conditional on surviving the window?": {
+    "At ICU hour 24, does high-dose norepinephrine administration occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
-            "intervention": "norepinephrine",
+            "intervention": "high-dose norepinephrine",
         },
         "query": [
             {
@@ -84,7 +97,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "INFUSION_START//221906",
+                "query": "INFUSION_START//221906//value_[0.32051384,inf)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -93,12 +106,12 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does epinephrine administration occur within 12 hours, conditional on surviving the window?": {
+    "At ICU hour 24, does high-dose epinephrine administration occur within 12 hours, conditional on surviving the window?": {
         "metadata": {
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "12h",
-            "intervention": "epinephrine",
+            "intervention": "high-dose epinephrine",
         },
         "query": [
             {
@@ -118,7 +131,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "INFUSION_START//221289",
+                "query": "INFUSION_START//221289//value_[0.35491893,inf)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -127,12 +140,12 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does epinephrine administration occur within 24 hours, conditional on surviving the window?": {
+    "At ICU hour 24, does high-dose epinephrine administration occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
-            "intervention": "epinephrine",
+            "intervention": "high-dose epinephrine",
         },
         "query": [
             {
@@ -152,7 +165,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "INFUSION_START//221289",
+                "query": "INFUSION_START//221289//value_[0.35491893,inf)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -161,12 +174,12 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does phenylephrine administration occur within 12 hours, conditional on surviving the window?": {
+    "At ICU hour 24, does high-dose phenylephrine administration occur within 12 hours, conditional on surviving the window?": {
         "metadata": {
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "12h",
-            "intervention": "phenylephrine",
+            "intervention": "high-dose phenylephrine",
         },
         "query": [
             {
@@ -186,7 +199,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "INFUSION_START//221749",
+                "query": "INFUSION_START//221749//value_[3.0013728,inf)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -195,12 +208,12 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does phenylephrine administration occur within 24 hours, conditional on surviving the window?": {
+    "At ICU hour 24, does high-dose phenylephrine administration occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
-            "intervention": "phenylephrine",
+            "intervention": "high-dose phenylephrine",
         },
         "query": [
             {
@@ -220,7 +233,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "INFUSION_START//221749",
+                "query": "INFUSION_START//221749//value_[3.0013728,inf)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -229,12 +242,12 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does vasopressin administration occur within 12 hours, conditional on surviving the window?": {
+    "At ICU hour 24, does high-dose vasopressin administration occur within 12 hours, conditional on surviving the window?": {
         "metadata": {
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "12h",
-            "intervention": "vasopressin",
+            "intervention": "high-dose vasopressin",
         },
         "query": [
             {
@@ -254,7 +267,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "INFUSION_START//222315",
+                "query": "INFUSION_START//222315//value_[3.6,inf)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -263,12 +276,12 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does vasopressin administration occur within 24 hours, conditional on surviving the window?": {
+    "At ICU hour 24, does high-dose vasopressin administration occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
-            "intervention": "vasopressin",
+            "intervention": "high-dose vasopressin",
         },
         "query": [
             {
@@ -288,7 +301,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "INFUSION_START//222315",
+                "query": "INFUSION_START//222315//value_[3.6,inf)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -297,8 +310,13 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does dopamine administration occur within 12 hours, conditional on surviving the window?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "12h", "intervention": "dopamine"},
+    "At ICU hour 24, does high-dose dopamine administration occur within 12 hours, conditional on surviving the window?": {
+        "metadata": {
+            "setting": "icu",
+            "anchor": "ICU hour 24",
+            "horizon": "12h",
+            "intervention": "high-dose dopamine",
+        },
         "query": [
             {
                 "query": "TIMELINE//END",
@@ -317,7 +335,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "INFUSION_START//221662",
+                "query": "INFUSION_START//221662//value_[15.009341,inf)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -326,8 +344,13 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does dopamine administration occur within 24 hours, conditional on surviving the window?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "24h", "intervention": "dopamine"},
+    "At ICU hour 24, does high-dose dopamine administration occur within 24 hours, conditional on surviving the window?": {
+        "metadata": {
+            "setting": "icu",
+            "anchor": "ICU hour 24",
+            "horizon": "24h",
+            "intervention": "high-dose dopamine",
+        },
         "query": [
             {
                 "query": "TIMELINE//END",
@@ -346,7 +369,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "INFUSION_START//221662",
+                "query": "INFUSION_START//221662//value_[15.009341,inf)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -593,12 +616,12 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does red blood cell transfusion occur within 24 hours, conditional on surviving the window?": {
+    "At ICU hour 24, does large-volume red blood cell transfusion occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
-            "intervention": "red blood cell transfusion",
+            "intervention": "large-volume red blood cell transfusion",
         },
         "query": [
             {
@@ -618,7 +641,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "INFUSION_START//225168",
+                "query": "INFUSION_START//225168//value_[700.0,inf)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
@@ -627,12 +650,12 @@ TASKS = {
             },
         ],
     },
-    "At ICU hour 24, does platelet transfusion occur within 24 hours, conditional on surviving the window?": {
+    "At ICU hour 24, does large-volume platelet transfusion occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
-            "intervention": "platelet transfusion",
+            "intervention": "large-volume platelet transfusion",
         },
         "query": [
             {
@@ -652,7 +675,7 @@ TASKS = {
                 "forced_answer": False,
             },
             {
-                "query": "INFUSION_START//225170",
+                "query": "INFUSION_START//225170//value_[705.8823,inf)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
