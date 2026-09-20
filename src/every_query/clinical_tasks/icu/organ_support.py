@@ -7,6 +7,16 @@ question's own "conditional on surviving the window", while ``TIMELINE//END`` ca
 record that runs out while the patient is still alive.  Unlike the mortality tasks, the
 target here is not death, so neither guard can delete the positive class.
 
+.. warning::
+
+    The seven ``INFUSION_START//<itemid>`` targets here (five vasopressors, two
+    transfusion products) are **not in the model vocabulary** and cannot be queried as
+    written.  They exist in ``intermediate/metadata/codes.parquet`` but ``processed/``
+    splits every infusion into dose deciles,
+    ``INFUSION_START//<itemid>//value_[lo,hi)``, exactly as it does for labs.  Asking
+    "does norepinephrine start at all" needs a union of ten bins.  Pending a decision;
+    the ``PROCEDURE//START//`` targets in this file are unaffected and verify fine.
+
 Procedure codes take the build's three-part ``PROCEDURE//START//<itemid>`` form, not the
 ``PROCEDURE_START//<itemid>`` of the spec; infusions really do use the two-part
 ``INFUSION_START//<itemid>``.  The itemids are unchanged.  The two transfusion itemids
