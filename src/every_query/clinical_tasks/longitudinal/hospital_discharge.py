@@ -7,12 +7,8 @@ Code substitutions against the Columbia vocabulary (21,264 codes):
 
 - ``HOSPITAL_ADMISSION`` -> ``Visit/IP``, the OMOP inpatient visit concept.
 - ``ED_ARRIVAL`` -> ``Visit/ER``.
-- ``SNF_ADMISSION`` -> ``CMS Place of Service/31``.
-- ``HOSPICE_ENROLLMENT`` -> ``CMS Place of Service/34``.
 
 .. warning::
-
-    Two of those four shift meaning and should be reviewed.
 
     ``Visit/IP`` **undercounts readmissions.**  Columbia also carries ``Visit/ERIP``, an
     emergency-room-to-inpatient visit, which is how a large share of unplanned
@@ -20,17 +16,15 @@ Code substitutions against the Columbia vocabulary (21,264 codes):
     take ``Visit/IP`` alone and miss readmissions admitted through the ED.  The size of
     that loss cannot be measured here, as the Columbia event data is not on this machine.
 
-    The two CMS codes are **place-of-service attributes, not admission events**.  They
-    mark that a service was delivered at a skilled nursing facility or under hospice,
-    which is the nearest available signal but is not the same as an admission or an
-    enrollment.  No alternative exists in the vocabulary.
-
 The death tasks carry no ``TIMELINE//END`` guard, following ``icu/death.py``: death
 terminates the record, so that guard would exclude exactly the patients who died.  The
 specification included it; it is deliberately omitted.
 
-Three specified tasks are absent.  ICU admission has no Columbia equivalent, as OMOP has
-no ICU visit concept.  Primary care and specialty visits cannot be distinguished: the
+Five specified tasks are absent.  ICU admission has no Columbia equivalent, as OMOP has
+no ICU visit concept.  Skilled nursing facility admission and hospice enrollment were
+dropped as unclear: their only candidates, ``CMS Place of Service/31`` and ``/34``, are
+place-of-service attributes recording where a service was delivered, not admission or
+enrollment events.  Primary care and specialty visits cannot be distinguished: the
 vocabulary holds only nine NUCC facility taxonomies (case management, generic
 clinic/center, endoscopy, infusion therapy, MRI, radiology, mammography, oncology and
 radiation oncology), none of which is primary care, and no provider-specialty attribute
@@ -212,76 +206,6 @@ TASKS = {
                 "start_duration_days": 0,
                 "bound_event": None,
                 "duration_days": 365,
-                "forced_answer": None,
-            },
-        ],
-    },
-    "At hospital discharge, does skilled nursing facility admission occur within 7 days, conditional on surviving the window?": {
-        "metadata": {
-            "dataset": "columbia",
-            "setting": "longitudinal",
-            "anchor": "hospital discharge",
-            "horizon": "7d",
-            "outcome": "skilled nursing facility admission",
-        },
-        "query": [
-            {
-                "query": "TIMELINE//END",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": None,
-                "duration_days": 7,
-                "forced_answer": False,
-            },
-            {
-                "query": "MEDS_DEATH",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": None,
-                "duration_days": 7,
-                "forced_answer": False,
-            },
-            {
-                "query": "CMS Place of Service/31",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": None,
-                "duration_days": 7,
-                "forced_answer": None,
-            },
-        ],
-    },
-    "At hospital discharge, does hospice enrollment occur within 90 days, conditional on surviving the window?": {
-        "metadata": {
-            "dataset": "columbia",
-            "setting": "longitudinal",
-            "anchor": "hospital discharge",
-            "horizon": "90d",
-            "outcome": "hospice enrollment",
-        },
-        "query": [
-            {
-                "query": "TIMELINE//END",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": None,
-                "duration_days": 90,
-                "forced_answer": False,
-            },
-            {
-                "query": "MEDS_DEATH",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": None,
-                "duration_days": 90,
-                "forced_answer": False,
-            },
-            {
-                "query": "CMS Place of Service/34",
-                "start_event": None,
-                "start_duration_days": 0,
-                "bound_event": None,
-                "duration_days": 90,
                 "forced_answer": None,
             },
         ],
