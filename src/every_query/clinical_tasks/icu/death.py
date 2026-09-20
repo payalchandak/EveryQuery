@@ -13,7 +13,7 @@ labeler's own rule, under which a subject dead by the window end is never censor
 
 TASKS = {
     "At ICU hour 24, does death occur within 24 hours?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "24h"},
+        "metadata": {"dataset": "mimic", "setting": "icu", "anchor": "ICU hour 24", "horizon": "24h"},
         "query": [
             {
                 "query": "MEDS_DEATH",
@@ -26,7 +26,7 @@ TASKS = {
         ],
     },
     "At ICU hour 24, does death occur within 72 hours?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "72h"},
+        "metadata": {"dataset": "mimic", "setting": "icu", "anchor": "ICU hour 24", "horizon": "72h"},
         "query": [
             {
                 "query": "MEDS_DEATH",
@@ -39,7 +39,7 @@ TASKS = {
         ],
     },
     "At ICU hour 24, does death occur within 28 days?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "28d"},
+        "metadata": {"dataset": "mimic", "setting": "icu", "anchor": "ICU hour 24", "horizon": "28d"},
         "query": [
             {
                 "query": "MEDS_DEATH",
@@ -52,7 +52,7 @@ TASKS = {
         ],
     },
     "At ICU hour 24, does death occur within 90 days?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "90d"},
+        "metadata": {"dataset": "mimic", "setting": "icu", "anchor": "ICU hour 24", "horizon": "90d"},
         "query": [
             {
                 "query": "MEDS_DEATH",
@@ -65,7 +65,7 @@ TASKS = {
         ],
     },
     "At ICU hour 24, does death occur within 1 year?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "1y"},
+        "metadata": {"dataset": "mimic", "setting": "icu", "anchor": "ICU hour 24", "horizon": "1y"},
         "query": [
             {
                 "query": "MEDS_DEATH",
@@ -78,7 +78,12 @@ TASKS = {
         ],
     },
     "At ICU hour 24, does death occur before ICU discharge?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "boundary": "ICU discharge"},
+        "metadata": {
+            "dataset": "mimic",
+            "setting": "icu",
+            "anchor": "ICU hour 24",
+            "boundary": "ICU discharge",
+        },
         "query": [
             {
                 "query": "MEDS_DEATH",
@@ -91,7 +96,12 @@ TASKS = {
         ],
     },
     "At ICU hour 24, does death occur before hospital discharge?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "boundary": "hospital discharge"},
+        "metadata": {
+            "dataset": "mimic",
+            "setting": "icu",
+            "anchor": "ICU hour 24",
+            "boundary": "hospital discharge",
+        },
         "query": [
             {
                 "query": "MEDS_DEATH",
@@ -104,7 +114,12 @@ TASKS = {
         ],
     },
     "At ICU discharge, does death occur before hospital discharge?": {
-        "metadata": {"setting": "icu", "anchor": "ICU discharge", "boundary": "hospital discharge"},
+        "metadata": {
+            "dataset": "mimic",
+            "setting": "icu",
+            "anchor": "ICU discharge",
+            "boundary": "hospital discharge",
+        },
         "query": [
             {
                 "query": "MEDS_DEATH",

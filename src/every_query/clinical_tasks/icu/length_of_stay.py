@@ -2,7 +2,7 @@
 
 TASKS = {
     "At ICU hour 24, does ICU discharge occur within 24 hours, conditional on being discharged from the ICU alive?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "24h"},
+        "metadata": {"dataset": "mimic", "setting": "icu", "anchor": "ICU hour 24", "horizon": "24h"},
         "query": [
             {
                 "query": "TIMELINE//END",
@@ -31,7 +31,7 @@ TASKS = {
         ],
     },
     "At ICU hour 24, does ICU discharge occur within 48 hours, conditional on being discharged from the ICU alive?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "48h"},
+        "metadata": {"dataset": "mimic", "setting": "icu", "anchor": "ICU hour 24", "horizon": "48h"},
         "query": [
             {
                 "query": "TIMELINE//END",
@@ -60,7 +60,7 @@ TASKS = {
         ],
     },
     "At ICU hour 24, does ICU discharge occur within 72 hours, conditional on being discharged from the ICU alive?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "72h"},
+        "metadata": {"dataset": "mimic", "setting": "icu", "anchor": "ICU hour 24", "horizon": "72h"},
         "query": [
             {
                 "query": "TIMELINE//END",
@@ -89,7 +89,7 @@ TASKS = {
         ],
     },
     "At ICU hour 24, does ICU discharge occur within 7 days, conditional on being discharged from the ICU alive?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "7d"},
+        "metadata": {"dataset": "mimic", "setting": "icu", "anchor": "ICU hour 24", "horizon": "7d"},
         "query": [
             {
                 "query": "TIMELINE//END",
@@ -118,7 +118,7 @@ TASKS = {
         ],
     },
     "At ICU discharge, does hospital discharge occur within 7 days, conditional on being discharged from the hospital alive?": {
-        "metadata": {"setting": "icu", "anchor": "ICU discharge", "horizon": "7d"},
+        "metadata": {"dataset": "mimic", "setting": "icu", "anchor": "ICU discharge", "horizon": "7d"},
         "query": [
             {
                 "query": "TIMELINE//END",

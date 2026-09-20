@@ -22,6 +22,7 @@ task.
 TASKS = {
     "At ICU hour 24, does piperacillin-tazobactam administration occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
+            "dataset": "mimic",
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
@@ -55,7 +56,13 @@ TASKS = {
         ],
     },
     "At ICU hour 24, does cefepime administration occur within 24 hours, conditional on surviving the window?": {
-        "metadata": {"setting": "icu", "anchor": "ICU hour 24", "horizon": "24h", "intervention": "cefepime"},
+        "metadata": {
+            "dataset": "mimic",
+            "setting": "icu",
+            "anchor": "ICU hour 24",
+            "horizon": "24h",
+            "intervention": "cefepime",
+        },
         "query": [
             {
                 "query": "TIMELINE//END",
@@ -85,6 +92,7 @@ TASKS = {
     },
     "At ICU hour 24, does ceftazidime administration occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
+            "dataset": "mimic",
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
@@ -119,6 +127,7 @@ TASKS = {
     },
     "At ICU hour 24, does meropenem administration occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
+            "dataset": "mimic",
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
@@ -153,6 +162,7 @@ TASKS = {
     },
     "At ICU hour 24, does intravenous vancomycin administration occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
+            "dataset": "mimic",
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
@@ -187,6 +197,7 @@ TASKS = {
     },
     "At ICU hour 24, does linezolid administration occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
+            "dataset": "mimic",
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
@@ -221,6 +232,7 @@ TASKS = {
     },
     "At ICU hour 24, does daptomycin administration occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
+            "dataset": "mimic",
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
@@ -255,6 +267,7 @@ TASKS = {
     },
     "At ICU hour 24, does levofloxacin administration occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
+            "dataset": "mimic",
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
@@ -289,6 +302,7 @@ TASKS = {
     },
     "At ICU hour 24, does ciprofloxacin administration occur within 24 hours, conditional on surviving the window?": {
         "metadata": {
+            "dataset": "mimic",
             "setting": "icu",
             "anchor": "ICU hour 24",
             "horizon": "24h",
