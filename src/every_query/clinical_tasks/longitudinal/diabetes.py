@@ -4,13 +4,8 @@
 **Columbia NYP, not MIMIC.**  See ``outpatient_visit.py`` for why the two datasets share
 no codes.
 
-.. warning::
-
-    **The type 2 diabetes restriction is not encoded in any query.**  Every question here
-    says "among patients with type 2 diabetes", but no sub-question restricts the
-    denominator to diabetics, so the cohort must come from the anchor spec.  Written on
-    that assumption.  If the anchor spec does not carry it, every task in this file is
-    computed over all patients and is wrong.
+The type 2 diabetes restriction is carried by the anchor spec, not by the queries: no
+sub-question here narrows the denominator to diabetics.  Confirmed, not assumed.
 
 Lab thresholds follow the rule used in ``icu/labs.py``: values are binned into population
 deciles, so each task takes the outermost bin and states that bin's real boundary, kept
@@ -26,7 +21,11 @@ The urine albumin-to-creatinine ratio takes ``LOINC/14959-1``
 ``LOINC/9318-7``; the latter appears in the vocabulary with no value bins at all, which
 suggests it carries little volume.
 
-Most of this specification is not here.  Thirteen tasks need derived code sets and are
+The metformin task conditions on ``RxNorm/6809``, the metformin ingredient, which
+Columbia carries as a single code.  Its conditioning guard uses ``forced_answer: True``
+and a 30-day window of its own, narrower than the task's 1-year horizon.
+
+Most of this specification is not here.  Seventeen tasks need derived code sets and are
 deferred: diabetic ketoacidosis (2 codes), CKD stage 3 (4), diabetic retinopathy (6),
 diabetic foot ulcer (11), heart failure (17), genitourinary infection (14), lower
 extremity amputation, retinal examination, and the insulin, GLP-1, SGLT2, statin and
@@ -184,6 +183,50 @@ TASKS = {
             },
             {
                 "query": "LOINC/14959-1",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 365,
+                "forced_answer": None,
+            },
+        ],
+    },
+    "At an outpatient visit, among patients with type 2 diabetes, given that metformin is prescribed within 30 days, does an eGFR below 45 appear within 1 year, conditional on surviving the window?": {
+        "metadata": {
+            "dataset": "columbia",
+            "setting": "longitudinal",
+            "anchor": "an outpatient visit",
+            "cohort": "type 2 diabetes",
+            "horizon": "1y",
+            "outcome": "eGFR",
+        },
+        "query": [
+            {
+                "query": "TIMELINE//END",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 365,
+                "forced_answer": False,
+            },
+            {
+                "query": "MEDS_DEATH",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 365,
+                "forced_answer": False,
+            },
+            {
+                "query": "RxNorm/6809",
+                "start_event": None,
+                "start_duration_days": 0,
+                "bound_event": None,
+                "duration_days": 30,
+                "forced_answer": True,
+            },
+            {
+                "query": "LOINC/98979-8//UCUM/mL/min/1.73.m2//value_[-inf,45.0)",
                 "start_event": None,
                 "start_duration_days": 0,
                 "bound_event": None,
