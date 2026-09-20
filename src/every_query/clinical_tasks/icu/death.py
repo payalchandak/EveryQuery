@@ -79,6 +79,7 @@ TASKS = {
     },
     "At ICU hour 24, does death occur before ICU discharge?": {
         "metadata": {
+            "placeholder": True,
             "dataset": "mimic",
             "setting": "icu",
             "anchor": "ICU hour 24",
@@ -97,6 +98,7 @@ TASKS = {
     },
     "At ICU hour 24, does death occur before hospital discharge?": {
         "metadata": {
+            "placeholder": True,
             "dataset": "mimic",
             "setting": "icu",
             "anchor": "ICU hour 24",
@@ -115,6 +117,7 @@ TASKS = {
     },
     "At ICU discharge, does death occur before hospital discharge?": {
         "metadata": {
+            "placeholder": True,
             "dataset": "mimic",
             "setting": "icu",
             "anchor": "ICU discharge",

@@ -39,6 +39,7 @@ and 1,483 CPT4 codes, deciding which are theatre procedures.
 TASKS = {
     "At hospital day 1 on a ward, does death occur before hospital discharge?": {
         "metadata": {
+            "placeholder": True,
             "dataset": "columbia",
             "setting": "longitudinal",
             "anchor": "hospital day 1 on a ward",
@@ -58,6 +59,7 @@ TASKS = {
     },
     "At hospital day 1 on a ward, does hospital discharge occur within 48 hours, conditional on being discharged from the hospital alive?": {
         "metadata": {
+            "placeholder": True,
             "dataset": "columbia",
             "setting": "longitudinal",
             "anchor": "hospital day 1 on a ward",
@@ -93,6 +95,7 @@ TASKS = {
     },
     "At hospital day 1 on a ward, does hospital discharge occur within 7 days, conditional on being discharged from the hospital alive?": {
         "metadata": {
+            "placeholder": True,
             "dataset": "columbia",
             "setting": "longitudinal",
             "anchor": "hospital day 1 on a ward",

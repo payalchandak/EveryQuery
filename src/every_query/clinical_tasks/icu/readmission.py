@@ -3,6 +3,7 @@
 TASKS = {
     "At ICU discharge, does ICU readmission occur before hospital discharge, conditional on being discharged from the hospital alive?": {
         "metadata": {
+            "placeholder": True,
             "dataset": "mimic",
             "setting": "icu",
             "anchor": "ICU discharge",
@@ -36,7 +37,13 @@ TASKS = {
         ],
     },
     "At ICU discharge, does ICU readmission occur within 72 hours, conditional on being discharged from the hospital alive?": {
-        "metadata": {"dataset": "mimic", "setting": "icu", "anchor": "ICU discharge", "horizon": "72h"},
+        "metadata": {
+            "placeholder": True,
+            "dataset": "mimic",
+            "setting": "icu",
+            "anchor": "ICU discharge",
+            "horizon": "72h",
+        },
         "query": [
             {
                 "query": "TIMELINE//END",
