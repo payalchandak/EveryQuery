@@ -1,0 +1,166 @@
+source,setting,task_group,query
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//50813//mmol/L//value_[4.0,inf) within 0.25d | no TIMELINE//END within 0.25d, no MEDS_DEATH within 0.25d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//50813//mmol/L//value_[4.0,inf) within 0.5d | no TIMELINE//END within 0.5d, no MEDS_DEATH within 0.5d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//50820//units//value_[-inf,7.26) within 0.5d | no TIMELINE//END within 0.5d, no MEDS_DEATH within 0.5d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//50821//mm Hg//value_[-inf,43.0) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//50882//mEq/L//value_[-inf,20.0) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//50885//mg/dL//value_[2.6,inf) within 3d | no TIMELINE//END within 3d, no MEDS_DEATH within 3d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//50912//mg/dL//value_[2.3,inf) within 2d | no TIMELINE//END within 2d, no MEDS_DEATH within 2d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//50912//mg/dL//value_[2.3,inf) within 3d | no TIMELINE//END within 3d, no MEDS_DEATH within 3d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//50931//mg/dL//value_[191.0,inf) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//50971//mEq/L//value_[-inf,3.5) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//50983//mEq/L//value_[-inf,133.0) within 2d | no TIMELINE//END within 2d, no MEDS_DEATH within 2d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//51222//g/dL//value_[-inf,7.9) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//51237//UNK//value_[2.6,inf) within 2d | no TIMELINE//END within 2d, no MEDS_DEATH within 2d"
+mimic_icu_24h,ICU,Abnormal lab,"LAB//RESULT//51265//K/uL//value_[-inf,86.0) within 2d | no TIMELINE//END within 2d, no MEDS_DEATH within 2d"
+mimic_icu_24h,ICU,Broad-spectrum antibiotic,"MEDICATION//START//CefePIME within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Broad-spectrum antibiotic,"MEDICATION//START//Ciprofloxacin HCl within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Broad-spectrum antibiotic,"MEDICATION//START//Levofloxacin within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Broad-spectrum antibiotic,"MEDICATION//START//Meropenem within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Broad-spectrum antibiotic,"MEDICATION//START//Piperacillin-Tazobactam within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Broad-spectrum antibiotic,"MEDICATION//START//Vancomycin within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Dialysis,"PROCEDURE//START//225441 within 2d | no TIMELINE//END within 2d, no MEDS_DEATH within 2d"
+mimic_icu_24h,ICU,Length of stay,"ICU_DISCHARGE within 1d | no TIMELINE//END within 1d, no MEDS_DEATH before ICU_DISCHARGE"
+mimic_icu_24h,ICU,Length of stay,"ICU_DISCHARGE within 2d | no TIMELINE//END within 2d, no MEDS_DEATH before ICU_DISCHARGE"
+mimic_icu_24h,ICU,Length of stay,"ICU_DISCHARGE within 3d | no TIMELINE//END within 3d, no MEDS_DEATH before ICU_DISCHARGE"
+mimic_icu_24h,ICU,Length of stay,"ICU_DISCHARGE within 7d | no TIMELINE//END within 7d, no MEDS_DEATH before ICU_DISCHARGE"
+mimic_icu_24h,ICU,Mortality,MEDS_DEATH before ICU_DISCHARGE
+mimic_icu_24h,ICU,Mortality,MEDS_DEATH within 1d
+mimic_icu_24h,ICU,Mortality,MEDS_DEATH within 28d
+mimic_icu_24h,ICU,Mortality,MEDS_DEATH within 365d
+mimic_icu_24h,ICU,Mortality,MEDS_DEATH within 3d
+mimic_icu_24h,ICU,Mortality,MEDS_DEATH within 90d
+mimic_icu_24h,ICU,Vasopressor,"INFUSION_START//221749//value_[3.0013728,inf) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Vasopressor,"INFUSION_START//221906//value_[0.32051384,inf) within 0.5d | no TIMELINE//END within 0.5d, no MEDS_DEATH within 0.5d"
+mimic_icu_24h,ICU,Vasopressor,"INFUSION_START//221906//value_[0.32051384,inf) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Ventilation,"PROCEDURE//START//224385 within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Ventilation,"PROCEDURE//START//225792 within 0.5d | no TIMELINE//END within 0.5d, no MEDS_DEATH within 0.5d"
+mimic_icu_24h,ICU,Ventilation,"PROCEDURE//START//225792 within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+mimic_icu_24h,ICU,Ventilation,"PROCEDURE//START//225794 within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100001//mg/dL//value_[236.0,inf) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100002//mg/dL//value_[3.27,inf) within 2d | no TIMELINE//END within 2d, no MEDS_DEATH within 2d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100002//mg/dL//value_[3.27,inf) within 3d | no TIMELINE//END within 3d, no MEDS_DEATH within 3d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100007//g/dL//value_[-inf,7.4) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100010//mEq/L//value_[-inf,132.0) within 2d | no TIMELINE//END within 2d, no MEDS_DEATH within 2d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100010//mmol/L//value_[-inf,132.0) within 2d | no TIMELINE//END within 2d, no MEDS_DEATH within 2d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100011//mEq/L//value_[-inf,3.4) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100011//mmol/L//value_[-inf,3.4) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100013//mEq/L//value_[-inf,20.0) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100013//mmol/L//value_[-inf,20.0) within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100014//10ˆ3/µL//value_[-inf,82.0) within 2d | no TIMELINE//END within 2d, no MEDS_DEATH within 2d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100014//K/UL//value_[-inf,56.0) within 2d | no TIMELINE//END within 2d, no MEDS_DEATH within 2d"
+nwicu_icu_24h,ICU,Abnormal lab,"LAB//100020//mg/dL//value_[3.0,inf) within 3d | no TIMELINE//END within 3d, no MEDS_DEATH within 3d"
+nwicu_icu_24h,ICU,Length of stay,"ICU_DISCHARGE within 1d | no TIMELINE//END within 1d, no MEDS_DEATH before ICU_DISCHARGE"
+nwicu_icu_24h,ICU,Length of stay,"ICU_DISCHARGE within 2d | no TIMELINE//END within 2d, no MEDS_DEATH before ICU_DISCHARGE"
+nwicu_icu_24h,ICU,Length of stay,"ICU_DISCHARGE within 3d | no TIMELINE//END within 3d, no MEDS_DEATH before ICU_DISCHARGE"
+nwicu_icu_24h,ICU,Length of stay,"ICU_DISCHARGE within 7d | no TIMELINE//END within 7d, no MEDS_DEATH before ICU_DISCHARGE"
+nwicu_icu_24h,ICU,Mortality,MEDS_DEATH before HOSPITAL_DISCHARGE
+nwicu_icu_24h,ICU,Mortality,MEDS_DEATH before ICU_DISCHARGE
+nwicu_icu_24h,ICU,Mortality,MEDS_DEATH within 28d
+nwicu_icu_24h,ICU,Mortality,MEDS_DEATH within 365d
+nwicu_icu_24h,ICU,Mortality,MEDS_DEATH within 3d
+nwicu_icu_24h,ICU,Mortality,MEDS_DEATH within 90d
+nwicu_icu_24h,ICU,Ventilation,"PROCEDURE//START//787541 within 0.5d | no TIMELINE//END within 0.5d, no MEDS_DEATH within 0.5d"
+nwicu_icu_24h,ICU,Ventilation,"PROCEDURE//START//787541 within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+nwicu_icu_24h,ICU,Ventilation,"PROCEDURE//START//792843 within 0.5d | no TIMELINE//END within 0.5d, no MEDS_DEATH within 0.5d"
+nwicu_icu_24h,ICU,Ventilation,"PROCEDURE//START//792843 within 1d | no TIMELINE//END within 1d, no MEDS_DEATH within 1d"
+amc_outpatient_visit_general,longitudinal,Mortality,MEDS_DEATH within 1825d
+amc_outpatient_visit_general,longitudinal,Mortality,MEDS_DEATH within 365d
+amc_outpatient_visit_general,longitudinal,Return visit,"Visit/ER within 30d | no TIMELINE//END within 30d, no MEDS_DEATH within 30d"
+amc_outpatient_visit_general,longitudinal,Return visit,"Visit/ER within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_general,longitudinal,Return visit,"Visit/OP within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_hf_codes,longitudinal,Abnormal lab,"LOINC/2160-0//UCUM/mg/dL//value_[2.34,inf) within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_hf_codes,longitudinal,Abnormal lab,"LOINC/2823-3//UCUM/mmol/L//value_[5.0,inf) within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_hf_codes,longitudinal,Hospitalization,"Visit/IP within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_hf_codes,longitudinal,Hospitalization,"Visit/IP within 90d | no TIMELINE//END within 90d, no MEDS_DEATH within 90d"
+amc_outpatient_visit_hf_codes,longitudinal,Lab monitoring,"LOINC/2823-3//ANY within 90d | no TIMELINE//END within 90d, no MEDS_DEATH within 90d"
+amc_outpatient_visit_hf_codes,longitudinal,Lab monitoring,"LOINC/33762-6//ANY within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_hf_codes,longitudinal,Medication initiation,"RxNorm/198223 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_hf_codes,longitudinal,Medication initiation,"RxNorm/200820 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_hf_codes,longitudinal,Medication initiation,"RxNorm/313096 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_hf_codes,longitudinal,Medication initiation,"RxNorm/351256 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_hf_codes,longitudinal,Mortality,MEDS_DEATH within 1825d
+amc_outpatient_visit_hf_codes,longitudinal,Mortality,MEDS_DEATH within 365d
+amc_outpatient_visit_hf_codes,longitudinal,Pacemaker insertion,ICD10PCS/02HK3JZ within 730d | no TIMELINE//END within 730d
+amc_outpatient_visit_hf_codes,longitudinal,Pacemaker insertion,ICD10PCS/0JH606Z within 730d | no TIMELINE//END within 730d
+amc_outpatient_visit_hf_codes,longitudinal,Response to medication,"Visit/IP within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d, no RxNorm/1373469 within 30d"
+amc_outpatient_visit_hf_codes,longitudinal,Response to medication,"Visit/IP within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d, no RxNorm/1373473 within 30d"
+amc_outpatient_visit_hf_codes,longitudinal,Response to medication,"Visit/IP within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d, no RxNorm/1486977 within 30d"
+amc_outpatient_visit_hf_codes,longitudinal,Response to medication,"Visit/IP within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d, no RxNorm/1486981 within 30d"
+amc_outpatient_visit_hf_codes,longitudinal,Response to medication,"Visit/IP within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d, no RxNorm/1488569 within 30d"
+amc_outpatient_visit_hf_codes,longitudinal,Response to medication,"Visit/IP within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d, no RxNorm/1545658 within 30d"
+amc_outpatient_visit_hf_codes,longitudinal,Response to medication,"Visit/IP within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d, no RxNorm/1545664 within 30d"
+amc_outpatient_visit_hf_codes,longitudinal,Response to medication,"Visit/IP within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d, no RxNorm/1545666 within 30d"
+amc_outpatient_visit_hf_codes,longitudinal,Response to medication,"Visit/IP within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d, no RxNorm/1545668 within 30d"
+amc_outpatient_visit_hf_codes,longitudinal,Return visit,"Visit/ER within 90d | no TIMELINE//END within 90d, no MEDS_DEATH within 90d"
+amc_outpatient_visit_hf_codes,longitudinal,Secondary diagnosis,ICD10CM/I48.0 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_hf_codes,longitudinal,Secondary diagnosis,ICD10CM/I48.1 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_hf_codes,longitudinal,Secondary diagnosis,ICD10CM/I48.11 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_hf_codes,longitudinal,Secondary diagnosis,ICD10CM/I48.19 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_hf_codes,longitudinal,Secondary diagnosis,ICD10CM/I48.2 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_hf_codes,longitudinal,Secondary diagnosis,ICD10CM/I48.20 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_hf_codes,longitudinal,Secondary diagnosis,ICD10CM/I48.21 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_hf_codes,longitudinal,Secondary diagnosis,ICD10CM/I48.91 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_hf_codes,longitudinal,Secondary diagnosis,ICD10CM/N18.3 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_hf_codes,longitudinal,Secondary diagnosis,ICD10CM/N18.30 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_hf_codes,longitudinal,Secondary diagnosis,ICD10CM/N18.31 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_hf_codes,longitudinal,Secondary diagnosis,ICD10CM/N18.32 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Abnormal lab,"LOINC/2160-0//UCUM/mg/dL//value_[2.34,inf) within 730d | no TIMELINE//END within 730d"
+amc_outpatient_visit_t2d_codes,longitudinal,Abnormal lab,"LOINC/4548-4//UCUM/%//value_[8.9,inf) within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Complication,ICD10CM/E11.319 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Complication,ICD10CM/E11.3293 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Complication,ICD10CM/E11.3593 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Complication,ICD10CM/E11.621 within 730d | no TIMELINE//END within 730d
+amc_outpatient_visit_t2d_codes,longitudinal,Complication,"ICD10CM/E11.649 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Lab monitoring,"LOINC/14959-1//ANY within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Lab monitoring,"LOINC/4548-4//ANY within 180d | no TIMELINE//END within 180d, no MEDS_DEATH within 180d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/104491 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/152923 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/1545664 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/1551300 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/198211 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/200345 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/259255 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/262095 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/312961 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/314231 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/617310 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/617311 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/617312 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/617314 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/617318 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/617320 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/859419 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/859421 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/859424 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/859426 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/859747 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/859749 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/859751 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/859753 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/897126 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/904458 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/904467 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/904469 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/904475 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Medication initiation,"RxNorm/904477 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Mortality,MEDS_DEATH within 1825d
+amc_outpatient_visit_t2d_codes,longitudinal,Screening,"CPT4/92250 within 365d | no TIMELINE//END within 365d, no MEDS_DEATH within 365d"
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.1 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.20 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.21 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.22 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.23 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.30 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.31 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.32 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.33 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.42 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.43 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.810 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.814 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/I50.9 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/N18.3 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/N18.30 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/N18.31 within 1095d | no TIMELINE//END within 1095d
+amc_outpatient_visit_t2d_codes,longitudinal,Secondary diagnosis,ICD10CM/N18.32 within 1095d | no TIMELINE//END within 1095d
