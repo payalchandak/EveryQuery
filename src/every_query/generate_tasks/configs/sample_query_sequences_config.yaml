@@ -1,0 +1,100 @@
+# Hydra config for the conditional query-*sequence* label generator.
+#
+# Path roots are machine-specific, **required** Hydra args — no `.env`/env-var fallback (#235).
+# Pass them on the CLI as shell-expanded vars:
+#   data_dir=$TOKENIZED_EVENTS_DIR out_dir=$TRAINING_TASKS_DIR query_codes=$TENSORIZED_COHORT_DIR
+#
+#   data_dir     MEDS dataset root (event shards under `{data_dir}/data/{split}/*.parquet`)
+#   out_dir      final-output-only root; labeled shards land as `{split}/{shard}.parquet` and
+#                nothing else, so it is directly usable as MTD's `task_labels_dir`
+#   query_codes  sampling universe: a metadata root dir (loads `{dir}/metadata/codes.parquet`),
+#                an explicit Hydra list (`query_codes=[HR,TEMP]`), or a YAML/parquet path
+#
+# All three are `???` (mandatory); leaving one unset raises OmegaConf's MissingMandatoryValue.
+# The intermediate-artifacts root has no key of its own: it is always the sibling
+# `{parent}/{name}_artifacts` of out_dir, so the two output trees never nest (invariant 7):
+#
+#   out_dir/{split}/{shard}.parquet          <- final outputs ONLY
+#   {name}_artifacts/{split}/
+#       _prediction_time_counts.parquet      <- Stage 0 summary
+#       _prediction_times/{shard}.parquet    <- Stage 0 map
+#       _index/{shard}.parquet               <- sequence index
+
+data_dir: ???
+out_dir: ???
+query_codes: ???
+
+split: train
+seed: 1
+
+# Sampling budget: total query sequences drawn across the whole split.
+# One sampled patient context = one sequence = one output row.  This is a *global* budget, not a
+# per-shard one — Stage 2 draws contexts across the whole split weighted by each subject's
+# prediction-time count — so it supersedes the fork's per-shard `n_contexts`.
+num_training_sequence_examples: 1000000
+
+# Each sequence is Uniform{min..max} i.i.d. queries (random code incl. TIMELINE//END, random
+# duration), fully random order — no privileged censor position.
+min_queries: 1
+max_queries: 5
+
+# Duration draw (Stage 1'), delegated to `sample_tasks.QueryDistribution` so the sequence sampler
+# and the training-task sampler draw from an identical distribution.  `duration_days` is a **float**
+# (no day-rounding) — the fork's integer-day durations are gone, so any checkpoint trained on the
+# fork's labels must be retrained rather than scored against sequences drawn from this config.
+# These keep the sequence configs' `duration_min`/`duration_max` names rather than the base
+# class's `min_duration`/`max_duration`, so this file and
+# `sample_evaluation_query_sequences_config.yaml` stay key-identical (a test asserts that).
+duration_min: 1
+duration_max: 1826
+duration_distribution: log-uniform # uniform | log-uniform
+
+# Minimum prior *prediction times* (distinct (subject_id, time) rows, NOT events) required before
+# a prediction time is eligible.  Supersedes the fork's event-based `min_context_per_subject`; the
+# value carried across is the upstream default, not a translation of the old event-count threshold
+# — the two count different things, so revisit it before any real-cohort run.
+min_prediction_times_per_subject: 50
+
+# Optional cap on the Stage 4' labeling worker pool; null => resolve_workers() uses cores-on-node,
+# an explicit int caps that result downward only.  Matches `sample_training_tasks_config.yaml`.
+max_workers: null
+
+# --- Sequence-structure sweep knobs (default OFF: fully random baseline) ---
+# Probability a sequence is forced to start with the TIMELINE//END query (upweights the
+# censoring-control pattern).  0.0 = pure random.
+eos_first_fraction: 0.0
+# Duration coupling within a sequence: random | same | nondecreasing.
+duration_mode: random
+
+# --- Event-bounded duration queries -----------------------------------------------------------
+# Fraction of queries whose window ends at the next occurrence of a boundary EVENT rather than
+# after a fixed horizon.  0.0 = off (no `bound_events` column is written at all, and the output is
+# byte-identical to a pre-feature run).
+#
+# The boundary is drawn uniformly from the SAME universe the query codes come from: every leaf
+# code (including TIMELINE//END) and, with `ontology_dir` set, every ancestor node.  An ancestor
+# boundary (e.g. `LAB//220645` or a dual-role `CODE//ANY` node) fires on itself or any descendant;
+# a leaf boundary fires only on that exact code.  A query bounded by itself or by one of its own
+# ancestors is unconditionally False; the sampler accepts that.  Stage 4' logs how often a
+# boundary never fires (window runs to the end of the record).
+#
+# NOTE these fractions are a zero-sum draw on a fixed query budget: every event-bounded query is
+# one fewer ordinary horizon query.  The upstream experiment measured -0.0088 AUROC on scalar
+# tasks at a 50% diet.  Prefer running one query form at a time before mixing.
+eventbound_fraction: 0.5
+
+# --- Ontology / hierarchical embeddings ---------------------------------------------------------
+# Directory of ontology artifacts written by EQ_build_ontology (nodes/mix/closure parquets).
+# Set it to put every ancestor NODE into the query universe — each leaf and each ancestor is then
+# drawn with equal probability, as a query and as an event boundary — and to explode the event
+# stream through the closure so an ancestor query is labelled by ordinary occurrence ("did any
+# descendant of X occur").  null = off (leaf codes only).  Must be the SAME directory the model is
+# trained with — the indices have to agree, or a query would address the wrong embedding row.
+ontology_dir: null
+
+overwrite: false
+
+hydra:
+  output_subdir: null
+  job:
+    chdir: false

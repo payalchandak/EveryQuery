@@ -102,3 +102,38 @@ def test_resume_rejects_non_legacy_drift(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="seed"):
         validate_resume_directory(tmp_path, new_cfg)
+
+
+def test_resume_survives_an_opt_in_knob_that_did_not_exist_yet(tmp_path: Path) -> None:
+    """A run dir predating an opt-in feature flag resumes while the flag is left unset, at any depth.
+
+    Ontology support (PR #32) added ``lightning_module.model.ontology_dir`` /
+    ``cohort_vocab_fingerprint`` and ``datamodule.dataset_kwargs.ontology_dir`` to the shipped
+    multitask config, all defaulting to ``null``.  Without this exemption every run dir started
+    before that release would refuse to resume, naming keys whose value turns the feature off.
+    """
+    saved = tmp_path / "config.yaml"
+    _write_cfg(saved, lightning_module={"model": {"max_windows": 5}})
+
+    unset = OmegaConf.create(
+        {
+            "seed": 140799,
+            "datamodule": {"config": {"max_seq_len": 256}, "dataset_kwargs": None},
+            "lightning_module": {
+                "model": {"max_windows": 5, "ontology_dir": None, "cohort_vocab_fingerprint": None}
+            },
+        }
+    )
+    validate_resume_directory(tmp_path, unset)
+
+    # Turning the new knob on *is* structural drift: the resumed run would train a wider table
+    # against ancestor-mixed rows the original never saw.
+    turned_on = OmegaConf.create(
+        {
+            "seed": 140799,
+            "datamodule": {"config": {"max_seq_len": 256}},
+            "lightning_module": {"model": {"max_windows": 5, "ontology_dir": "/onto"}},
+        }
+    )
+    with pytest.raises(ValueError, match="ontology_dir"):
+        validate_resume_directory(tmp_path, turned_on)

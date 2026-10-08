@@ -11,8 +11,10 @@ logs/*
 MEDS_EIC_AR/
 *.png
 *.pkl
+*.pdf
 experiment_registry.pkl
 outputs/
+node_modules/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

@@ -76,6 +76,20 @@ class TestWeightDecayParamGroupSeparation:
                 f"{name!r} is in the non-norm/bias group but _is_norm_bias_param returns True"
             )
 
+    def test_every_norm_gain_is_in_the_no_decay_group(self, demo_model):
+        """Norm gains without a ``layer`` prefix (ModernBERT ``attn_norm`` / ``mlp_norm`` / ``final_norm``,
+        Llama's final ``norm``) must not be weight-decayed either."""
+        module, optimizer = self._build_module_and_optimizer(demo_model)
+        ptr_to_name = self._param_name_map(module)
+        group1_names = {ptr_to_name[p.data_ptr()] for p in optimizer.param_groups[1]["params"]}
+        norm_gains = [n for n, _ in module.named_parameters() if n.endswith("norm.weight")]
+        assert norm_gains, "the demo model has no *norm.weight parameters — test would be vacuous"
+        assert any(not n.lower().endswith("layernorm.weight") for n in norm_gains), (
+            "expected at least one norm gain without a `layer` prefix to make this test meaningful"
+        )
+        decayed = sorted(n for n in norm_gains if n not in group1_names)
+        assert not decayed, f"norm gains landed in the weight-decayed group: {decayed}"
+
     def test_all_params_accounted_for(self, demo_model):
         module, optimizer = self._build_module_and_optimizer(demo_model)
 

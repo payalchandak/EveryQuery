@@ -124,6 +124,17 @@ def diff_configs(new_config: dict[str, Any], old_config: dict[str, Any]) -> dict
         {'foo.bar': 'is present in the old config, but not in the new config.',
          'b': 'is not present in the old config, but is in the new config.'}
 
+        A key the new config *adds* with the value ``None`` is not a difference, at any depth: the
+        old run predates the knob and the new invocation leaves it unset, so the two agree on
+        behavior.  This is what keeps a run dir resumable across a release that adds an opt-in
+        feature flag (``ontology_dir``, ``cohort_vocab_fingerprint``, ...).  An added key with a
+        real value still differs — that one changes what the run does.
+
+        >>> diff_configs({"c": 1, "added": None, "foo": {"bar": 3, "opt": None}}, old_cfg)
+        {}
+        >>> diff_configs({"c": 1, "added": 5, "foo": {"bar": 3}}, old_cfg)
+        {'added': 'is not present in the old config, but is in the new config.'}
+
         Enum parameters with casing / string-vs-enum drift are not flagged:
 
         >>> old_cfg = {
@@ -164,9 +175,15 @@ def diff_configs(new_config: dict[str, Any], old_config: dict[str, Any]) -> dict
                 f"but {new_val} ({type(new_val).__name__}) in the new config."
             )
 
-    for key in new_config:
-        if key not in old_config:
-            differences[key] = "is not present in the old config, but is in the new config."
+    for key, new_val in new_config.items():
+        if key in old_config:
+            continue
+        # An added key left at ``None`` is behaviorally inert — the feature it gates is off, exactly
+        # as it was for a run that predates the key existing.  Flagging it would make every run dir
+        # unresumable the moment a new opt-in knob ships with a ``null`` default.
+        if new_val is None:
+            continue
+        differences[key] = "is not present in the old config, but is in the new config."
 
     return differences
 
@@ -180,7 +197,11 @@ def validate_resume_directory(output_dir: Path, cfg: DictConfig) -> None:
     performance knobs, and training-schedule overrides that are reasonable to bump on resume.  Any
     structural drift (model hyperparameters, dataset shape, seed) raises ``ValueError``
     with a per-key message.  Top-level keys in ``LEGACY_REMOVED_KEYS`` are stripped from the
-    saved config before diffing so runs started before the key was removed remain resumable.
+    saved config before diffing so runs started before the key was removed remain resumable, and
+    :func:`diff_configs` ignores keys the new config *adds* with a ``None`` value, so a run dir
+    started before an opt-in knob shipped (``lightning_module.model.ontology_dir``,
+    ``lightning_module.model.cohort_vocab_fingerprint``, ...) stays resumable while that knob is
+    left unset.
 
     Args:
         output_dir: The run directory being resumed from.

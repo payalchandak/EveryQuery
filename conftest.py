@@ -387,6 +387,83 @@ def sample_batch(demo_dataset: EveryQueryPytorchDataset) -> EveryQueryBatch:
     return demo_dataset.collate(items)
 
 
+# ── Conditional query-sequence fixtures ─────────────────────────────────
+
+
+@pytest.fixture(scope="session")
+def seq_task_labels_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Hand-built ``QuerySeqSchema``-shaped query-sequence labels for train + tuning splits.
+
+    Layout matches ``query_sequence_labeling.run`` output::
+
+        {seq_task_labels_dir}/{split}/{shard}.parquet
+
+    Each row: ``(subject_id, prediction_time, queries, durations, answers)``.  Answers are
+    binary observed-occurrence (no nulls); queries are ordinary codes in random order.
+    Sequence lengths vary (2 and 3 blocks) so collation exercises padding.
+    """
+    task_dir = tmp_path_factory.mktemp("cq_seq_labels")
+
+    for split, subjects in [(train_split, _TRAIN_SUBJECTS), (tuning_split, _TUNING_SUBJECTS)]:
+        split_dir = task_dir / split
+        split_dir.mkdir(parents=True, exist_ok=True)
+
+        rows = []
+        for i, subj in enumerate(subjects):
+            if i % 2 == 0:
+                queries = [_QUERY_CODES[0], _QUERY_CODES[1], _QUERY_CODES[0]]
+                durations = [30.0, 7.0, 60.0]
+                answers = [True, False, True]
+            else:
+                queries = [_QUERY_CODES[1], _QUERY_CODES[0]]
+                durations = [14.0, 3.0]
+                answers = [False, True]
+            rows.append(
+                {
+                    "subject_id": subj,
+                    "prediction_time": _PRED_TIMES[subj],
+                    "queries": queries,
+                    "durations": durations,
+                    "answers": answers,
+                }
+            )
+
+        df = pl.DataFrame(rows).cast(
+            {
+                "subject_id": pl.Int64,
+                "prediction_time": pl.Datetime("us"),
+                "queries": pl.List(pl.Utf8),
+                "durations": pl.List(pl.Float32),
+                "answers": pl.List(pl.Boolean),
+            }
+        )
+        df.write_parquet(split_dir / "0.parquet")
+
+    return task_dir
+
+
+@pytest.fixture(scope="session")
+def seq_dataset(tensorized_cohort_dir: Path, seq_task_labels_dir: Path):
+    """``QuerySeqPytorchDataset`` for the *train* split over the fixture cohort."""
+    from every_query.data.query_seq_dataset import QuerySeqPytorchDataset
+
+    cfg = MEDSTorchDataConfig(
+        tensorized_cohort_dir=str(tensorized_cohort_dir),
+        task_labels_dir=str(seq_task_labels_dir),
+        max_seq_len=64,
+        seq_sampling_strategy="to_end",
+        static_inclusion_mode="omit",
+        batch_mode="SM",
+    )
+    return QuerySeqPytorchDataset(cfg, split=train_split)
+
+
+@pytest.fixture(scope="session")
+def seq_sample_batch(seq_dataset):
+    """A collated ``QuerySeqBatch`` covering both sequence lengths in the fixture."""
+    return seq_dataset.collate([seq_dataset[i] for i in range(len(seq_dataset))])
+
+
 # ── Doctest namespace injection ─────────────────────────────────────────
 
 

@@ -3,7 +3,7 @@
 Covers the three-valued label (True / False / null-censored) with **censoring resolved before
 occurrence** (an unobserved tail is null even if the query occurred in the observed span) and
 **death as a fully-observed terminus** (a subject dead by the window end is never censored — a
-non-occurrence is a genuine False).  Also pins strict-``>`` at prediction_time, inclusive
+non-occurrence is a genuine False).  Also pins strict-``>`` at prediction_time, strict
 window-end, the unknown-subject raise, dtype normalization on the event-shard read path, the
 worker's skip/overwrite/atomicity behavior, and stale-temp cleanup.  Gap tests pin the
 forward-only asof direction (past events don't count) and query-code isolation.
@@ -81,31 +81,44 @@ class TestEvaluateIndexDfEdgeCases:
         result_zero = evaluate_index_df(index_df_zero, events)
         assert result_zero["boolean_value"].to_list() == [False]
 
-    def test_event_exactly_at_window_end_is_included(self):
-        """An event at exactly ``prediction_time + duration_days`` counts as an occurrence.
+    def test_event_exactly_at_window_end_is_excluded(self):
+        """An event at exactly ``prediction_time + duration_days`` does NOT count as an occurrence.
 
-        The upper window bound is **inclusive** (``<=``), matching upstream
-        ``MEDS_trajectory_evaluation`` (``tte <= evaluation_window_end``).  This test hardcodes
-        the expected label rather than re-deriving it, so it pins the inclusive boundary
-        independent of the implementation's own comparison (issue #223).
+        The upper window bound is **strict** (``<``), so the window is open at both ends:
+        ``(prediction_time, prediction_time + duration_days)``.  This test hardcodes the expected
+        labels rather than re-deriving them, so it pins the strict boundary independent of the
+        implementation's own comparison (issue #223).
 
-        - subject 1: only matching event lands exactly on ``window_end`` → ``True``.
+        **This deliberately diverges from upstream ``MEDS_trajectory_evaluation``**, which compares
+        ``tte <= evaluation_window_end``.  The divergence is the repo owner's decision (2026-08-22)
+        to make every window in this repo open at both ends, so that time-bounded and event-bounded
+        queries follow one rule and an event-bounded query means "strictly before the boundary".
+        ``tests/test_window_bounds_contract.py`` is where that rule lives and drives this labeller
+        alongside the sequence labellers.  If upstream parity for the marginal baseline matters more
+        than internal consistency, this is the test that records the trade-off.
+
+        - subject 1: only matching event lands exactly on ``window_end`` → ``False``.
         - subject 2: only matching event lands 1µs **past** ``window_end`` → ``False``
           (uncensored, so the bound — not censoring — is what excludes it).
+        - subject 3: only matching event lands 1µs **before** ``window_end`` → ``True``.
+          Load-bearing: without it a labeller that had lost its upper bound in the other direction
+          (answering False for everything near the top edge) would pass this test.
         """
         # window_end for prediction_time 2020-01-01 + 10 days == 2020-01-11 00:00:00 exactly.
         window_end = datetime(2020, 1, 11)
         events = (
             pl.DataFrame(
                 {
-                    "subject_id": [1, 1, 2, 2],
+                    "subject_id": [1, 1, 2, 2, 3, 3],
                     "time": [
-                        window_end,  # subj 1: exactly on the boundary → included
+                        window_end,  # subj 1: exactly on the boundary → excluded
                         datetime(2021, 1, 1),  # pushes max_time well past window_end (uncensored)
                         window_end + timedelta(microseconds=1),  # subj 2: just past boundary → excluded
                         datetime(2021, 1, 1),  # uncensored
+                        window_end - timedelta(microseconds=1),  # subj 3: just inside → included
+                        datetime(2021, 1, 1),  # uncensored
                     ],
-                    "code": ["A", "A", "A", "A"],
+                    "code": ["A", "A", "A", "A", "A", "A"],
                 }
             )
             .with_columns(pl.col("time").cast(pl.Datetime("us")))
@@ -114,16 +127,16 @@ class TestEvaluateIndexDfEdgeCases:
 
         index_df = pl.DataFrame(
             {
-                "subject_id": [1, 2],
-                "prediction_time": [datetime(2020, 1, 1), datetime(2020, 1, 1)],
-                "query": ["A", "A"],
-                "duration_days": [10, 10],
+                "subject_id": [1, 2, 3],
+                "prediction_time": [datetime(2020, 1, 1)] * 3,
+                "query": ["A", "A", "A"],
+                "duration_days": [10, 10, 10],
             }
         ).with_columns(pl.col("prediction_time").cast(pl.Datetime("us")))
 
         result = evaluate_index_df(index_df, events)
         labels = {row["subject_id"]: row["boolean_value"] for row in result.iter_rows(named=True)}
-        assert labels == {1: True, 2: False}
+        assert labels == {1: False, 2: False, 3: True}
 
     def test_unknown_subject_raises(self):
         """An index_df row referencing a subject absent from events_df raises: index_df and events_df

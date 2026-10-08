@@ -1,0 +1,222 @@
+# Hydra config for the dense-grid conditional query-*sequence* evaluation generator.
+#
+# Same knobs and semantics as `sample_evaluation_tasks_config.yaml`, extended from a
+# `codes x durations` grid to ordered query sequences: `K` prediction times are sampled per subject
+# of every shard of `split` (gated on `min_context_per_subject` prior events, optionally subsampled
+# by subject) and the *same* `N` sequences are labeled at every one of them.  The cohort half reuses
+# `sample_evaluation_tasks`' sampler on its seed axes, so for one `(seed, split, K, min_context,
+# fraction)` both generators score the identical `(subject, time)` set — the flat grid and the
+# sequence grid are directly comparable.  This endpoint emits QuerySeqSchema rows
+# (queries/durations/answers list columns) for EQ_predict_multitask, where that one emits flat
+# TaskQuerySchema rows for EQ_predict.
+#
+# All shards under `{data_dir}/data/{split}/*.parquet` are discovered and processed in one
+# invocation (one output parquet per shard) — there is no shard knob.
+#
+# Path roots are machine-specific, **required** Hydra args — no `.env`/env-var fallback (#235).
+# Pass them on the CLI as shell-expanded vars:
+#   data_dir=$TOKENIZED_EVENTS_DIR out_dir=$EVAL_SEQ_TASKS_DIR query_codes=$TENSORIZED_COHORT_DIR
+#
+#   data_dir     MEDS dataset root (event shards under `{data_dir}/data/{split}/*.parquet`)
+#   out_dir      output root (layout below).  Give it a root distinct from
+#                `EQ_generate_evaluation_tasks`' — both write `eval/{split}/{shard}.parquet`, in
+#                incompatible schemas, and EQ_predict_multitask rglobs whatever it is pointed at.
+#   query_codes  vocabulary: a metadata root dir (loads `{dir}/metadata/codes.parquet`), an
+#                explicit Hydra list, or a YAML/parquet path.  With `sequences_path` set it is
+#                used only to reject codes outside the model's vocabulary.
+#
+# Output layout (`{out_dir}/eval` is directly usable as `EQ_predict_multitask tasks_dir=...`):
+#   {out_dir}/eval/{split}/{shard}.parquet          labeled grid, one file per shard
+#   {out_dir}/eval_unique/{split}/{shard}.parquet   deduped (subject_id, prediction_time)
+# The only intermediate is the per-shard provenance sidecar at the sibling
+# `{out_dir}_artifacts/_labeled/eval/{split}/{shard}.json`, recording the ontology, specs and cohort
+# source the shard was labeled under; `overwrite: false` skips a shard only when all three match.
+
+data_dir: ???
+out_dir: ???
+query_codes: ???
+
+split: held_out # typical inference split; use `tuning` for intermediate validation.
+seed: 1
+
+# --- The cohort (identical to sample_evaluation_tasks_config.yaml) ----------------------------
+# How many prediction times to sample per subject.  The grid is
+# `prediction_times_per_subject x num_evaluation_sequences` rows per subject.
+prediction_times_per_subject: 1
+
+# Minimum prior events a subject must have accumulated before a prediction time is valid.
+min_context_per_subject: 50
+
+# Optional subject subsample: a float in (0, 1] applies a deterministic per-subject hash-threshold
+# filter, so the expected fraction is honored regardless of shard size and is a uniform global
+# subsample (subject IDs are disjoint across shards).  Values outside (0, 1] raise.  null disables.
+subject_subsample_fraction: null
+
+# Supplied-cohort override: a parquet with at least (subject_id, prediction_time).  Extra columns
+# are dropped and duplicate rows deduped.  When set, the three knobs above are ignored — the cohort
+# is labeled verbatim, partitioned into shard files by subject — and every subject must be present
+# in `split`, or the run raises before labeling anything.  Leave null to sample the cohort.
+contexts_path: null
+
+# Also emit the deduped (subject_id, prediction_time) parquet under
+# {out_dir}/eval_unique/{split}/{shard}.parquet — the input shape a trajectory-generation baseline
+# expects (one trajectory per prediction time, not one per sequence).
+write_unique_prediction_times: true
+
+# Optional global support filter on conditional tasks.  After all shards are labeled, keep every
+# positive and negative row for a task only when its final answer is true at least this many times
+# across the whole split.  Task identity includes answers before the final one, just as
+# EQ_evaluate_multitask does.  eval_unique/ is rewritten from the retained rows, so it still mirrors
+# eval/.  null keeps all labeled rows (the existing behavior).  Changing this
+# value in the same out_dir regenerates the unfiltered grid before applying the new threshold.
+min_task_positives: 40
+
+# --- The N query sequences ------------------------------------------------
+# Path to designed sequences.  Leave null to instead draw `num_evaluation_sequences` of them from the
+# training query distribution (see the sampling knobs below).
+sequences_path: null
+#
+# `sequences_path` accepts any of:
+#   YAML/JSON mapping    name -> [entry, ...]
+#   YAML/JSON list       [[entry, ...], ...]                 (names auto-generated)
+#   long-format parquet  (seq_id, position, query, start_event, start_duration_days, bound_event,
+#                         duration_days, forced_answer)       — every column required
+# where an entry is a mapping that spells out ALL SIX keys (a missing key is an error; `null` is a
+# legal value; see the window rule under "Window starts" below):
+#   query                               a vocabulary code (or an ancestor node, with `ontology_dir`)
+#   start_event / start_duration_days   a code + null,  OR  null + days >= 0 (0 = prediction time)
+#   bound_event / duration_days         a code + null,  OR  null + days > 0 (from the resolved start)
+#   forced_answer                       true | false | null
+# `forced_answer` is the answer FED TO THE MODEL for that query when it conditions a later one, in
+# place of the labeled truth ("assume Q1 = YES, what is P(Q2)?"); null teacher-forces the truth.  It
+# never alters the labels — `answers` stays the truth and the final query is scored against it — and
+# it MUST be null on the final query of every sequence, which is scored and conditions nothing.
+# e.g. designed.yaml:
+#   death_given_not_censored:              # "the record does NOT end within 30d" — now P(death)?
+#     - {query: TIMELINE//END, start_event: null, start_duration_days: 0,
+#        bound_event: null, duration_days: 30, forced_answer: false}
+#     - {query: MEDS_DEATH, start_event: null, start_duration_days: 0,
+#        bound_event: null, duration_days: 30, forced_answer: null}
+#   sepsis_before_discharge:               # closes at the next discharge
+#     - {query: SEPSIS, start_event: null, start_duration_days: 0,
+#        bound_event: HOSPITAL_DISCHARGE//HOME, duration_days: null, forced_answer: null}
+#   post_admission:                        # opens at the next admission, closes 30d after it
+#     - {query: LAB//X, start_event: HOSPITAL_ADMISSION, start_duration_days: null,
+#        bound_event: null, duration_days: 30, forced_answer: null}
+#   delayed:                               # opens 7d after the prediction time, closes 30d later
+#     - {query: ICD//I10, start_event: null, start_duration_days: 7,
+#        bound_event: null, duration_days: 30, forced_answer: null}
+# On this path nothing is sampled: the codes, durations, starts and forced answers are exactly what
+# you wrote, and `query_codes` is used only to reject query, boundary and start codes outside the
+# model's vocabulary.  The grid gains a `forced_answers` list column only when some spec forces one.
+
+# --- Sampling knobs (all `sequences_path: null` only) ---------------------
+# The code and duration distributions below mirror `sample_query_sequences_config.yaml` so a
+# sampled evaluation grid is drawn from the same distribution the model was pretrained on.
+# If your checkpoint was trained with overrides, pass the same overrides here — an
+# out-of-distribution horizon shows up as an unexplained metric shift, not as an error.
+
+# Number of sequences to draw.  They are drawn once, seeded on `(seed, "eval_seq_specs", split)`
+# alone, and shared across every context of every shard — so the same `(seed, split)` yields the
+# same `N` sequences for any cohort, and two cohorts' metrics are comparable query-for-query.
+num_evaluation_sequences: 1000
+
+# Sequence length ~ Uniform{min_queries..max_queries} inclusive, per sequence.  Fixed at 3
+# rather than training's 1..5 range: one length keeps the grid simple and makes per-position
+# comparisons across sequences clean (every sequence has a position 0, 1 and 2).  Still in
+# distribution, since 3 is inside the range the model was trained on — unlike the duration
+# bounds below, widening/narrowing these does not move the grid off-distribution as long as
+# they stay within `[training min_queries, training max_queries]`.
+min_queries: 1
+max_queries: 3
+
+# Duration bounds in days.  Each query's horizon is drawn log-uniformly over the continuous
+# [min, max] interval and kept as a **float** (no day-rounding) — so it skews short: over
+# 1..1826 the median is ~43d and ~45% of horizons are <= 30d.
+# These three must stay byte-equal to `sample_query_sequences_config.yaml` (a test asserts it):
+# both sides feed the same `QueryDistribution`, so any drift silently makes the eval grid
+# out-of-distribution and reads as an unexplained metric shift rather than an error.
+duration_min: 1
+duration_max: 1826
+duration_distribution: log-uniform # uniform | log-uniform
+
+# Codes are drawn per query (not per sequence) iid uniform over `query_codes`, with
+# replacement — a code can repeat within a sequence, and TIMELINE//END is an ordinary member,
+# so it lands on any given query with probability 1/|vocab|.  `eos_first_fraction` forces
+# position 0 to be the end-of-timeline query that often instead.  `duration_mode` couples
+# horizons within a sequence: random | same | nondecreasing.
+eos_first_fraction: 0.0
+duration_mode: random
+
+# --- Event-bounded duration queries -----------------------------------------------------------
+# Must mirror sample_query_sequences_config.yaml exactly (the two are asserted key-identical on
+# every sampling knob): a knob that drifts between the training sampler and the eval grid
+# silently invalidates the grid.  See that file for the full explanation.
+#
+# Fraction of *sampled* eval queries that are event-bounded; the boundary is drawn uniformly from
+# the query universe (leaves plus, with `ontology_dir`, ancestor nodes).  Designed specs set their
+# bounds explicitly instead, via a `[code, -1, bound_event]` triple or the parquet `bound_event`
+# column; this fraction is ignored when `sequences_path` is set.
+eventbound_fraction: 0.5
+
+# --- Window starts (issue #27) ------------------------------------------------------------------
+# Each query's window may open later than the prediction time.  For query position j:
+#
+#   start = prediction_time + start_duration            (start_event null)
+#         | first occurrence of start_event STRICTLY AFTER prediction_time   (else: empty window)
+#   end   = start + duration                             (bound_event null)
+#         | first occurrence of bound_event STRICTLY AFTER the RESOLVED START (else: end of record)
+#   answer = start < some occurrence of the query code < end          (both endpoints open)
+#
+# The end is measured from the resolved start, never from the prediction time; a start event that
+# never occurs leaves the window empty (answer False, even if the end is also unresolved).  This is
+# exactly `sample_multitask_sequences_config.yaml`'s window rule (open_open / prediction_time /
+# resolved_start / empty_window / infinity), so a multitask model can be scored on this grid.
+#
+# The shipped defaults draw active starts (20% event-defined, 40% at the prediction time, 40% after
+# a delay).  `eventstart_fraction=0 prediction_time_start_fraction=1` instead opens every sampled
+# window at the prediction time and reproduces the pre-#27 grid exactly: the same specs on the same
+# seed, and no `start_durations` / `start_events` columns in the output.  Only the START
+# component below mirrors the multitask sampler; the query / duration / end draw above stays
+# parity-anchored to `sample_query_sequences_config.yaml`, and the start draw uses its own three
+# seed axes ("start_forms", "start_durations", "start_codes"), so changing any start knob perturbs
+# none of the other draws.  Designed specs (`sequences_path`) set their starts explicitly and ignore
+# these knobs.
+#
+# NOTE: active starts are for EQ_predict_multitask alone — QuerySeqPytorchDataset rejects a grid
+# carrying any active start unless the caller opts in, which only that adapter does.
+#
+# Per sampled query one uniform u picks the start form (the multitask sampler's cumulative split):
+#   u < eventstart_fraction                                     => event-defined start
+#   u < eventstart_fraction + prediction_time_start_fraction    => the prediction time itself
+#   otherwise                                                   => a positive start delay
+# Both fractions must be in [0, 1] and sum to at most 1.
+eventstart_fraction: 0.2
+prediction_time_start_fraction: 0.4
+
+# Start-delay draw for the "positive delay" form, in days after the prediction time.
+start_duration_min: 1
+start_duration_max: 180
+start_duration_distribution: log-uniform # uniform | log-uniform
+
+# Start-event pool for the "event-defined" form: null draws uniformly from the whole query universe
+# (leaves plus, with `ontology_dir`, ancestor nodes); or an explicit Hydra list / YAML / parquet
+# path of codes, every one of which must be in the effective vocabulary.  A nonzero
+# `eventstart_fraction` requires a non-empty pool.
+start_event_codes: null
+
+# --- Ontology / hierarchical embeddings ---------------------------------------------------------
+# Directory of ontology artifacts written by EQ_build_ontology (nodes/mix/closure parquets).
+# Set it to put every ancestor NODE into the query universe — each leaf and each ancestor is then
+# drawn with equal probability, as a query and as an event boundary — and to explode the event
+# stream through the closure so an ancestor query is labelled by ordinary occurrence ("did any
+# descendant of X occur").  null = off (leaf codes only).  Must be the SAME directory the model is
+# trained with — the indices have to agree, or a query would address the wrong embedding row.
+ontology_dir: null
+
+overwrite: false
+
+hydra:
+  output_subdir: null
+  job:
+    chdir: false

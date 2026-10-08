@@ -1,0 +1,39 @@
+# Config for EQ_build_ontology — derives an ontology DAG from a cohort's code metadata.
+#
+# Both paths are required with no env-var fallback (matching the repo's #235 policy); pass the
+# shell-expanded path variables from env.sh, e.g.
+#   EQ_build_ontology tensorized_cohort_dir=$TENSORIZED_COHORT_DIR out_dir=$ONTOLOGY_DIR
+
+defaults:
+  - _self_
+
+# Tensorized cohort root; metadata/codes.parquet is read from here (read-only).
+tensorized_cohort_dir: ???
+# Directory to write ontology_vocab.parquet / embedding_mix.parquet / event_to_query_nodes.parquet into.
+out_dir: ???
+
+# Per-level weight decay for the embedding mix: an ancestor `d` levels up contributes
+# `decay ** d` before row normalisation.  0.0 disables mixing (each node is only itself — the
+# structure-without-mixing control); 1.0 weights every ancestor as much as the node itself.
+decay: 0.5
+
+# Name suffix for the *subtree node* minted beside every name that is both a real code and
+# another code's ancestor.  On the MIMIC-IV vocabulary 399 codes are dual-role — e.g.
+# `INFUSION_START//220949` is 365,723 unvalued infusion events AND the prefix of ten
+# `//value_[lo,hi)` variants — and one string cannot mean both "exactly this code" and "this
+# code or any descendant".  With a suffix, both rungs stay askable:
+#
+#     INFUSION_START                        all 635 infusion-start codes
+#     INFUSION_START//220949//ANY           the drug, valued or not
+#     INFUSION_START//220949                the 365,723 unvalued events
+#     INFUSION_START//220949//value_[...]   one rate bin
+#
+# Set to `null` to skip minting them; dual-role names are then purely exact and their subtree
+# meaning is not expressible.  Changing this changes V_ext, so the ontology and the encoder
+# sized from it must be built with the same value.
+subtree_suffix: ANY
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

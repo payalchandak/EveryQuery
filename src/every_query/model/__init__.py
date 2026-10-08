@@ -12,7 +12,29 @@ from every_query.model.lightning_module import EveryQueryLightningModule
 from every_query.model.model import EveryQueryModel, EveryQueryOutput
 
 __all__ = [
+    "ConditionalMultitaskARModel",
+    "ConditionalMultitaskLightningModule",
+    "ConditionalMultitaskOutput",
     "EveryQueryLightningModule",
     "EveryQueryModel",
     "EveryQueryOutput",
 ]
+
+
+def __getattr__(name: str):
+    """Lazily expose multitask classes without creating a model/data import cycle."""
+    if name in {"ConditionalMultitaskARModel", "ConditionalMultitaskOutput"}:
+        from every_query.model.conditional_multitask_ar_model import (
+            ConditionalMultitaskARModel,
+            ConditionalMultitaskOutput,
+        )
+
+        return {
+            "ConditionalMultitaskARModel": ConditionalMultitaskARModel,
+            "ConditionalMultitaskOutput": ConditionalMultitaskOutput,
+        }[name]
+    if name == "ConditionalMultitaskLightningModule":
+        from every_query.model.conditional_multitask_lightning import ConditionalMultitaskLightningModule
+
+        return ConditionalMultitaskLightningModule
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

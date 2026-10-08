@@ -12,6 +12,29 @@ shape, no Hydra entry points, no configs.
     PyTorch Lightning with `training_step` / `validation_step` / `predict_step`. Shared between
     training and inference — the same LightningModule's `predict_step` is what `predict/` will
     use at inference time.
+- **`answers.py`** — the architecture-independent pieces every query-answering model needs: the
+    binary answer vocabulary (`ANSWER_NO` / `ANSWER_YES` / `N_ANSWER_CLASSES`),
+    `validate_rope_time_pair` (keeps the model's `use_rope_time` and the batch's `time_pos_ids`
+    from drifting apart) and `_init_aux_embeddings` (re-inits tables built outside the HF
+    backbone to the backbone's scale).
+- **`conditional_multitask_ar_model.py`** — `ConditionalMultitaskARModel`: the decoder-only
+    *all-vocabulary* architecture over ordered windows `[patient, W0, C0, A0, …, W(K-1)]`. Each
+    window's hidden state is projected onto the tied input-embedding table (one logit per code,
+    masked BCE against packed `(B, K, V)` targets); `score_final_query` scores one code at one
+    window for QuerySeq grids without building `(B, K, V)`. With `ontology_dir` the table is the
+    ancestor-mixed `V_ext` one on both the input and readout sides, and leaf-only `(B, K, V)`
+    targets are widened to `V_ext` inside `forward` (`derive_ancestor_targets`: an ancestor's bit
+    is the OR of its descendant leaves'), so the sampler's sidecars stay leaf-only. The closure is
+    checked against the cohort by *identity*, not width: `train.py` records the cohort's vocabulary
+    fingerprint (`cohort_vocab_fingerprint`, the multitask manifest's `vocab_fingerprint`) as a
+    model hparam, and every construction, checkpoint loads included, requires the ontology's
+    observed nodes to digest to it, so a same-width foreign or renumbered ontology is refused.
+- **`conditional_multitask_lightning.py`** — `ConditionalMultitaskLightningModule`: fit /
+    validation on `MultitaskBoundaryBatch` (dense loss), test / predict on `MultitaskEvalBatch`
+    (target-only scoring).
+- **`ontology_embedding.py`** — `OntologyEmbedding` + `wrap_tok_embeddings`: ancestor-mixed
+    code embeddings installed through `get_input_embeddings()`/`set_input_embeddings()`, shared
+    by every architecture's patient, query-code and boundary-code lookups.
 
 Call through the package so stage submodules don't need to know the file layout:
 

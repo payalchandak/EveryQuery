@@ -1,0 +1,162 @@
+# Hydra config for the all-vocabulary, multi-bound *multitask* label generator
+# (`EQ_generate_multitask_sequences`, issue #20).
+#
+# For every sampled patient context the sampler draws a fixed sequence of `num_bounds` windows - each
+# with an explicit start and end specification (issue #24) - and labels EVERY base-vocabulary code at
+# every window:
+#
+#   start[i, k] = prediction_time[i] + start_duration            (0 => the prediction time itself)
+#                 OR first occurrence of start_event strictly after prediction_time[i]
+#   end[i, k]   = start[i, k] + duration
+#                 OR first occurrence of bound_event strictly after start[i, k]
+#   target[i, k, v] = start[i, k] < some occurrence of v < end[i, k]
+#
+# The window is open at both ends; an event boundary that never recurs is +infinity; an event start
+# that never occurs leaves the window empty (every target false).  Targets are
+# written bit-packed (`uint8`, little bit order, shape `(rows, num_bounds, ceil(V / 8))`) to a
+# `<shard>.labels.npy` sidecar row-aligned with the `<shard>.parquet` metadata; the driver writes a
+# `_multitask_manifest.json` per split describing the vocabulary and semantics the labels were built
+# under.
+#
+# Path roots are machine-specific, **required** Hydra args — no `.env`/env-var fallback.  Pass them on
+# the CLI as shell-expanded vars:
+#   data_dir=$TOKENIZED_EVENTS_DIR out_dir=$MULTITASK_TASKS_DIR query_codes=$TENSORIZED_COHORT_DIR
+#
+#   data_dir     MEDS dataset root (event shards under `{data_dir}/data/{split}/*.parquet`)
+#   out_dir      final-output-only root; `{split}/{shard}.parquet` + `{split}/{shard}.labels.npy` +
+#                `{split}/_multitask_manifest.json` and nothing else, so it is directly usable as
+#                MTD's `task_labels_dir`
+#   query_codes  the cohort's vocabulary: a metadata root dir (loads `{dir}/metadata/codes.parquet`)
+#                or a direct `codes.parquet` path.  Bits are aligned to that file's unchanged
+#                `code/vocab_index` (V = max index + 1); an explicit code list is NOT accepted here
+#                because it carries no indices.
+#
+# Intermediates live in the sibling `{parent}/{name}_artifacts` of out_dir (Stage 0 prediction-time
+# map, Stage 3M index, per-shard label-provenance sidecars).
+
+data_dir: ???
+out_dir: ???
+query_codes: ???
+
+split: train
+seed: 1
+
+# Sampling budget: total contexts drawn across the whole split (one context = one output row).
+num_training_examples: 5000000
+# Boundaries per context.  Fixed, not sampled: every row has exactly this many slots.
+num_bounds: 5
+
+# End specification.  Duration draw for duration-bounded slots (float days after the RESOLVED START,
+# no rounding).
+duration_min: 1
+duration_max: 1826
+duration_distribution: log-uniform # uniform | log-uniform
+
+# Per slot, independently: Bernoulli(eventbound_fraction) decides event- vs duration-bounded.  An
+# event-bounded slot draws its boundary code iid uniform WITH replacement from `boundary_codes`;
+# null => every base observable code (vocab index >= 1) of `query_codes`, plus every ontology node
+# when `ontology_mode` allows ancestor boundaries.  An explicit list may name ontology nodes in any
+# *attached* mode (any mode but `none`).  Repeated durations and repeated boundary codes within one
+# context are allowed.
+eventbound_fraction: 0.5
+boundary_codes: null
+
+# --- How a boundary / start-event code is drawn from its pool ---------------------------------
+# `code_weighting: null` is the historical behaviour: iid uniform over the pool.  Drawn uniformly
+# over a whole cohort vocabulary, most boundary codes are rare, so most event-bounded windows never
+# close (the end resolves to +infinity) and most event-defined starts never open (the window is
+# empty and every target is false) - see the `frac_event_bounds_inf` / `frac_event_starts_unresolved`
+# / `frac_empty_windows` numbers each Stage 4M shard logs.
+#
+# `code_weighting: prevalence` instead draws p ∝ (`code_weight_column`) ** `code_weight_power` from
+# the same codes.parquet as `query_codes`, so common codes - the ones that actually recur in a
+# patient's timeline - bound most windows.  power 1.0 is proportional to prevalence, 0.5 is
+# square-root damped, 0.0 is uniform again.  Codes whose statistic is null or zero are floored at
+# the pool's smallest positive value rather than dropped.  An ontology node has no row in
+# codes.parquet at all, so it aggregates its closure descendants': the SUM for an occurrence count
+# (`code/n_occurrences`), which is the honest "any descendant occurred" up to co-occurrence within a
+# timestamp, but the MAX for a subject count (`code/n_subjects`), because summing would count a
+# subject once per descendant code they carry and let a wide subtree exceed the whole cohort.  The
+# max is a sampling PROXY, not the node's real subject count - two descendants each present in 10
+# disjoint subjects give 10 where the truth is 20, and per-code counts carry no overlap information
+# to do better.  It errs low, so it under-weights a broad shallow node rather than inventing
+# prevalence for it.  The policy applies to BOTH the end-boundary pool and the start-event pool;
+# conditioning codes and the all-vocabulary target set are untouched, so only which windows exist
+# changes, never what a label bit means.
+code_weighting: null # null | prevalence
+code_weight_column: code/n_occurrences # code/n_occurrences | code/n_subjects
+code_weight_power: 1.0
+
+# Codes whose name starts with any of these prefixes are removed from the boundary AND start-event
+# pools (never from the targets or the conditioning codes).  `TIMELINE//DELTA` - the quantized
+# time-delta tokens - is the usual entry: they carry ~10% of all occurrences in a MIMIC-style
+# cohort, so prevalence weighting would spend a tenth of its event windows on boundaries that a
+# `use_rope_time` model never even sees in its input stream.
+#
+# With an ontology the exclusion follows the CLOSURE, not just the name: any node covering an
+# excluded leaf is removed too.  A name test could not do this - an ancestor's name is shorter than
+# its leaves', so `TIMELINE` never starts with `TIMELINE//DELTA` - yet drawing `TIMELINE` means "the
+# next occurrence of any `TIMELINE//*` event", delta tokens included, which is exactly what the
+# exclusion is for.  One excluded descendant removes the node: a node covering both excluded and
+# wanted leaves cannot express "any of these except those".
+exclude_boundary_prefixes: []
+
+# Start specification (issue #24).  Per slot, independently, one uniform draw picks the form:
+#   u < eventstart_fraction                                     => event-defined start
+#   eventstart_fraction <= u < eventstart_fraction + prediction_time_start_fraction
+#                                                               => the prediction time (start 0)
+#   otherwise                                                   => a positive start duration
+# Both fractions must be >= 0 and sum to <= 1.  Omitting every start key reproduces the pre-#24
+# behaviour (every window opens at the prediction time).
+# Total probability of an event-defined start.
+eventstart_fraction: 0.2
+# Total probability that the start remains prediction_time; the remainder is a positive duration.
+prediction_time_start_fraction: 0.4
+# Positive start-duration draw (float days after prediction_time).
+start_duration_min: 1
+start_duration_max: 180
+start_duration_distribution: log-uniform # uniform | log-uniform
+# Pool for event-defined starts, drawn iid uniform with replacement; null => every base observable
+# non-PAD code, plus every ontology node when `ontology_mode` allows ancestor boundaries.  Drawn from
+# its own RNG streams (`start_forms`, `start_durations`, `start_codes`), so changing any start
+# setting perturbs neither the contexts nor the end / conditioning draws.
+start_event_codes: null
+# Issue #22: every context also carries `num_bounds - 1` conditioning codes (iid uniform with
+# replacement over every non-PAD base code, from a dedicated RNG stream - or over every non-PAD
+# ontology node when `ontology_mode` allows ancestor conditioning codes, which the manifest records
+# as `condition_policy`) and their materialized answers (`condition_answers[j]` = target bit of
+# `condition_codes[j]` at boundary `j`; for an ontology node, the OR of that bit over its closure
+# descendants).  The pool is not otherwise configurable.
+
+# Minimum prior prediction times a subject needs before a prediction time is eligible (Stage 0).
+min_prediction_times_per_subject: 50
+# Cap on the Stage 4M worker pool; null => cores on this node.  Each worker holds one event shard,
+# its interval table, a `label_chunk_rows x num_bounds x V` boolean scratch (~110 MB at 2000 x 5 x
+# 11k) and the packed output memmap — size the pool for memory, not only cores.  With an ontology a
+# worker additionally holds the closure-expanded event frame and a second, V_ext-wide interval table
+# (both scale with the mean closure depth, ~3-4x on a MIMIC-style vocabulary); the boolean scratch,
+# the packed chunks and the output file are leaf-wide and do NOT grow.
+max_workers: null
+label_chunk_rows: 2000
+
+# Targets are ALWAYS the observable leaf codes: an ontology never widens the label bits (the model
+# derives an ancestor's bit as the OR of its descendants' from these leaf sidecars).  What an
+# `EQ_build_ontology` directory adds here is the *event* half of a window - an ancestor-valued
+# `bound_event` / `start_event` ("until the next occurrence of any `LAB//220645//*`") and an
+# ancestor-valued conditioning code - by exploding the event stream through the closure so an
+# ancestor node has ordinary intervals.  `vocab_size`, `packed_width_bytes` and `vocab_fingerprint`
+# are unchanged; the manifest gains `ontology_mode`, `ontology_fingerprint` and `boundary_vocab_size`.
+# The ontology must have been built from this cohort's codes.parquet (checked by identity, not width).
+ontology_dir: null
+# null => `boundaries+conditions` when `ontology_dir` is set, `none` when it is not.  Narrow it to
+# `boundaries` (ancestor starts/bounds only), `conditions` (ancestor conditioning codes only), or
+# `none` (keep the ontology on disk but sample exactly the leaf-only draws).  Explicit ancestor names
+# in `boundary_codes` / `start_event_codes` resolve in any *attached* mode (not under `none`, which
+# detaches the ontology entirely); the mode governs only the null-pool draw.
+ontology_mode: null
+overwrite: false
+
+hydra:
+  output_subdir: null
+  job:
+    chdir: false

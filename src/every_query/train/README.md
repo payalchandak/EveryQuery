@@ -44,9 +44,41 @@ with all interpolations resolved — consumed by downstream loaders), and a `che
 epoch-indexed checkpoints. Sweeps (`EQ_train -m ...`) land one `override_dirname` subdir per job
 under the same timestamped folder.
 
+## Logging without wandb
+
+The production configs instantiate a `WandbLogger` plus a `LearningRateMonitor`. Two offline forms
+work on every shipped config:
+
+- No logger at all: `trainer.logger=false`. `train.py` drops the `LearningRateMonitor` itself in
+    that case (Lightning refuses the monitor without a logger, only after the dataset is loaded).
+
+- CSV logging: the logger node has to be *replaced*, not merged, or the wandb-only keys (`offline`,
+    `entity`, ...) reach `CSVLogger.__init__`:
+
+    ```
+    '~trainer.logger' '+trainer.logger={_target_: lightning.pytorch.loggers.CSVLogger, save_dir: ${trainer.default_root_dir}/loggers}'
+    ```
+
+    Metrics land in `<run>/loggers/lightning_logs/version_0/metrics.csv`.
+
+## Capping steps
+
+`+trainer.max_steps=N` caps the run, and Lightning's `estimated_stepping_batches` becomes
+`min(batches_per_epoch, N)`, so the cosine LR schedule is **compressed to N steps** (warmup is
+`warmup_ratio * N`). If `N` ends before the first validation of a fractional `val_check_interval`,
+no "best" checkpoint is ever recorded and `best_model.ckpt` is taken from `checkpoints/last.ckpt`
+(logged as a warning); pair the cap with an integer `trainer.val_check_interval` to keep a real
+best checkpoint.
+
 ## Resume behavior
 
 `do_resume=True` reuses an existing run dir's checkpoints and `config.yaml`. Because each launch
 gets a fresh timestamp, resume the *specific* run by pinning its path:
 `hydra.run.dir=<output_dir>/<YYYY-MM-DD>/<HH-MM-SS> do_resume=True`. See #91 for the
 structural-drift check between the resumed-from config and the new-invocation config.
+
+A resume whose checkpoint already meets the budget (`global_step >= max_steps`, or the checkpoint
+sits at the end of epoch `max_epochs`) skips `trainer.fit` entirely and only re-publishes
+`best_model.ckpt`: letting Lightning "train" zero steps rewrites `last.ckpt` with bumped epoch
+counters, after which a later `trainer.max_epochs=2` extension also trains zero steps. Raise
+`trainer.max_epochs` / `+trainer.max_steps` on the extending run.

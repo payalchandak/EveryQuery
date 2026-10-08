@@ -1,0 +1,71 @@
+# EQ_predict_multitask — inference over a QuerySeqSchema evaluation grid with the multitask model.
+#
+# Reads the `eval/` root written by EQ_generate_evaluation_query_sequences, runs the trained
+# ConditionalMultitaskAR model over it, and writes
+# ONE scalar prediction per grid row: the probability that the row's final query occurs in its
+# window, conditioned on the patient and on the earlier queries with their true answers
+# (queries[:-1] / answers[:-1] are teacher-forced conditioning pairs — forced_answers[:-1] instead
+# wherever a designed spec dictates one; queries[-1] is scored against answers[-1], always the truth).
+# This is the only path that consumes the grid's explicit window starts
+# (start_durations / start_events), which only the multitask model encodes.  See
+# src/every_query/predict/predict_multitask.py for the row mapping and the output columns.
+#
+# No evaluation manifest, packed `.labels.npy`, `eval_meta` or `eval_tasks.parquet` is needed.
+
+defaults:
+  - _self_
+
+# Required: a ConditionalMultitaskAR training run directory (best_model.ckpt +
+# resolved_config.yaml).  Its cohort / sequence settings are reused for the grid.
+model_run_dir: ???
+
+# Required: EQ_generate_evaluation_query_sequences' labels root — `{eval grid out_dir}/eval`
+# (point at `eval/`, never at `out_dir` itself: `eval_unique/` is not a grid).
+tasks_dir: ???
+
+# Required: output parquet path.  One row per grid row, in grid order, with the columns
+# subject_id, prediction_time, queries, start_durations, start_events, durations, bound_events,
+# answers, target_code (= queries[-1]), label (= answers[-1]), prob.
+output_parquet: ???
+
+# Optional: explicit checkpoint stem under model_run_dir/checkpoints/.
+ckpt_name: null
+
+# "held_out" (default) or "tuning".  "train" is disallowed (shuffling).
+split: held_out
+
+overwrite: false
+
+# Optional inference batch-size override (defaults to the checkpoint's datamodule batch size).
+# No (B, K, V) logits are materialized — only one backbone pass plus B dot products per batch —
+# so device memory is the backbone's alone.
+batch_size: null
+
+# Optional torch device string, mapped onto the Lightning accelerator of the inference Trainer:
+# null -> accelerator=auto (the first GPU when there is one, else the CPU); cpu -> cpu;
+# cuda -> gpu (the default GPU); cuda:N -> gpu, device N; mps -> mps.  Prediction is always
+# SINGLE-device and SINGLE-process: outputs are concatenated in loader order and must stay
+# row-aligned with the grid, so a multi-device or distributed trainer is refused rather than
+# sharding rows across ranks, and so is a multi-process launcher (torchrun / srun --ntasks>1),
+# whose every rank would score the whole grid and write the same output_parquet.  Launch one
+# process: no torchrun; srun / sbatch with --ntasks=1.
+device: null
+
+# Optional DataLoader worker-count override (defaults to the checkpoint's datamodule num_workers).
+num_workers: null
+
+# Lightning precision string for the inference Trainer.  bf16-mixed is the precision every shipped
+# training config records, so scoring runs under the same autocast the checkpoint was trained
+# with, and it is what EQ_predict inherits from the run's trainer config, so both pipelines score
+# under the same numerics (a run trained under another precision
+# needs the matching value here).  Pass 32-true for full-precision probabilities (they differ from
+# bf16-mixed at the ~1e-2 level; the pre-#30 manual loop was fp32).
+precision: bf16-mixed
+
+# Show the Lightning predict progress bar (stderr).  Set false for batch / log-file runs.
+enable_progress_bar: true
+
+hydra:
+  output_subdir: null
+  job:
+    chdir: false

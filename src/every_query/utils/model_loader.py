@@ -21,7 +21,11 @@ from every_query.model.lightning_module import EveryQueryLightningModule
 logger = logging.getLogger(__name__)
 
 
-def setup_model(model_run_dir: str | Path, ckpt_name: str | None = None):
+def setup_model(
+    model_run_dir: str | Path,
+    ckpt_name: str | None = None,
+    module_cls: type[EveryQueryLightningModule] | None = None,
+):
     """Resolve a ``model_run_dir`` into a ``(train_cfg, lightning_module, trainer)`` triple.
 
     Reads ``resolved_config.yaml`` from the run dir, seeds RNG, picks a checkpoint
@@ -34,6 +38,10 @@ def setup_model(model_run_dir: str | Path, ckpt_name: str | None = None):
             ``checkpoints/last.ckpt`` (unless ``ckpt_name`` is given).
         ckpt_name: Optional explicit checkpoint stem under ``checkpoints/``.  ``None``
             or the literal string ``"best"`` falls back to ``best_model.ckpt``.
+        module_cls: LightningModule class whose ``load_from_checkpoint`` restores the model.
+            Defaults to :class:`EveryQueryLightningModule`; pass
+            :class:`~every_query.model.conditional_multitask_lightning.ConditionalMultitaskLightningModule`
+            for multitask runs.
 
     Returns:
         Tuple ``(train_cfg, lightning_module, trainer)``.  ``train_cfg`` is the OmegaConf
@@ -85,8 +93,10 @@ def setup_model(model_run_dir: str | Path, ckpt_name: str | None = None):
     if ckpt_path != candidates[0]:
         logger.warning(f"{candidates[0].name} not found, falling back to {ckpt_path}")
 
+    if module_cls is None:
+        module_cls = EveryQueryLightningModule
     logger.info(f"Loading lightning module from checkpoint: {ckpt_path}")
-    M = EveryQueryLightningModule.load_from_checkpoint(str(ckpt_path))
+    M = module_cls.load_from_checkpoint(str(ckpt_path))
 
     logger.info("Instantiating trainer...")
     trainer = instantiate(train_cfg.trainer)

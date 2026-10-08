@@ -456,15 +456,28 @@ class EveryQueryLightningModule(L.LightningModule):
             >>> EveryQueryLightningModule._is_norm_bias_param("bert.encoder.layer.0.output.LayerNorm.weight")
             True
 
-        The regex requires a ``layer`` prefix, so ModernBERT-style norm names
-        (``attn_norm``, ``mlp_norm``, ``final_norm``, bare ``norm``) are **not** matched:
+        Norm gains without a ``layer`` prefix are no-decay too: ModernBERT's ``attn_norm`` /
+        ``mlp_norm`` / ``final_norm`` and Llama's final ``norm`` (``HF_model.norm.weight``) used
+        to slip through and get weight-decayed:
 
             >>> EveryQueryLightningModule._is_norm_bias_param("layers.1.attn_norm.weight")
-            False
+            True
             >>> EveryQueryLightningModule._is_norm_bias_param("final_norm.weight")
+            True
+            >>> EveryQueryLightningModule._is_norm_bias_param("HF_model.norm.weight")
+            True
+            >>> EveryQueryLightningModule._is_norm_bias_param("norm.weight")
+            True
+
+        ``norm`` must be a whole name component, so a projection that merely contains the
+        substring is still decayed:
+
+            >>> EveryQueryLightningModule._is_norm_bias_param("abnormal_proj.weight")
             False
         """
-        return bool(re.search(r"(bias|layer(_?)norm(\d*)\.weight)", n, re.IGNORECASE))
+        # ``norm`` has to start a dotted/underscored component (optionally prefixed by ``layer``),
+        # otherwise the substring match would also catch e.g. ``abnormal_proj.weight``.
+        return bool(re.search(r"(bias|(^|[._])(layer_?)?norm\d*\.weight)", n, re.IGNORECASE))
 
     def _norm_bias_params(self) -> Iterator[torch.nn.parameter.Parameter]:
         for name, p in self.named_parameters():

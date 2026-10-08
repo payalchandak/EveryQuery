@@ -7,6 +7,10 @@ log_dir: ${output_dir}/.logs
 do_reshard: False
 do_demo: False
 
+# Optional path to a MEDS-Transforms stage runner YAML (e.g. with a `parallelize` block);
+# null runs every stage single-worker.
+stage_runner_fp: null
+
 hydra:
   run:
     dir: "${log_dir}"

@@ -9,7 +9,8 @@ from typing import Any
 import hydra
 import torch
 from hydra.utils import instantiate
-from lightning.pytorch import seed_everything
+from lightning.pytorch import Trainer, seed_everything
+from lightning.pytorch.callbacks import LearningRateMonitor
 from MEDS_transforms.configs.utils import OmegaConfResolver
 from omegaconf import DictConfig, OmegaConf, open_dict
 
@@ -36,6 +37,38 @@ def int_prod(x: int, y: int) -> int:
         7
     """
     return round(x * y)
+
+
+def required_position_embeddings(model_cfg: DictConfig, max_seq_len: int) -> int:
+    """The ``max_position_embeddings`` a model config needs for a ``max_seq_len`` data window.
+
+    The decoder-only
+    :class:`~every_query.model.conditional_multitask_ar_model.ConditionalMultitaskARModel` runs
+    patient history and window stream through **one** backbone, so its position budget must
+    cover both: ``max_seq_len`` patient tokens plus three tokens per window block up to
+    ``max_windows``.  Every other model only ever feeds the backbone the patient window plus the
+    two tokens the single-query model splices in (query + duration), which is the fallback below.
+
+    Examples:
+        >>> multitask = OmegaConf.create(
+        ...     {"_target_":
+        ...      "every_query.model.conditional_multitask_ar_model.ConditionalMultitaskARModel",
+        ...      "max_windows": 8}
+        ... )
+        >>> required_position_embeddings(multitask, 256)
+        280
+
+        Anything else gets the patient window plus the single-query model's two spliced tokens:
+
+        >>> single = OmegaConf.create({"_target_": "every_query.model.EveryQueryModel"})
+        >>> required_position_embeddings(single, 256)
+        258
+    """
+    target = str(model_cfg.get("_target_", ""))
+    target_name = target.rsplit(".", 1)[-1]
+    if target_name == "ConditionalMultitaskARModel":
+        return max_seq_len + 3 * int(model_cfg.max_windows)
+    return max_seq_len + 2
 
 
 def values_as_list(**kwargs) -> list[Any]:
@@ -176,6 +209,204 @@ def find_checkpoint_path(output_dir: Path) -> Path | None:
     return sorted_checkpoints[-1] if sorted_checkpoints else None
 
 
+def resolve_seed(do_demo: bool, seed: int | None) -> int | None:
+    """The seed to pass to ``seed_everything``, or ``None`` when the run should not be seeded.
+
+    ``seed=0`` is a legitimate seed; the old ``if do_demo or cfg.get("seed")`` truthiness gate
+    silently skipped seeding for it.
+
+    Examples:
+        >>> resolve_seed(False, 0)
+        0
+        >>> resolve_seed(False, 7)
+        7
+        >>> resolve_seed(False, None) is None
+        True
+        >>> resolve_seed(True, None)
+        1
+    """
+    if seed is not None:
+        return int(seed)
+    return 1 if do_demo else None
+
+
+def drop_lr_monitor_without_logger(trainer: Trainer) -> int:
+    """Remove every ``LearningRateMonitor`` from a trainer that has no logger; returns the count.
+
+    ``LearningRateMonitor.on_train_start`` raises ``MisconfigurationException`` without a logger,
+    *after* the dataset has been loaded and the baseline validation has run.  Every production
+    config ships the monitor, so ``trainer.logger=false`` has to be able to shed it on its own.
+
+    Examples:
+        >>> t = Trainer(logger=False, callbacks=[LearningRateMonitor()], enable_progress_bar=False)
+        >>> drop_lr_monitor_without_logger(t)
+        1
+        >>> any(isinstance(cb, LearningRateMonitor) for cb in t.callbacks)
+        False
+
+        With a logger the callbacks are left alone:
+
+        >>> import tempfile
+        >>> from lightning.pytorch.loggers import CSVLogger
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     t = Trainer(logger=CSVLogger(d), callbacks=[LearningRateMonitor()], enable_progress_bar=False)
+        ...     drop_lr_monitor_without_logger(t)
+        0
+    """
+    if trainer.loggers:
+        return 0
+    kept = [cb for cb in trainer.callbacks if not isinstance(cb, LearningRateMonitor)]
+    dropped = len(trainer.callbacks) - len(kept)
+    if dropped:
+        logger.warning(
+            "trainer.logger is disabled; dropping %d LearningRateMonitor callback(s) that would "
+            "otherwise raise at train start.",
+            dropped,
+        )
+        trainer.callbacks = kept
+    return dropped
+
+
+def completed_epochs(ckpt: dict) -> int | None:
+    """Number of training epochs a Lightning checkpoint has fully completed, or ``None`` if unknown.
+
+    ``ckpt["epoch"]`` is the epoch *index* and ``fit_loop.epoch_progress.current.processed`` is
+    only bumped in ``on_train_epoch_end`` -- a ``last.ckpt`` written by the end-of-epoch
+    validation (the shipped configs' cadence) therefore still reads ``processed=0`` after a full
+    epoch.  Lightning infers the finished epoch from the batch loop on restore; this mirrors
+    that inference so the decision can be made *before* ``trainer.fit`` touches the checkpoint.
+
+    Examples:
+        >>> def ckpt(processed, completed, started, ready_b, processed_b, last):
+        ...     return {"loops": {"fit_loop": {
+        ...         "epoch_progress": {"current": {"ready": started, "started": started,
+        ...                                        "processed": processed, "completed": completed}},
+        ...         "epoch_loop.batch_progress": {"is_last_batch": last,
+        ...             "current": {"ready": ready_b, "started": ready_b,
+        ...                         "processed": processed_b, "completed": processed_b}},
+        ...     }}}
+
+        Saved by ``on_train_epoch_end``: the epoch is already counted.
+
+        >>> completed_epochs(ckpt(1, 0, 1, 4, 4, True))
+        1
+
+        Saved by the validation after the last batch of the first epoch: not yet counted.
+
+        >>> completed_epochs(ckpt(0, 0, 1, 4, 4, True))
+        1
+
+        Saved mid-epoch:
+
+        >>> completed_epochs(ckpt(0, 0, 1, 2, 2, False))
+        0
+        >>> completed_epochs(ckpt(1, 1, 2, 2, 2, False))
+        1
+
+        A checkpoint without loop state:
+
+        >>> completed_epochs({"epoch": 0}) is None
+        True
+    """
+    try:
+        fit_loop = ckpt["loops"]["fit_loop"]
+        epoch = fit_loop["epoch_progress"]["current"]
+        batch = fit_loop["epoch_loop.batch_progress"]
+        processed = int(epoch["processed"])
+        at_last_batch = bool(batch["is_last_batch"]) and int(batch["current"]["ready"]) == int(
+            batch["current"]["processed"]
+        )
+        uncounted = int(epoch["started"]) > processed and int(epoch["completed"]) == processed
+    except (KeyError, TypeError, ValueError):
+        return None
+    return processed + 1 if (at_last_batch and uncounted) else processed
+
+
+def resume_budget_spent(ckpt: dict, max_steps: int | None, max_epochs: int | None) -> str | None:
+    """Why resuming *ckpt* under this trainer budget would train zero steps, or ``None`` if it would train.
+
+    A no-op ``trainer.fit`` is not harmless: Lightning restores the loop state, bumps the epoch
+    counters, and ``ModelCheckpoint.on_train_end`` rewrites ``last.ckpt`` with them, after which
+    a later ``trainer.max_epochs=2`` extension resumes at the end of its batch loop and also
+    trains zero steps.
+
+    Examples:
+        >>> ck = {"global_step": 4, "loops": {"fit_loop": {
+        ...     "epoch_progress": {"current": {"ready": 1, "started": 1, "processed": 0, "completed": 0}},
+        ...     "epoch_loop.batch_progress": {"is_last_batch": True,
+        ...         "current": {"ready": 4, "started": 4, "processed": 4, "completed": 4}}}}}
+        >>> resume_budget_spent(ck, 4, 5)
+        'global_step=4 >= max_steps=4'
+        >>> resume_budget_spent(ck, -1, 1)
+        'completed_epochs=1 >= max_epochs=1'
+        >>> resume_budget_spent(ck, 6, 2) is None
+        True
+        >>> resume_budget_spent({"global_step": 4}, None, 1) is None
+        True
+    """
+    global_step = int(ckpt.get("global_step", 0))
+    if max_steps is not None and max_steps > 0 and global_step >= max_steps:
+        return f"global_step={global_step} >= max_steps={max_steps}"
+    epochs = completed_epochs(ckpt)
+    if max_epochs is not None and max_epochs > 0 and epochs is not None and epochs >= max_epochs:
+        return f"completed_epochs={epochs} >= max_epochs={max_epochs}"
+    return None
+
+
+def resolve_best_checkpoint(reported: str | Path | None, run_dir: Path) -> Path:
+    """The checkpoint to publish as ``best_model.ckpt``: the reported best, else the latest one.
+
+    ``ModelCheckpoint`` only records a best path in ``on_validation_end``, so a run whose
+    ``max_steps`` ends before the first validation (or a resume that trained zero steps) reports
+    none even though training succeeded.  Falling back to ``last.ckpt`` (via
+    :func:`find_checkpoint_path`) keeps such runs usable; only a run with no checkpoint at all
+    is an error.  A reported path that no longer exists (the run dir was moved) is retried by
+    basename under ``run_dir/checkpoints``.
+
+    Examples:
+        >>> import tempfile
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     ckpts = Path(d) / "checkpoints"; ckpts.mkdir()
+        ...     (ckpts / "epoch=0-step=3.ckpt").touch(); (ckpts / "last.ckpt").touch()
+        ...     resolve_best_checkpoint(ckpts / "epoch=0-step=3.ckpt", Path(d)).name
+        ...     resolve_best_checkpoint("/moved/checkpoints/epoch=0-step=3.ckpt", Path(d)).name
+        ...     resolve_best_checkpoint("", Path(d)).name
+        'epoch=0-step=3.ckpt'
+        'epoch=0-step=3.ckpt'
+        'last.ckpt'
+        >>> with tempfile.TemporaryDirectory() as d:
+        ...     resolve_best_checkpoint("", Path(d))
+        Traceback (most recent call last):
+            ...
+        ValueError: No best checkpoint reported and no checkpoint found under ...
+    """
+    if reported:
+        reported = Path(reported)
+        for candidate in (reported, run_dir / "checkpoints" / reported.name):
+            if candidate.is_file():
+                return candidate
+    fallback = find_checkpoint_path(run_dir)
+    if fallback is None:
+        raise ValueError(
+            f"No best checkpoint reported and no checkpoint found under {run_dir / 'checkpoints'}."
+        )
+    logger.warning(
+        "No best checkpoint reported (reported=%r); publishing %s as best_model.ckpt instead. "
+        "This happens when max_steps ends before the first validation.",
+        str(reported) if reported else "",
+        fallback,
+    )
+    return fallback
+
+
+def _best_model_path_from_checkpoint(ckpt: dict) -> str:
+    """``ModelCheckpoint``'s recorded ``best_model_path`` in a checkpoint's callback states, or ``""``."""
+    for state in (ckpt.get("callbacks") or {}).values():
+        if isinstance(state, dict) and state.get("best_model_path"):
+            return str(state["best_model_path"])
+    return ""
+
+
 def _is_wandb_logger(logger_cfg: Any) -> bool:
     """Return ``True`` if *logger_cfg* is a wandb-shaped logger node.
 
@@ -271,14 +502,78 @@ def main(cfg: DictConfig) -> float | None:
     validate_training_config(cfg)
 
     # Size the model from the data: vocab from metadata/codes.parquet, positions from the
-    # datamodule window plus the two tokens the model adds — the query token (prepended in
-    # ``EveryQueryPytorchDataset._seeded_getitem``) and the duration token (spliced in
-    # ``EveryQueryModel._hf_inputs``).  Done here, before the config is saved and before
+    # datamodule window plus what the selected architecture adds on top of it (two spliced
+    # tokens for the single-query model; three tokens per query block for the decoder-only
+    # conditional model — see ``required_position_embeddings``).  Done here, before the config
+    # is saved and before
     # ``validate_resume_directory`` diffs it, so the run dir records the real numbers and a
     # resumed run compares like with like.
     ds_cfg = instantiate(cfg.datamodule.config)
-    cfg.lightning_module.model.config_overrides.vocab_size = ds_cfg.vocab_size
-    cfg.lightning_module.model.config_overrides.max_position_embeddings = ds_cfg.max_seq_len + 2
+    cohort_vocab_size = ds_cfg.vocab_size
+    vocab_size = cohort_vocab_size
+
+    # With an ontology, the embedding table must cover the ancestor nodes too: they are appended
+    # above the highest leaf index, so the cohort's own vocab_size would leave every ancestor
+    # index out of range.  Read it from the ontology rather than making the user keep a hardcoded
+    # V_ext in the config in sync with a rebuilt DAG.
+    ontology_dir = cfg.lightning_module.model.get("ontology_dir")
+    if ontology_dir:
+        from every_query.data.ontology import check_ontology_cohort, cohort_code_map, extended_vocab_size
+
+        v_ext = extended_vocab_size(ontology_dir)
+        if v_ext < vocab_size:
+            raise ValueError(
+                f"Ontology at {ontology_dir} declares V_ext={v_ext}, smaller than the cohort's "
+                f"vocab_size={vocab_size}.  It was almost certainly built from a different "
+                f"codes.parquet than this cohort."
+            )
+        # Widths agree; now require the ontology's observed nodes to be this cohort's codes.parquet
+        # rows, code for code and index for index.  Same-width ontologies of another cohort, or of
+        # this one with renumbered codes, would otherwise pair every leaf embedding and target
+        # column with the wrong ancestor rows without any error.
+        check_ontology_cohort(ontology_dir, code_to_index=cohort_code_map(ds_cfg.code_metadata_fp))
+        logger.info("Ontology: sizing the encoder to V_ext=%d (cohort vocab %d).", v_ext, vocab_size)
+        vocab_size = v_ext
+
+    cfg.lightning_module.model.config_overrides.vocab_size = vocab_size
+    # Models that persist the cohort's vocabulary identity (the multitask model's
+    # ``cohort_vocab_fingerprint``; the shipped configs carry the key as ``null``) get it from the
+    # same codes.parquet the widths came from, so every later load of the checkpoint can re-verify
+    # its ontology - and EQ_predict_multitask the inference cohort - against the cohort it was
+    # trained on rather than against a width.
+    if "cohort_vocab_fingerprint" in cfg.lightning_module.model:
+        from every_query.data.ontology import cohort_code_map
+        from every_query.utils.digest import vocab_fingerprint
+
+        cfg.lightning_module.model.cohort_vocab_fingerprint = vocab_fingerprint(
+            cohort_code_map(ds_cfg.code_metadata_fp)
+        )
+    # The multitask datamodule's ``expected_vocab_size`` is the width its training sidecars are
+    # checked against, and those are leaf-only: it must stay the *cohort's* V even when the model
+    # above was just widened to V_ext.  The shipped configs interpolate it from
+    # ``config_overrides.vocab_size``, which would now resolve to V_ext, so pin the cohort width
+    # explicitly; ``resolved_config.yaml`` then records both numbers (``EQ_predict_multitask``
+    # reads them).  Configs whose datasets do not take the key (the scalar models') are left alone.
+    dataset_kwargs = cfg.datamodule.get("dataset_kwargs")
+    if dataset_kwargs is not None and "expected_vocab_size" in dataset_kwargs:
+        cfg.datamodule.dataset_kwargs.expected_vocab_size = cohort_vocab_size
+    # The datasets' ``ontology_dir`` interpolates from the model's in every shipped config, but an
+    # override can desync them - and then a labels directory sampled with ancestor-valued start /
+    # bound / conditioning codes hands ids in [V, V_ext) to an embedding table the model sized for a
+    # different (or no) ontology.  Nothing downstream can attribute that: on CUDA it is an
+    # asynchronous device-side assert.  One comparison here turns it into a sentence.
+    if dataset_kwargs is not None and "ontology_dir" in dataset_kwargs:
+        data_onto = dataset_kwargs.get("ontology_dir")
+        if (data_onto or None) != (ontology_dir or None):
+            raise ValueError(
+                f"datamodule.dataset_kwargs.ontology_dir ({data_onto!r}) and "
+                f"lightning_module.model.ontology_dir ({ontology_dir!r}) must name the same ontology: "
+                "the datasets resolve ancestor start / bound / conditioning codes through the first "
+                "and the model embeds them from a table sized by the second."
+            )
+    cfg.lightning_module.model.config_overrides.max_position_embeddings = required_position_embeddings(
+        cfg.lightning_module.model, ds_cfg.max_seq_len
+    )
 
     if cfg.do_overwrite and cfg.do_resume:
         logger.warning(
@@ -341,8 +636,9 @@ def main(cfg: DictConfig) -> float | None:
     # trajectories.  Reading `do_demo` off the config (rather than the instantiated
     # `M.model.do_demo`) lets us keep the gate without needing `M` yet.
     do_demo = cfg.lightning_module.model.get("do_demo", False)
-    if do_demo or cfg.get("seed", None):
-        seed_everything(cfg.get("seed", 1), workers=True)
+    seed = resolve_seed(do_demo, cfg.get("seed", None))
+    if seed is not None:
+        seed_everything(seed, workers=True)
 
     D = instantiate(cfg.datamodule)
     logger.info(f"Train dataset contains {len(D.train_dataloader().dataset)} datapoints")
@@ -350,6 +646,7 @@ def main(cfg: DictConfig) -> float | None:
     M = hydra.utils.instantiate(cfg.lightning_module)
 
     trainer = instantiate(cfg.trainer)
+    drop_lr_monitor_without_logger(trainer)
 
     # Log the run dir up front so every run (even crashed/in-flight) is matchable from the wandb UI
     # back to its folder on disk — best_ckpt_path below is only logged after fit() completes.
@@ -374,20 +671,35 @@ def main(cfg: DictConfig) -> float | None:
         logger.info("Running baseline validation")
         trainer.validate(M, datamodule=D)
 
-    logger.info("Fitting model")
-    trainer.fit(**trainer_kwargs)
+    # A resume whose budget is already spent must not enter ``trainer.fit``: Lightning would
+    # restore the loop state, count the finished epoch, and let ``ModelCheckpoint.on_train_end``
+    # rewrite ``last.ckpt`` with the bumped counters -- after which a later ``max_epochs``
+    # extension resumes at the end of its batch loop and trains zero steps too.
+    skip_reason = None
+    if ckpt_path:
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        skip_reason = resume_budget_spent(ckpt, cfg.trainer.get("max_steps"), cfg.trainer.get("max_epochs"))
 
-    best_ckpt_path = Path(trainer.checkpoint_callback.best_model_path)
-    if not best_ckpt_path.is_file():
-        raise ValueError("No best checkpoint reported.")
+    if skip_reason:
+        logger.warning(
+            f"Resume checkpoint {ckpt_path} already meets the training budget ({skip_reason}); "
+            "skipping trainer.fit so last.ckpt is left untouched. Raise max_steps/max_epochs to train."
+        )
+        reported_best = _best_model_path_from_checkpoint(ckpt)
+        best_score = None
     else:
-        for log in trainer.loggers:
-            log.log_hyperparams({"best_ckpt_path": best_ckpt_path})
+        logger.info("Fitting model")
+        trainer.fit(**trainer_kwargs)
+        reported_best = trainer.checkpoint_callback.best_model_path
+        best_score = trainer.checkpoint_callback.best_model_score
+
+    best_ckpt_path = resolve_best_checkpoint(reported_best, run_dir)
+    for log in trainer.loggers:
+        # ``str``: a PosixPath in hparams.yaml is not ``yaml.safe_load``-able.
+        log.log_hyperparams({"best_ckpt_path": str(best_ckpt_path)})
 
     output_fp = run_dir / "best_model.ckpt"
     shutil.copyfile(best_ckpt_path, output_fp)
-
-    best_score = trainer.checkpoint_callback.best_model_score
 
     # ``best_model_score`` is scoped to the current ``fit`` call's validation events: on a
     # no-op resume (``max_steps`` already reached) no validation runs, so it stays None

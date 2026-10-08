@@ -20,9 +20,11 @@ export DATA_DIR="/path/to/MIMIC_MEDS/MEDS_cohort"
 # Preprocessing writes both dirs below: TOKENIZED_EVENTS_DIR (intermediate event shards the
 # samplers read) and TENSORIZED_COHORT_DIR (the final tensorized cohort, which also holds the
 # query-code universe at metadata/codes.parquet).
-export TOKENIZED_EVENTS_DIR="${DATA_DIR}/intermediate"        # data_dir= for the samplers
-export TENSORIZED_COHORT_DIR="${DATA_DIR}/processed"          # output_dir= (preprocess); tensorized_cohort_dir= (train); query_codes= (samplers)
+export TOKENIZED_EVENTS_DIR="${DATA_DIR}/tokenized_events"        # data_dir= for the samplers
+export TENSORIZED_COHORT_DIR="${DATA_DIR}/tensorized_cohort"          # output_dir= (preprocess); tensorized_cohort_dir= (train); query_codes= (samplers)
 export EVAL_TASKS_DIR="/path/to/eq_stuff/tasks"              # out_dir= for evaluation tasks
+export EVAL_SEQ_TASKS_DIR="/path/to/eq_stuff/eval_sequences"  # out_dir= for evaluation query sequences
+export ONTOLOGY_DIR="/path/to/eq_stuff/ontology"             # EQ_build_ontology out_dir=; ontology_dir= everywhere else
 export TRAINING_TASKS_DIR="/path/to/eq_stuff/training_tasks" # out_dir= for training tasks
 export TRAINING_OUTPUT_DIR="/path/to/EveryQuery/results"     # pass as EQ_train output_dir= base; Hydra appends <date>/<time>
 

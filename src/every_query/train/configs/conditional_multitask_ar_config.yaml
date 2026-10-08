@@ -1,0 +1,155 @@
+# Production training config for the decoder-only all-vocabulary multitask model.
+defaults:
+  - _self_
+
+output_dir: ???
+do_overwrite: false
+do_resume: false
+seed: 140799
+
+hydra:
+  run:
+    dir: ${output_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ${output_dir}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+  job:
+    config:
+      override_dirname:
+        exclude_keys:
+          - output_dir
+          - datamodule.config.tensorized_cohort_dir
+          - datamodule.config.task_labels_dir
+          - datamodule.eval_tasks_dir
+
+datamodule:
+  _target_: every_query.data.conditional_multitask_datamodule.ConditionalMultitaskDataModule
+  config:
+    _target_: meds_torchdata.MEDSTorchDataConfig
+    tensorized_cohort_dir: ???
+    # TRAINING multitask labels: the out_dir of EQ_generate_multitask_sequences (per split, the
+    # metadata parquets + packed .labels.npy sidecars + _multitask_manifest.json).  Read by the fit
+    # loop only (train / tuning); it is NOT the evaluation grid (see eval_tasks_dir below).
+    task_labels_dir: ???
+    static_inclusion_mode: omit
+    seq_sampling_strategy: to_end
+    max_seq_len: 256
+  dataset_kwargs:
+    strip_delta_tokens: ${lightning_module.model.use_rope_time}
+    # The COHORT's vocabulary width V, which the leaf-only training sidecars are checked against.
+    # train.py overwrites this with the cohort's V after sizing the model, so with an ontology the
+    # model's config_overrides.vocab_size (V_ext) and this number differ and both are recorded.
+    expected_vocab_size: ${lightning_module.model.config_overrides.vocab_size}
+    # Set once on the model; the evaluation adapter resolves ancestor query / start / bound names
+    # through it.  The training datasets also receive it: their target bits are leaf-only either
+    # way, but a labels dir sampled with `ontology_mode` other than "none" carries ancestor-valued
+    # start / bound / conditioning codes that only resolve through the ontology that numbered them.
+    ontology_dir: ${lightning_module.model.ontology_dir}
+  # Optional QuerySeq evaluation-grid `eval/` root (EQ_generate_evaluation_query_sequences), an
+  # artifact independent of task_labels_dir.  Only trainer.test / trainer.predict /
+  # EQ_predict_multitask read it; fit never does, so null is fine for training.
+  eval_tasks_dir: null
+  # The model's window budget, forwarded to the evaluation adapter so an over-long grid row fails
+  # when the dataset is built rather than inside a forward pass.
+  max_windows: ${lightning_module.model.max_windows}
+  batch_size: 96
+  num_workers: 8
+  pin_memory: true
+
+lightning_module:
+  _target_: every_query.model.conditional_multitask_lightning.ConditionalMultitaskLightningModule
+  model:
+    _target_: every_query.model.conditional_multitask_ar_model.ConditionalMultitaskARModel
+    precision: ${trainer.precision}
+    max_windows: 5
+    use_rope_time: true
+    # Optional EQ_build_ontology output.  When set, train.py sizes config_overrides.vocab_size to
+    # the ontology's V_ext, the input/readout table is ancestor-mixed, and the leaf-only training
+    # targets are widened to V_ext inside the model's forward (ancestor bit = OR of its leaves).
+    # The training sampler needs no ontology for ancestor *targets*; it takes the same directory
+    # only to let an ancestor bound / start / condition a window (see its `ontology_mode`).
+    # `datamodule.dataset_kwargs.ontology_dir` interpolates from here.
+    ontology_dir: null
+    # Leave null: train.py fills in the cohort's vocabulary fingerprint (the multitask manifest's
+    # `vocab_fingerprint`, recomputed from metadata/codes.parquet).  Persisted in the checkpoint so an
+    # `ontology_dir` is re-verified against *this* cohort on every load and EQ_predict_multitask can
+    # refuse a same-width but different cohort.
+    cohort_vocab_fingerprint: null
+    config_overrides:
+      hidden_size: 384
+      num_hidden_layers: 12
+      num_attention_heads: 6
+      num_key_value_heads: 6
+      intermediate_size: 1536
+      attention_dropout: 0.0
+      max_position_embeddings: ???
+      vocab_size: ???
+      pad_token_id: 0
+  optimizer:
+    _target_: torch.optim.AdamW
+    _partial_: true
+    lr: 2e-4
+    weight_decay: 0.05
+    eps: 1.0e-8
+    betas: [0.9, 0.98]
+    amsgrad: false
+    fused: false
+  warmup_ratio: 0.05
+  LR_scheduler:
+    _target_: transformers.get_cosine_schedule_with_warmup
+    _partial_: true
+    num_cycles: 0.5
+
+trainer:
+  _target_: lightning.pytorch.trainer.Trainer
+  logger:
+    _target_: pytorch_lightning.loggers.wandb.WandbLogger
+    name: null
+    save_dir: "${trainer.default_root_dir}/loggers"
+    offline: false
+    id: null
+    anonymous: null
+    project: ${oc.env:WANDB_PROJECT,null}
+    log_model: false
+    prefix: ""
+    entity: ${oc.env:WANDB_ENTITY,null}
+  callbacks:
+    _target_: every_query.train.train.values_as_list
+    learning_rate_monitor:
+      _target_: lightning.pytorch.callbacks.LearningRateMonitor
+    model_checkpoint:
+      _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      dirpath: ${trainer.default_root_dir}/checkpoints
+      monitor: "tuning/loss"
+      verbose: false
+      save_last: true
+      save_top_k: 1
+      mode: min
+      save_weights_only: false
+      every_n_train_steps: null
+    early_stopping:
+      _target_: lightning.pytorch.callbacks.EarlyStopping
+      monitor: "tuning/loss"
+      min_delta: 5.0e-5
+      patience: 20
+      verbose: true
+      mode: min
+      strict: true
+      check_finite: true
+      stopping_threshold: null
+      divergence_threshold: null
+      check_on_train_epoch_end: false
+  default_root_dir: ${hydra:runtime.output_dir}
+  min_epochs: 0
+  max_epochs: 1
+  accelerator: auto
+  devices: 1
+  strategy: auto
+  accumulate_grad_batches: 1
+  log_every_n_steps: 50
+  check_val_every_n_epoch: 1
+  val_check_interval: 0.05
+  limit_val_batches: 100
+  deterministic: false
+  gradient_clip_val: 1.0
+  precision: bf16-mixed

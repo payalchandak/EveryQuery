@@ -78,7 +78,7 @@ def test_labels_match_ground_truth(
         window_end    = prediction_time + duration_days
         observed      = window_end <= max_time[subject] OR death_time[subject] <= window_end
         censored      = not observed
-        event_fires   = exists event(subject, code=query, time in (prediction_time, window_end])
+        event_fires   = exists event(subject, code=query, time in (prediction_time, window_end))
         boolean_value = None  if censored           # unobserved tail wins (spec §Stage 4)
                         else True if event_fires     # observed occurrence
                         else False                   # full window observed, no event
@@ -142,7 +142,7 @@ def test_labels_match_ground_truth(
         # occurrence (spec §Stage 4 / evaluate_index_df "Censoring takes priority"):
         #   null  → censored: window_end > max_time AND the subject is not dead by window_end
         #           (unobserved tail is unknown, wins even over an in-window occurrence)
-        #   True  → not censored AND an event occurred in (prediction_time, window_end]
+        #   True  → not censored AND an event occurred in (prediction_time, window_end)
         #   False → not censored AND no event in window (includes a subject dead by window_end)
         for row in labels.iter_rows(named=True):
             subj = row["subject_id"]
@@ -159,14 +159,14 @@ def test_labels_match_ground_truth(
             expected_censored = not observed
 
             # Ground-truth event_fires: any event of the matching code in
-            # (prediction_time, prediction_time + duration_days].  Sampler uses strict-> via
-            # join_asof(..., allow_exact_matches=False), so we mirror with a strict > lower bound
-            # and an inclusive <= upper bound here.
+            # (prediction_time, prediction_time + duration_days).  Sampler uses strict-> via
+            # join_asof(..., allow_exact_matches=False), so we mirror with a strict > lower bound,
+            # and a strict < upper bound to match its open horizon.
             subj_events = events.filter(pl.col("subject_id") == subj)
             event_fires = not subj_events.filter(
                 (pl.col("code") == row["query"])
                 & (pl.col("time") > row["prediction_time"])
-                & (pl.col("time") <= window_end)
+                & (pl.col("time") < window_end)
             ).is_empty()
 
             # Censoring wins: an unobserved tail is null even when an event was observed earlier in

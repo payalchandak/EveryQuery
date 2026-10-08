@@ -33,6 +33,7 @@ dependencies = [
   "filelock>=3.13,<4",
   "pytest>=8,<9",
   "meds-transforms>=0.6.7,<0.7",
+  "hydra-joblib-launcher>=1.2,<2", # parallel preprocessing workers (_parallel_runner.yaml)
   "meds-torch-data[lightning]~=0.9.0",
   "transformers>=4.48,<5",
   "torch>=2.6,<3",
@@ -85,6 +86,27 @@ EQ_predict = "every_query.predict.predict:main"
 # EQ_gen_eval_index / EQ_gen_eval_tasks / EQ_select_model) has been deleted per
 # the #83 consolidation wave; recover from git history if needed.
 EQ_evaluate = "every_query.evaluate.evaluate:main"
+# No EQ_generate_query_sequences: every_query.generate_tasks.query_sequence_labeling is a library
+# now, not a CLI.  Its labellers are the shared seam under the evaluation-grid generator, the
+# multitask sampler's prediction-time resolver and the multitask labeller's correctness oracle; its
+# Hydra `run`/`main` survive only as the differential test's training-pipeline arm.
+# All-vocabulary multi-bound multitask sampler (#20): K boundaries per context, one packed target bit
+# per base-vocabulary code per boundary, written as row-aligned `<shard>.labels.npy` sidecars.
+EQ_generate_multitask_sequences = "every_query.generate_tasks.sample_multitask_sequences:main"
+# Builds the code-ontology DAG artifacts (nodes/mix/closure parquets) that ancestor queries and
+# ontology-mixed embeddings read.  Side-car: the cohort's codes.parquet is read, never written.
+EQ_build_ontology = "every_query.data.build_ontology:main"
+# The evaluation-grid generator for the multitask model: labels the same N query sequences
+# (optionally with explicit window starts, #27) at every context of a sampled or supplied cohort,
+# as QuerySeqSchema parquets.  Consumed by EQ_predict_multitask.
+EQ_generate_evaluation_query_sequences = "every_query.generate_tasks.sample_evaluation_query_sequences:main"
+# Inference over that grid with the multitask model: one scalar final-query probability per grid
+# row, target-only (#28); no packed labels, manifest or sidecar are read.
+EQ_predict_multitask = "every_query.predict.predict_multitask:main"
+# Metrics over that same grid: groups the EQ_predict_multitask rows by task (the five window list
+# columns plus answers[:-1]) and scores each task's final-query probability against its final-query
+# answer: one AUROC per task with a 95% row-bootstrap CI.
+EQ_evaluate_multitask = "every_query.evaluate.evaluate_multitask:main"
 
 [tool.coverage.run]
 # Measure coverage for EQ_* CLIs launched via subprocess in tests/test_cli_smoke.py.
@@ -94,10 +116,29 @@ EQ_evaluate = "every_query.evaluate.evaluate:main"
 patch = ["subprocess"]
 
 [tool.pytest.ini_options] # Default pytest options
+# Put *this* checkout's `src` ahead of the editable install on `sys.path`.
+#
+# The editable install is a plain `.pth` naming one absolute path — the main checkout's `src`.
+# A `git worktree` shares that venv, so `pytest` launched from a worktree imported `every_query`
+# from the *main* checkout and silently tested a different branch's code: green runs that proved
+# nothing about the branch under test, and mutation-testing runs that reported a mutation
+# "caught" when the mutated file was never imported.  Nothing about that failure is visible in
+# the output — the suite passes either way — which is the same silent-wrong-answer shape as the
+# defects this branch exists to fix.
+pythonpath = ["src"]
 addopts = [
   "--color=yes",
   "--doctest-modules", # Ensures that doctest runs
   "--ignore=docs",
+  # No `--ignore=scripts`.  That exclusion existed for a directory of one-off conditional-model
+  # eval/report builders with hardcoded run paths and optional deps (reportlab), where a
+  # collection-time import was a liability rather than a check — and it is what hid several of
+  # them sitting broken behind stale `every_query` imports across the sampler redesign.  All of
+  # them are gone; `scripts/` now holds only `bench_multitask_dataset.py`, an ordinary driver
+  # over a shipped dataset class with no optional deps, so letting `--doctest-modules` import it
+  # is the check rather than the liability.  `tests/test_cli_smoke.py::test_script_imports` still
+  # covers it explicitly, because CI's `pytest -v` collects the rootdir but a `pytest tests/` run
+  # would not reach `scripts/` at all.
   "--ignore=AGENTS.md",
   "--ignore=CONTRIBUTORS.md",
   "--doctest-glob=*.md",
@@ -116,6 +157,11 @@ Issues = "https://github.com/payalchandak/EveryQuery/issues"
 [tool.ruff] # Ruff configuration for linting and formatting
 target-version = "py311"
 line-length = 110
+# `scripts/` was excluded because it held the conditional-model research drivers, ported verbatim
+# from the fork with ~200 pre-existing findings that `ruff format` would have rewritten wholesale,
+# turning every future edit to a script into a red build unrelated to the edit.  Those drivers are
+# deleted; the one remaining script is lint-clean, so the exclusion is dropped rather than left as
+# a licence for the next one to arrive dirty.
 extend-exclude = ["docs/index.md"]
 
 # Enable linters
@@ -140,4 +186,6 @@ select = [
 "*.ipynb" = ["E402"]  # Notebooks have imports spread across cells
 
 [tool.ruff.lint.pep8-naming]
-extend-ignore-names = ["*MEDS*", "*NRT*", "D", "M", "L", "LR*"]
+# B/S/H join the existing D/M/L: single-capital tensor-shape locals (batch, sequence, hidden),
+# the conventional notation in the model and dataset code.
+extend-ignore-names = ["*MEDS*", "*NRT*", "D", "M", "L", "LR*", "B", "S", "H"]

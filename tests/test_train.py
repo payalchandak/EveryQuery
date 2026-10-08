@@ -198,3 +198,45 @@ def test_resume_actually_loads_checkpoint_state(
         "advancing resume did not change any parameter tensors.  Likely a gradient-path "
         "regression (zero-lr, frozen params, or trainer.fit not actually training)."
     )
+
+
+def test_spent_budget_resume_leaves_last_ckpt_alone_so_a_later_extension_trains(
+    eq_trained_model_dir: Path,
+    eq_preprocessed_dataset: Path,
+    eq_sampled_tasks_dir: Path,
+    tmp_path_factory,
+) -> None:
+    """Reproduces the v12a/b/c chain: full epoch -> bare ``do_resume`` -> ``max_epochs=2`` extension.
+
+    Lightning only notices "``max_epochs=1`` reached" *after* restoring and bumping the loop
+    counters, and ``ModelCheckpoint.on_train_end`` then rewrites ``last.ckpt`` with them; the
+    extension resumes from that state at the end of its batch loop and trains zero steps.
+    ``train.py`` must recognise the spent budget up front and skip ``trainer.fit``.
+    """
+    resume_dir = tmp_path_factory.mktemp("eq_train_spent_budget")
+    _stage_resume_dir(eq_trained_model_dir, resume_dir)
+    last_ckpt = resume_dir / "checkpoints" / "last.ckpt"
+    assert last_ckpt.is_file()
+    starting_step = _highest_step_checkpoint(resume_dir)[1]["global_step"]
+    before = last_ckpt.read_bytes()
+
+    common = [
+        "EQ_train",
+        "--config-name=_demo_train",
+        f"output_dir={resume_dir!s}",
+        f"datamodule.config.tensorized_cohort_dir={eq_preprocessed_dataset!s}",
+        f"datamodule.config.task_labels_dir={eq_sampled_tasks_dir!s}",
+        "do_overwrite=False",
+        "do_resume=True",
+    ]
+    # (b) bare resume: max_epochs=1 is still binding, so there is nothing to train.
+    run_and_check(common, timeout=300.0)
+    assert last_ckpt.read_bytes() == before, "a no-op resume must not rewrite last.ckpt"
+    assert (resume_dir / "best_model.ckpt").is_file()
+
+    # (c) the extension must actually train.
+    run_and_check([*common, "trainer.max_epochs=2", f"+trainer.max_steps={starting_step + 2}"], timeout=300.0)
+    _, resumed = _highest_step_checkpoint(resume_dir)
+    assert resumed["global_step"] == starting_step + 2, (
+        f"extension after a no-op resume trained {resumed['global_step'] - starting_step} step(s), expected 2"
+    )

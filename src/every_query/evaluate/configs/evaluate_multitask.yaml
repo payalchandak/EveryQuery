@@ -1,0 +1,22 @@
+# EQ_evaluate_multitask — per-task AUROC + 95% CI over an EQ_predict_multitask output parquet.
+
+defaults:
+  - _self_
+
+# Required: the one-row-per-grid-row predictions parquet written by EQ_predict_multitask.
+predictions_parquet: ???
+
+# Required: output stem; the table lands at <stem>.by_task.parquet.
+metrics_stem: ???
+
+# Bootstrap replicates per task: each draws the task's rows with replacement and recomputes the
+# AUROC; the 95% interval is the 2.5th / 97.5th percentile over them.
+n_resamples: 1000
+
+# Seed for the row resampling, so a fixed predictions parquet gives fixed intervals.
+bootstrap_seed: 0
+
+hydra:
+  output_subdir: null
+  job:
+    chdir: false

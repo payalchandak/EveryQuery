@@ -61,8 +61,8 @@ These hold throughout the design; later sections reference them rather than rest
 5. **Determinism.** Distinct `(subject_id, time)` rows have no within-subject ties, so the dense rank is
     unique and a given `seed`/`prediction_time_index` always maps to the same `prediction_time`. All draws
     derive from `seed` with a fixed RNG consumption order (see *Determinism*).
-6. **Labels use `(prediction_time, prediction_time + duration]`** — strict lower bound
-    (`join_asof(..., allow_exact_matches=False)`), inclusive upper bound. This keeps labels
+6. **Labels use `(prediction_time, prediction_time + duration)`** — strict lower bound
+    (`join_asof(..., allow_exact_matches=False)`), strict upper bound. This keeps labels
     leakage-safe against the loader (see Stage 4).
 7. **Separate directory trees.** Final outputs (`training_tasks_dir`) and intermediate artifacts
     (`training_task_artifacts_dir`) live in disjoint, never-nested roots (see *Artifact layout*).
@@ -298,8 +298,8 @@ A patient context is a `(subject_idx, prediction_time_index)` pair; the timestam
 
 #### Labeling rule
 
-For each `(subject_id, prediction_time)` row, examine the window `(prediction_time, prediction_time + duration_days]`
-(invariant 6: open lower bound via `join_asof(..., allow_exact_matches=False)`, closed upper bound). **Censoring is
+For each `(subject_id, prediction_time)` row, examine the window `(prediction_time, prediction_time + duration_days)`
+(invariant 6: open lower bound via `join_asof(..., allow_exact_matches=False)`, open upper bound). **Censoring is
 resolved first**: if the window closes after the record ends and the subject is not known dead by the window end, the
 label is `null` regardless of any earlier occurrence. Otherwise, occurrence decides:
 
@@ -312,8 +312,9 @@ label is `null` regardless of any earlier occurrence. Otherwise, occurrence deci
 - **censored** — `prediction_time + duration_days > max_time[subject_id]` **and** the subject has no `MEDS_DEATH`
     row at or before the window end (the record ends before the window closes; the unobserved tail is unknown). Label
     `null`. Resolved *before* occurrence: an event observed earlier in the window does **not** override the unknown tail.
-- **occurs** — not censored, and an event with the query `code` falls strictly within
-    `(prediction_time, prediction_time + duration_days]`. Label `True`.
+- **occurs** — not censored, and an event with the query `code` falls inside
+    `(prediction_time, prediction_time + duration_days)` — strictly after `prediction_time`, strictly before the
+    window end. Label `True`.
 - **does not occur** — not censored, and no matching event in the window. Label `False`. This includes a subject who is
     dead by the window end: death is terminal, so the record is complete and a non-occurrence is a genuine negative.
 

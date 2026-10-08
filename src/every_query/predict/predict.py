@@ -188,13 +188,13 @@ def _check_vocab(task_codes: set[str], train_cfg: DictConfig) -> None:
             f"EQ_predict needs this to validate task codes against the model's vocab."
         )
     training_vocab = set(pl.read_parquet(metadata_fp, columns=["code"])["code"].to_list())
-    missing = task_codes - training_vocab
+    missing = sorted(set(task_codes) - training_vocab)
     if missing:
         raise ValueError(
             f"{len(missing)} of {len(task_codes)} task-query codes are not in the model's training "
             f"vocabulary.  Out-of-vocab codes would be PAD-encoded and produce near-uniform "
             f"probabilities; refuse rather than write misleading predictions.  Missing codes: "
-            f"{sorted(missing)[:10]}{'...' if len(missing) > 10 else ''}"
+            f"{missing[:10]}{'...' if len(missing) > 10 else ''}"
         )
 
 

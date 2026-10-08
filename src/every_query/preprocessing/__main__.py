@@ -36,6 +36,7 @@ def main(cfg: DictConfig):
     intermediate_dir = Path(cfg.intermediate_dir)
     output_dir = Path(cfg.output_dir)
     do_demo = cfg.do_demo
+    stage_runner_fp = cfg.stage_runner_fp  # optional MEDS-Transforms stage runner (e.g. parallelize block)
 
     # 0. Pre-MTD pre-processing
     logger.info("Pre-MTD pre-processing")
@@ -52,10 +53,10 @@ def main(cfg: DictConfig):
             env["MIN_EVENTS_PER_SUBJECT"] = "1"
 
         pipeline_config_fp = (CONFIGS / "_reshard_data.yaml") if cfg.do_reshard else (CONFIGS / "_data.yaml")
-        _run_stage(
-            ["MEDS_transform-pipeline", str(pipeline_config_fp)],
-            env=env,
-        )
+        cmd = ["MEDS_transform-pipeline", str(pipeline_config_fp)]
+        if stage_runner_fp:
+            cmd.extend(["--stage_runner_fp", str(stage_runner_fp)])
+        _run_stage(cmd, env=env)
 
         logger.info("Pre-MTD pre-processing done")
         done_fp.touch()
@@ -69,13 +70,14 @@ def main(cfg: DictConfig):
     else:
         # MTD_preprocess takes everything it needs via CLI args; no env mutation needed, so we let
         # it inherit the parent environment instead of building a throwaway copy.
-        _run_stage(
-            [
-                "MTD_preprocess",
-                f"MEDS_dataset_dir={intermediate_dir!s}",
-                f"output_dir={output_dir!s}",
-            ]
-        )
+        cmd = [
+            "MTD_preprocess",
+            f"MEDS_dataset_dir={intermediate_dir!s}",
+            f"output_dir={output_dir!s}",
+        ]
+        if stage_runner_fp:
+            cmd.append(f"stage_runner_fp={stage_runner_fp!s}")
+        _run_stage(cmd)
 
         logger.info("MTD pre-processing done")
         done_fp.touch()
