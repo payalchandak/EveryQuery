@@ -1,0 +1,67 @@
+# Imminent hypoglycemia
+#
+# Clinical question:
+#   Given any event during an ICU stay, and given that a glucose is drawn within the next
+#   12 hours while the patient is still in hospital, will any of those readings be below
+#   70 mg/dL?
+#
+# Trigger:         every event during an open ICU stay.
+# Prediction time: the triggering event (`input.index_timestamp: end`).
+# Label:           `glucose_low` in the `target` window.
+# Cohort:          ICU stay still open at trigger, at least one glucose drawn in the 12h
+#                  horizon, and no live hospital discharge in that horizon.
+#
+# The `glucose: (1, None)` gate makes the question conditional on a measurement actually
+# happening.  Without it a patient who was never tested is scored identically to one
+# tested and found normal, which makes the label partly a prediction of measurement
+# behaviour rather than of hypoglycemia.
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+  hospital_discharge:
+    code:
+      any:
+        - HOSPITAL_DISCHARGE//HOME
+        - HOSPITAL_DISCHARGE//SNF
+        - HOSPITAL_DISCHARGE//REHAB
+        - HOSPITAL_DISCHARGE//LTACH
+        - HOSPITAL_DISCHARGE//AMA
+  glucose:
+    code: { any: [LAB//50931, LAB//50809, LAB//225664] }
+  glucose_low:
+    code: { any: [LAB//50931, LAB//50809, LAB//225664] }
+    value_max: 70
+    value_max_inclusive: false
+
+trigger: _ANY_EVENT
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  target:
+    start: trigger
+    end: start + 12h
+    start_inclusive: false
+    end_inclusive: true
+    has:
+      hospital_discharge: (None, 0)
+      glucose: (1, None)
+    label: glucose_low

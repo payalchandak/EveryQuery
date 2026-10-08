@@ -1,0 +1,72 @@
+# Extubation before tracheostomy
+#
+# Clinical question:
+#   Given any event while a patient is receiving invasive ventilation in the ICU with no
+#   tracheostomy yet, and restricting to patients who survive to the end of the
+#   ventilation episode, will that episode end in extubation rather than tracheostomy?
+#
+# Trigger:         every event during an open ICU stay and an open ventilation episode.
+# Prediction time: the triggering event (`input.index_timestamp: end`).
+# Label:           `extubation` in the `target` window, which runs to whichever endpoint
+#                  comes first (`vent_endpoint` = extubation or tracheostomy).
+# Cohort:          ventilation episode still open at trigger, no tracheostomy yet, and the
+#                  patient alive through to the airway endpoint.
+#
+# The survival restriction is stated as `death: (None, 0)` on `target` rather than left
+# implicit.  A patient who dies on the ventilator never reaches an airway endpoint, so the
+# event-bound window cannot resolve and ACES drops the row silently; the explicit gate
+# makes the same exclusion visible in the config.
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+  intubation:
+    code: INTUBATION
+  extubation:
+    code: EXTUBATION
+  tracheostomy:
+    code: PROC//TRACHEOSTOMY
+  death:
+    code: DEATH
+  vent_endpoint:
+    expr: or(extubation, tracheostomy)
+
+trigger: _ANY_EVENT
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+
+  vent_context:
+    start: end <- intubation
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      extubation: (None, 0)
+      tracheostomy: (None, 0)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  target:
+    start: trigger
+    end: start -> vent_endpoint
+    start_inclusive: false
+    end_inclusive: true
+    has:
+      death: (None, 0)
+    label: extubation

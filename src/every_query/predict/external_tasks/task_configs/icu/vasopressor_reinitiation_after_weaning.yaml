@@ -1,0 +1,94 @@
+# Vasopressor reinitiation after weaning
+#
+# Clinical question:
+#   Given any event while a patient is on vasopressors in the ICU, and given that
+#   vasopressors are stopped within 48 hours, will they be restarted within 72 hours of
+#   that stop?
+#
+# Trigger:         every event during an open ICU stay and an open vasopressor episode.
+# Prediction time: the triggering event (`input.index_timestamp: end`).
+# Label:           `pressor_start` in the `reinitiation` window, which is anchored to the
+#                  actual pressor stop (`to_stop.end`), not to the trigger.
+# Cohort:          vasopressor episode still open at trigger (`pressor_context`), and a
+#                  pressor stop occurring within 48h of the trigger (`stop_soon`).
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+  pressor_start:
+    code:
+      {
+        any:
+          [
+            MED_START//NOREPINEPHRINE,
+            MED_START//EPINEPHRINE,
+            MED_START//VASOPRESSIN,
+            MED_START//PHENYLEPHRINE,
+            MED_START//DOPAMINE,
+            MED_START//ANGIOTENSIN_II,
+          ],
+      }
+  pressor_stop:
+    code:
+      {
+        any:
+          [
+            MED_END//NOREPINEPHRINE,
+            MED_END//EPINEPHRINE,
+            MED_END//VASOPRESSIN,
+            MED_END//PHENYLEPHRINE,
+            MED_END//DOPAMINE,
+            MED_END//ANGIOTENSIN_II,
+          ],
+      }
+
+trigger: _ANY_EVENT
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+
+  pressor_context:
+    start: end <- pressor_start
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      pressor_stop: (None, 0)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  stop_soon:
+    start: trigger
+    end: start + 48h
+    start_inclusive: false
+    end_inclusive: true
+    has:
+      pressor_stop: (1, None)
+
+  to_stop:
+    start: trigger
+    end: start -> pressor_stop
+    start_inclusive: false
+    end_inclusive: true
+
+  reinitiation:
+    start: to_stop.end
+    end: start + 72h
+    start_inclusive: false
+    end_inclusive: true
+    label: pressor_start

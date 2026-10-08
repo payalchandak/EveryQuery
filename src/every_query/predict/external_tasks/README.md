@@ -18,6 +18,10 @@ vocabulary*.
 - **`get_per_code_from_composite.py`** — the inverse: given a composite-task eval dataframe,
     extract per-code tasks and evaluate the trained model on each individually.
 - **`configs/`** — the Hydra configs for all three scripts.
+- **`task_configs/`**: the ACES task definitions themselves, one YAML per task with the clinical
+    question in a header comment. These are the *inputs* to an ACES extraction, whose output
+    parquets `aces_to_eq.py` then converts. The file stem is the `task_name` that
+    `configs/aces_to_eq.yaml` interpolates into `${ACES_SHARDS_DIR}/${task_name}/held_out`.
 
 ## Entry points
 
