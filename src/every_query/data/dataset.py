@@ -145,6 +145,44 @@ class EveryQueryBatch(MEDSTorchBatch):
             self._MEDSTorchBatch__check_shape("duration_days", (self.batch_size,))
 
 
+def _code_dtype(schema: dict[str, np.dtype]) -> np.dtype | type:
+    """Returns the dtype the `code` arrays are stored in, per a `JointNestedRaggedTensorDict` schema.
+
+    Schema keys are dim-qualified (`dim0/code` in `SM` mode, `dim1/code` in `SEM` mode) when the schema
+    was carried over from disk, but bare (`code`) when the tensor dict derived it from its own arrays, so
+    match on the trailing component either way.
+
+    Args:
+        schema: A JNRT schema, mapping (possibly dim-qualified) tensor names to dtypes.
+
+    Returns:
+        The dtype stored for the `code` key, or `np.int64` if the schema does not mention one.
+
+    Examples:
+        >>> _code_dtype({"dim0/code": np.dtype("int64"), "dim0/numeric_value": np.dtype("float32")})
+        dtype('int64')
+        >>> _code_dtype({"dim1/code": np.dtype("int32")})
+        dtype('int32')
+        >>> _code_dtype({"code": np.dtype("int16")})
+        dtype('int16')
+
+    A schema with no `code` entry falls back to the widest signed integer, which never truncates a
+    vocabulary index:
+
+        >>> _code_dtype({"dim0/numeric_value": np.dtype("float32")})
+        <class 'numpy.int64'>
+
+    Keys that merely end in "code" do not match:
+
+        >>> _code_dtype({"dim0/static_code": np.dtype("int8")})
+        <class 'numpy.int64'>
+    """
+    for key, dtype in schema.items():
+        if key.rsplit("/", 1)[-1] == DataSchema.code_name:
+            return dtype
+    return np.int64
+
+
 class QueryData(NamedTuple):
     """Simple data structure to hold query data, capturing codes.
 
@@ -405,10 +443,23 @@ class EveryQueryPytorchDataset(MEDSPytorchDataset):
         out = super()._seeded_getitem(idx, seed)
 
         dynamic_data = out["dynamic"]
-        schema = dynamic_data.schema
-        schema["code"] = np.int16
+        # `JointNestedRaggedTensorDict.schema` hands back the tensor dict's internal `_schema` by
+        # reference, and the JNRT constructor writes the dtype of every bare key it builds straight
+        # into whatever dict it is handed.  Build the query against a copy so constructing it can't
+        # mutate the patient tensors' schema as a side effect.
+        patient_schema = dynamic_data.schema
+        query_schema = dict(patient_schema)
+        # The query token shares the patient code vocabulary, so it must be stored in the same dtype
+        # the patient `code` array uses.  Pinning a narrow dtype here silently caps the vocabulary
+        # (int16 overflows past 32,767) and omitting the entry is no better: the constructor then
+        # infers a minimal — possibly unsigned — width from the single value it is given.
+        query_schema[DataSchema.code_name] = _code_dtype(patient_schema)
         query_data = QueryData(code=[self.encode_query(self.query[idx])])
-        query_as_JNRT = query_data.to_JNRT(self.config.batch_mode, schema)
+        query_as_JNRT = query_data.to_JNRT(self.config.batch_mode, query_schema)
+        # `concatenate` requires the schemas to compare equal, but the constructor has just added
+        # bare-key entries to `query_schema` that the patient's dim-qualified schema lacks.  The
+        # arrays themselves are already built, so re-align the query's schema with the patient's.
+        query_as_JNRT._schema = dict(patient_schema)
         out["dynamic"] = JointNestedRaggedTensorDict.concatenate([query_as_JNRT, dynamic_data])
 
         if getattr(self, "has_occurs", False):

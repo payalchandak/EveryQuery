@@ -231,3 +231,61 @@ class TestDifferentQueryStringProducesDifferentIndex:
             f"Position 0 for sample 1 should carry encoded {query_b!r} ({enc_b}), "
             f"got {batch.code[1, 0].item()}"
         )
+
+
+class TestQueryTokenSupportsLargeVocabularies:
+    """The query token must not impose a vocabulary cap of its own.
+
+    ``_seeded_getitem`` used to pin the query token's dtype to ``np.int16`` before building
+    its JNRT, which made any vocabulary index above 32,767 raise ``OverflowError``.  Nothing
+    else bounds the vocabulary — ``train.py`` sizes ``vocab_size`` from the data — so a large
+    merged cohort trained fine until the first query token overflowed.  See issue #291.
+    """
+
+    LARGE_INDEX = 40_000
+
+    def test_large_query_index_survives_round_trip(self, demo_dataset):
+        """A vocab index well past the int16 ceiling must round-trip intact."""
+        idx = 0
+        query = demo_dataset.query[idx]
+        original = dict(demo_dataset.code_to_index)
+        demo_dataset.code_to_index[query] = self.LARGE_INDEX
+        try:
+            assert demo_dataset.encode_query(query) == self.LARGE_INDEX, (
+                "Precondition: the patched vocabulary must encode the query to the large index"
+            )
+            item = demo_dataset._seeded_getitem(idx)
+            first_code = int(item["dynamic"].to_dense()["code"][0])
+        finally:
+            demo_dataset.code_to_index = original
+
+        assert first_code == self.LARGE_INDEX, (
+            f"Position-0 code should carry the large query index ({self.LARGE_INDEX}) "
+            f"intact, got {first_code} — the query token dtype is truncating the vocabulary"
+        )
+
+    def test_building_the_query_does_not_mutate_the_patient_schema(self, demo_dataset, monkeypatch):
+        """``dynamic_data.schema`` is the JNRT's internal dict; building the query must not touch it.
+
+        The patient tensor dict is rebuilt per item, so the mutation has to be observed on the very
+        object ``_seeded_getitem`` works with — hence the spy on the upstream implementation.
+        """
+        from meds_torchdata import MEDSPytorchDataset
+
+        captured = {}
+        upstream = MEDSPytorchDataset._seeded_getitem
+
+        def spy(self, idx, seed=None):
+            out = upstream(self, idx, seed)
+            captured["dynamic"] = out["dynamic"]
+            captured["before"] = dict(out["dynamic"].schema)
+            return out
+
+        monkeypatch.setattr(MEDSPytorchDataset, "_seeded_getitem", spy)
+        demo_dataset._seeded_getitem(0, 0)
+
+        assert captured, "Precondition: the spy must have observed the upstream patient tensors"
+        after = dict(captured["dynamic"].schema)
+        assert after == captured["before"], (
+            f"Building the query JNRT mutated the patient tensors' schema: {captured['before']} -> {after}"
+        )
