@@ -195,6 +195,64 @@ class TestTrainOverwriteAndResumeBothTrue:
         assert (both_flags_output / "resolved_config.yaml").is_file()
 
 
+class TestFirstLaunchWithResumeWritesConfig:
+    """A *fresh* run started with ``do_resume=True, do_overwrite=False`` must still write its config.
+
+    Regression guard for #294.  That flag combination is the natural crash-safe invocation for a
+    long job, but the config write used to be gated on ``not cfg.do_resume or cfg.do_overwrite``,
+    so the first launch into an empty dir left no ``config.yaml``.  Checkpoint discovery keys off
+    ``cfg_path.exists()``, so the post-crash relaunch found no config, discovered no checkpoint,
+    and silently restarted from step 0 while the first attempt's checkpoints sat in the directory
+    (and ``EQ_predict`` had no ``resolved_config.yaml`` to load).
+    """
+
+    @pytest.fixture(scope="class")
+    def first_launch(self, task_labels_dir, tensorized_cohort_dir, tmp_path_factory) -> Path:
+        output_dir = tmp_path_factory.mktemp("cli_fresh_resume")
+        result = _run_train_subprocess(
+            task_labels_dir,
+            tensorized_cohort_dir,
+            output_dir,
+            do_resume=True,
+            do_overwrite=False,
+        )
+        assert result.returncode == 0, (
+            f"Fresh run with do_resume=True failed (rc={result.returncode}).\nstderr:\n{result.stderr}"
+        )
+        return output_dir
+
+    def test_config_yaml_written_on_fresh_resume_launch(self, first_launch):
+        assert (first_launch / "config.yaml").is_file()
+
+    def test_resolved_config_yaml_written_on_fresh_resume_launch(self, first_launch):
+        assert (first_launch / "resolved_config.yaml").is_file()
+
+    def test_relaunch_resumes_instead_of_restarting(
+        self, first_launch, task_labels_dir, tensorized_cohort_dir
+    ):
+        """The relaunch (same flags, as after a crash) must enter the resume branch."""
+        relaunch = _run_train_subprocess(
+            task_labels_dir,
+            tensorized_cohort_dir,
+            first_launch,
+            do_resume=True,
+            do_overwrite=False,
+            extra_overrides=["+trainer.max_steps=4"],
+        )
+        assert relaunch.returncode == 0, (
+            f"Relaunch failed (rc={relaunch.returncode}).\nstderr:\n{relaunch.stderr}"
+        )
+        combined = relaunch.stdout + relaunch.stderr
+        assert "Resuming training in existing run directory" in combined, (
+            "Relaunch did not enter the resume branch — it started a fresh run instead.\n"
+            f"stdout:\n{relaunch.stdout}\nstderr:\n{relaunch.stderr}"
+        )
+        assert "Restoring states from the checkpoint path" in combined, (
+            "Relaunch entered the resume branch but loaded no checkpoint state.\n"
+            f"stdout:\n{relaunch.stdout}\nstderr:\n{relaunch.stderr}"
+        )
+
+
 class TestTrainResumeRejectsStructuralDrift:
     """``do_resume=True`` must refuse to proceed when the new invocation disagrees with the resumed-from
     config on a structural key (anything not in ``ALLOWED_DIFFERENCE_KEYS``).
