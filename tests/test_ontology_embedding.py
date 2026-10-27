@@ -192,6 +192,45 @@ def test_unrelated_rows_receive_no_gradient():
     assert grad[3].abs().max() == 0.0, "a node with no mix row received gradient"
 
 
+def test_gradient_matches_autograds_own_sparse_backward():
+    """The cached-transpose backward must give exactly what ``torch.sparse.mm``'s autograd gives."""
+    n, h = 6, 3
+    mix = _sparse(
+        [(0, 0, 1.0), (2, 2, 0.5), (2, 1, 0.5), (3, 3, 0.25), (3, 1, 0.25), (3, 0, 0.5), (5, 5, 1.0)], n
+    )
+    raw = _raw(n, h)
+    ref = copy.deepcopy(raw)
+    emb = OntologyEmbedding(raw, mix)
+    ids = torch.tensor([3, 2, 5, 3])
+    emb(ids).pow(2).sum().backward()
+    torch.sparse.mm(mix, ref.weight)[ids].pow(2).sum().backward()
+    torch.testing.assert_close(raw.weight.grad, ref.weight.grad, rtol=0, atol=0)
+
+
+def test_the_transpose_is_sorted_once_not_every_step():
+    n, h = 4, 2
+    emb = OntologyEmbedding(_raw(n, h), _sparse([(i, i, 1.0) for i in range(n)], n))
+    for _ in range(2):
+        emb.clear_cache()
+        emb(torch.tensor([1])).sum().backward()
+    first = emb._mix_t
+    emb.clear_cache()
+    emb(torch.tensor([2])).sum().backward()
+    assert emb._mix_t is first
+
+
+def test_inference_before_training_still_trains(tmp_path):
+    """A validation sanity pass under inference mode must not leave a cache that breaks training."""
+    n, h = 4, 2
+    raw = _raw(n, h)
+    emb = OntologyEmbedding(raw, _sparse([(i, i, 1.0) for i in range(n)], n))
+    with torch.inference_mode():
+        emb(torch.tensor([1]))
+    emb.clear_cache()
+    emb(torch.tensor([1])).sum().backward()
+    assert raw.weight.grad[1].abs().sum() > LIVE
+
+
 # ── 3. the per-forward cache ────────────────────────────────────────────
 
 
