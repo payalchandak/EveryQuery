@@ -100,6 +100,12 @@ EQ_process_data \
 | `output_dir`       | tensorized cohort for training; `metadata/codes.parquet` here is the model vocabulary |
 | `do_reshard=true`  | reshard the input first (default `false`)                                             |
 
+Categorical observations whose category sits in `text_value` (a heart-rhythm reading, a safety-measure entry)
+are folded into the code before the rare-code filter, `LAB//220048//UNK` + `"AF (Atrial Fibrillation)"`
+becoming `LAB//220048//UNK//AF (Atrial Fibrillation)`, so each (item, category) pair is one token and
+the bare item is an ancestor in the ontology. Only rows with a lettered `text_value` and no
+`numeric_value` are touched; numbers stored as text (`"120/80"`) are left for the ETL to parse.
+
 ### 2. (Optional) Build an ontology — `EQ_build_ontology`
 
 ```bash
