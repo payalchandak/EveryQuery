@@ -22,6 +22,25 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+class _SparseMix(torch.autograd.Function):
+    """``A @ W`` with a backward that reuses a pre-coalesced ``A^T``.
+
+    Autograd's own backward for ``torch.sparse.mm(A, W)`` builds ``A.t()`` and coalesces it — a full
+    sort of the matrix's indices — on every training step, although ``A`` never changes. Sorting once
+    and reusing the result gives bit-identical gradients, is faster, and avoids a GPU sort kernel that
+    has been seen to fault intermittently (``merge_sort: failed to synchronize: cudaErrorIllegalAddress``).
+    """
+
+    @staticmethod
+    def forward(ctx, mix: torch.Tensor, mix_t: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        ctx.mix_t = mix_t
+        return torch.sparse.mm(mix, weight)
+
+    @staticmethod
+    def backward(ctx, grad: torch.Tensor):
+        return None, None, torch.sparse.mm(ctx.mix_t, grad.contiguous())
+
+
 class OntologyEmbedding(torch.nn.Module):
     """Wraps a raw ``nn.Embedding`` with a sparse ancestor-mix matrix.
 
@@ -72,6 +91,9 @@ class OntologyEmbedding(torch.nn.Module):
         self.tok = raw
         self.register_buffer("mix", mix, persistent=False)
         self._mixed: torch.Tensor | None = None
+        self._mix_t: torch.Tensor | None = (
+            None  # coalesced ``A^T`` for the backward, built once per device/dtype
+        )
 
     @property
     def weight(self) -> torch.Tensor:
@@ -106,7 +128,17 @@ class OntologyEmbedding(torch.nn.Module):
             # Force the sparse mm in the raw table's dtype: under autocast a bf16 dense operand
             # would not match the fp32 sparse matrix.
             with torch.autocast(device_type=self.tok.weight.device.type, enabled=False):
-                self._mixed = torch.sparse.mm(self.mix.to(self.tok.weight.dtype), self.tok.weight)
+                mix = self.mix.to(self.tok.weight.dtype)
+                if not torch.is_grad_enabled() or torch.is_inference_mode_enabled():
+                    # No backward will run, so there is no transpose to sort.
+                    self._mixed = torch.sparse.mm(mix, self.tok.weight)
+                else:
+                    if self._mix_t is None or (self._mix_t.device, self._mix_t.dtype) != (
+                        mix.device,
+                        mix.dtype,
+                    ):
+                        self._mix_t = mix.t().coalesce()
+                    self._mixed = _SparseMix.apply(mix, self._mix_t, self.tok.weight)
         return self._mixed
 
     def forward(self, ids: torch.Tensor) -> torch.Tensor:
