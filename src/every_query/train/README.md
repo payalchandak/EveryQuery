@@ -75,7 +75,8 @@ best checkpoint.
 `lightning_module.LR_scheduler` comes from the `lr_scheduler` config group: `cosine` (the default,
 horizon-aware), or the horizon-free `constant` and `inverse_sqrt`. Warmup is sized by
 `lightning_module.warmup_ratio` (a fraction of the run's total steps) or by a fixed
-`+lightning_module.warmup_steps=N` (at most one of the two).
+`+lightning_module.warmup_steps=N`. At most one of the two may be set, so a fixed warmup on the
+base configs also needs `lightning_module.warmup_ratio=0` (`+anytime=ema25` does this for you).
 
 `+anytime=ema25` turns on Anytime Pretraining (#315): the same AdamW and peak LR, a fixed
 2,000-step warmup, then a constant LR, plus an `AnytimeEMA` callback that keeps an EMA of the
@@ -92,8 +93,9 @@ EQ_train +anytime=ema25 trainer.callbacks.anytime_ema=null ... # constant LR, ra
 Validation and test score the EMA weights, so `tuning/loss`, best-checkpoint selection and early
 stopping all refer to the EMA model. Checkpoints keep the raw weights and optimizer state (for exact
 resume) and store the EMA as callback state; `EQ_predict` / `EQ_evaluate` load the EMA weights
-automatically when a checkpoint has them. The EMA costs one extra fp32 copy of the trainable
-weights in accelerator memory, and sharded strategies (FSDP, DeepSpeed) are not supported.
+automatically when a checkpoint has them. The EMA is kept in fp32 and costs one extra copy of the
+trainable weights in accelerator memory (two during validation, which also holds the raw weights it
+swaps out). Sharded strategies (FSDP, DeepSpeed, ModelParallel) are not supported.
 
 ## Resume behavior
 

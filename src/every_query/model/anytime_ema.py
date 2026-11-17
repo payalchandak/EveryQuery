@@ -22,7 +22,12 @@ this callback (Lightning moves checkpoint callbacks to the end), so the checkpoi
 ``on_validation_end`` holds the restored raw weights plus the EMA as callback state.
 
 Only strategies in which every rank holds a full parameter replica (single device, DDP) are
-supported; sharded strategies (FSDP, DeepSpeed) raise.
+supported; sharded strategies (FSDP, DeepSpeed, ModelParallel) raise.
+
+The EMA is always kept in fp32, whatever the parameters' dtype: under ``bf16-true`` the late-run
+update weight ``~k / t`` is far below one bf16 rounding step, so a bf16 EMA would freeze.
+Validation briefly holds one more copy of the trainable weights (the raw ones it swaps out).
+Prediction does not swap; :func:`apply_ema_weights` installs the EMA for it instead.
 """
 
 from __future__ import annotations
@@ -39,7 +44,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_SHARDED_STRATEGY_MARKERS = ("FSDP", "DeepSpeed")
+_SHARDED_STRATEGY_MARKERS = ("FSDP", "DeepSpeed", "ModelParallel")
 
 
 def ema_decay(step: int, k: float) -> float:
@@ -147,7 +152,7 @@ class AnytimeEMA(Callback):
         if not self.ema:
             # Fresh run (or a resume from a checkpoint without EMA state, which starts a new
             # averaging phase from the current weights).
-            self.ema = {n: p.detach().clone() for n, p in params.items()}
+            self.ema = {n: p.detach().to(torch.float32, copy=True) for n, p in params.items()}
             self.last_step = trainer.global_step
             logger.info("AnytimeEMA: initialized EMA-%g from the weights at step %d.", self.k, self.last_step)
             return
@@ -159,8 +164,8 @@ class AnytimeEMA(Callback):
                 "AnytimeEMA state restored from the checkpoint does not match the module's trainable "
                 f"parameters (missing={missing[:5]}, unexpected={unexpected[:5]})."
             )
-        # Checkpoint state may have been restored onto another device or dtype.
-        self.ema = {n: t.to(device=params[n].device, dtype=params[n].dtype) for n, t in self.ema.items()}
+        # Checkpoint state may have been restored onto another device.
+        self.ema = {n: t.to(device=params[n].device, dtype=torch.float32) for n, t in self.ema.items()}
 
     @torch.no_grad()
     def on_train_batch_end(self, trainer: L.Trainer, pl_module: L.LightningModule, *args: Any) -> None:
@@ -173,7 +178,8 @@ class AnytimeEMA(Callback):
         params = dict(pl_module.named_parameters())
         torch._foreach_lerp_(
             [self.ema[n] for n in names],
-            [params[n].detach() for n in names],
+            # fp32 views of fp32 parameters, fp32 copies of low-precision ones.
+            [params[n].detach().float() for n in names],
             ema_decay(step, self.k),
         )
 
@@ -217,6 +223,15 @@ class AnytimeEMA(Callback):
         self._swap_out(pl_module)
 
     # ------------------------------------------------------------------ checkpoint
+
+    def on_save_checkpoint(
+        self, trainer: L.Trainer, pl_module: L.LightningModule, checkpoint: dict[str, Any]
+    ) -> None:
+        # ModelCheckpoint always runs after the swap-out, but any other save made mid-validation
+        # (a hook's trainer.save_checkpoint, SLURM auto-requeue) would capture the EMA as the model
+        # weights and lose the raw ones.  Put the raw weights back into what gets written.
+        for n, raw in self._raw.items():
+            checkpoint["state_dict"][n] = raw.detach().clone()
 
     def state_dict(self) -> dict[str, Any]:
         return {"k": self.k, "last_step": self.last_step, "ema": self.ema}

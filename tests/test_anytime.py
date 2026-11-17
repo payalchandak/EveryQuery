@@ -348,3 +348,33 @@ def test_cli_anytime_run_publishes_ema_weights(task_labels_dir, tensorized_cohor
         torch.testing.assert_close(ema_params[n].detach(), t)
     torch.testing.assert_close(raw_params[next(iter(ema))].detach(), ckpt["state_dict"][next(iter(ema))])
     assert any(not torch.equal(ema_params[n], raw_params[n]) for n in ema), "EMA should differ from raw"
+
+
+def test_ema_stays_fp32_and_keeps_moving_for_bf16_weights():
+    """Under bf16-true weights a bf16 EMA would freeze (k / t is below bf16's rounding step)."""
+    model = _Tiny().to(torch.bfloat16)
+    cb = AnytimeEMA(k=25.0)
+    cb.on_train_start(Mock(global_step=25_000), model)
+    assert all(t.dtype == torch.float32 for t in cb.ema.values())
+
+    start = cb.ema["lin.bias"].clone()
+    with torch.no_grad():
+        model.lin.bias.add_(0.5)
+    for step in range(25_001, 26_001):
+        cb.on_train_batch_end(Mock(global_step=step), model)
+    moved = (cb.ema["lin.bias"] - start).item()
+    assert moved == pytest.approx(0.5 * (1 - 2 ** (-1)), rel=0.05)  # one half-life at t=25k with k=25
+
+
+def test_mid_validation_checkpoint_saves_raw_weights():
+    """A checkpoint written while the EMA is swapped in still records the raw weights."""
+    model = _Tiny()
+    cb = AnytimeEMA()
+    cb.ema = {n: torch.zeros_like(p) for n, p in model.named_parameters() if p.requires_grad}
+    raw = model.lin.weight.detach().clone()
+
+    cb.on_validation_start(Mock(), model)
+    checkpoint = {"state_dict": model.state_dict()}
+    cb.on_save_checkpoint(Mock(), model, checkpoint)
+    torch.testing.assert_close(checkpoint["state_dict"]["lin.weight"], raw)
+    assert torch.equal(model.lin.weight, torch.zeros_like(raw)), "the live module keeps scoring the EMA"
