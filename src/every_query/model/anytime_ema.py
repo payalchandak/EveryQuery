@@ -38,13 +38,14 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 from lightning.pytorch import Callback
+from lightning.pytorch.strategies import DeepSpeedStrategy, FSDPStrategy, ModelParallelStrategy
 
 if TYPE_CHECKING:
     import lightning as L
 
 logger = logging.getLogger(__name__)
 
-_SHARDED_STRATEGY_MARKERS = ("FSDP", "DeepSpeed", "ModelParallel")
+_SHARDED_STRATEGIES = (FSDPStrategy, DeepSpeedStrategy, ModelParallelStrategy)
 
 
 def ema_decay(step: int, k: float) -> float:
@@ -135,15 +136,17 @@ class AnytimeEMA(Callback):
         self.ema: dict[str, torch.Tensor] = {}
         self.last_step = 0
         self._raw: dict[str, torch.Tensor] = {}
+        # (EMA tensors, matching parameters) in one order, bound once per fit in on_train_start.
+        self._ema_list: list[torch.Tensor] = []
+        self._param_list: list[torch.Tensor] = []
 
     # ------------------------------------------------------------------ lifecycle
 
     def setup(self, trainer: L.Trainer, pl_module: L.LightningModule, stage: str) -> None:
-        strategy = type(trainer.strategy).__name__
-        if any(marker in strategy for marker in _SHARDED_STRATEGY_MARKERS):
+        if isinstance(trainer.strategy, _SHARDED_STRATEGIES):
             raise NotImplementedError(
                 f"AnytimeEMA keeps a full parameter replica and does not support the sharded "
-                f"strategy {strategy}."
+                f"strategy {type(trainer.strategy).__name__}."
             )
 
     @torch.no_grad()
@@ -156,6 +159,7 @@ class AnytimeEMA(Callback):
             self.ema = {n: p.detach().to(torch.float32, copy=True) for n, p in params.items()}
             self.last_step = trainer.global_step
             logger.info("AnytimeEMA: initialized EMA-%g from the weights at step %d.", self.k, self.last_step)
+            self._bind(params)
             return
 
         if set(self.ema) != set(params):
@@ -167,6 +171,12 @@ class AnytimeEMA(Callback):
             )
         # Checkpoint state may have been restored onto another device.
         self.ema = {n: t.to(device=params[n].device, dtype=torch.float32) for n, t in self.ema.items()}
+        self._bind(params)
+
+    def _bind(self, params: dict[str, torch.nn.Parameter]) -> None:
+        names = list(self.ema)
+        self._ema_list = [self.ema[n] for n in names]
+        self._param_list = [params[n].detach() for n in names]
 
     @torch.no_grad()
     def on_train_batch_end(self, trainer: L.Trainer, pl_module: L.LightningModule, *args: Any) -> None:
@@ -175,12 +185,10 @@ class AnytimeEMA(Callback):
             return  # mid-accumulation micro-batch, or no optimizer step happened
         self.last_step = step
 
-        names = list(self.ema)
-        params = dict(pl_module.named_parameters())
         torch._foreach_lerp_(
-            [self.ema[n] for n in names],
-            # fp32 views of fp32 parameters, fp32 copies of low-precision ones.
-            [params[n].detach().float() for n in names],
+            self._ema_list,
+            # The parameters themselves when fp32, fp32 copies of low-precision ones.
+            [p.float() for p in self._param_list],
             ema_decay(step, self.k),
         )
 

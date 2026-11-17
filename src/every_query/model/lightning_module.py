@@ -11,6 +11,7 @@ import hydra
 import lightning as L
 import torch
 import torch.nn.parameter
+from lightning.fabric.utilities.exceptions import MisconfigurationException
 from meds import held_out_split, train_split, tuning_split
 from torchmetrics.classification import BinaryAUROC
 
@@ -688,7 +689,7 @@ class EveryQueryLightningModule(L.LightningModule):
                 # Only a sanity check: the schedule itself never depends on the horizon.
                 try:
                     horizon = self.trainer.estimated_stepping_batches
-                except Exception:  # an unsized dataloader etc.: nothing to compare against
+                except (RuntimeError, MisconfigurationException):  # no fit loop/data to size
                     horizon = math.inf
                 if math.isfinite(horizon) and num_warmup_steps >= horizon:
                     logger.warning(

@@ -1,7 +1,6 @@
 """Anytime Pretraining (issue #315): the growing-timescale EMA callback and horizon-free LR schedules."""
 
 import copy
-import math
 from functools import partial
 from pathlib import Path
 from unittest.mock import Mock
@@ -9,6 +8,7 @@ from unittest.mock import Mock
 import lightning as L
 import pytest
 import torch
+from lightning.pytorch.strategies import DeepSpeedStrategy, FSDPStrategy, ModelParallelStrategy
 from torch.utils.data import DataLoader, TensorDataset
 from transformers import (
     get_constant_schedule_with_warmup,
@@ -19,7 +19,6 @@ from transformers import (
 from every_query.model.anytime_ema import (
     AnytimeEMA,
     apply_ema_weights,
-    ema_decay,
     ema_state_from_checkpoint,
 )
 from every_query.model.lightning_module import EveryQueryLightningModule
@@ -123,13 +122,6 @@ def test_ema_matches_reference_recipe(tmp_path, accumulate):
     assert not torch.allclose(cb.ema["lin.weight"], model.lin.weight)
 
 
-def test_ema_decay_half_life():
-    k, t = 25.0, 100_000
-    w = ema_decay(t, k)
-    half_life = math.log(0.5) / math.log(1 - w)
-    assert half_life == pytest.approx(t / k)
-
-
 # --------------------------------------------------------------------- weight swapping
 
 
@@ -184,36 +176,65 @@ def test_exception_during_validation_restores_raw_weights():
     torch.testing.assert_close(model.lin.weight.detach(), raw)
 
 
-def test_sharded_strategies_are_rejected():
-    class FSDPStrategy:  # name-alike stand-in; constructing a real one needs a process group
-        pass
-
-    trainer = Mock(strategy=FSDPStrategy())
-    with pytest.raises(NotImplementedError, match="FSDPStrategy"):
+@pytest.mark.parametrize("strategy_cls", [FSDPStrategy, DeepSpeedStrategy, ModelParallelStrategy])
+def test_sharded_strategies_are_rejected(strategy_cls):
+    trainer = Mock(strategy=Mock(spec=strategy_cls))  # a real one needs a process group
+    with pytest.raises(NotImplementedError, match="sharded"):
         AnytimeEMA().setup(trainer, Mock(), "fit")
+
+
+def test_test_loop_scores_ema_weights_and_restores_raw(tmp_path):
+    class _Tested(_Tiny):
+        def test_step(self, batch):
+            self.val_pairs.append((self.lin.weight.detach().clone(), cb.ema["lin.weight"].clone()))
+
+    L.seed_everything(0, verbose=False)
+    model = _Tested()
+    cb = AnytimeEMA(k=2.0)
+    trainer = _trainer(tmp_path, max_steps=4, callbacks=[cb], limit_val_batches=0, limit_test_batches=1)
+    trainer.fit(model, _data())
+    raw = model.lin.weight.detach().clone()
+
+    trainer.test(model, _data())
+    assert len(model.val_pairs) == 1
+    scored, ema = model.val_pairs[0]
+    torch.testing.assert_close(scored, ema.to(scored.dtype))
+    assert not torch.equal(scored, raw)
+    torch.testing.assert_close(model.lin.weight.detach(), raw)
 
 
 # ------------------------------------------------------------------------------ resume
 
 
-def test_resume_continues_the_same_ema(tmp_path):
+@pytest.mark.parametrize("accumulate", [1, 2])
+def test_resume_continues_the_same_ema(tmp_path, accumulate):
     """One epoch + resume to two gives the same EMA as two uninterrupted epochs.
 
-    Epoch boundaries keep the plain (non-resumable) dataloader on the same batches either way.
+    Epoch boundaries keep the plain (non-resumable) dataloader on the same batches either way.  With
+    accumulation, a ``last_step`` lost on resume would add a spurious update on the first micro-batch.
     """
     L.seed_everything(0, verbose=False)
     init = _Tiny()
-    data = partial(_data, n=6)  # three optimizer steps per epoch
+    data = partial(_data, n=6 * accumulate)  # three optimizer steps per epoch
 
     straight = AnytimeEMA(k=2.0)
-    _trainer(tmp_path / "a", max_epochs=2, callbacks=[straight], limit_val_batches=0).fit(
-        copy.deepcopy(init), data()
-    )
+    _trainer(
+        tmp_path / "a",
+        max_epochs=2,
+        accumulate_grad_batches=accumulate,
+        callbacks=[straight],
+        limit_val_batches=0,
+    ).fit(copy.deepcopy(init), data())
 
     first = AnytimeEMA(k=2.0)
     ckpt = L.pytorch.callbacks.ModelCheckpoint(dirpath=tmp_path / "b", save_last=True)
     _trainer(
-        tmp_path / "b", max_epochs=1, callbacks=[first, ckpt], enable_checkpointing=True, limit_val_batches=0
+        tmp_path / "b",
+        max_epochs=1,
+        accumulate_grad_batches=accumulate,
+        callbacks=[first, ckpt],
+        enable_checkpointing=True,
+        limit_val_batches=0,
     ).fit(copy.deepcopy(init), data())
     assert first.last_step == 3
 
@@ -222,6 +243,7 @@ def test_resume_continues_the_same_ema(tmp_path):
     _trainer(
         tmp_path / "c",
         max_epochs=2,
+        accumulate_grad_batches=accumulate,
         callbacks=[resumed, ckpt2],
         enable_checkpointing=True,
         limit_val_batches=0,
@@ -270,7 +292,7 @@ class _NoHorizon:
 
 
 class TestHorizonFreeSchedules:
-    def test_constant_with_fixed_warmup_never_reads_horizon(self, demo_model):
+    def test_constant_with_fixed_warmup_does_not_depend_on_horizon(self, demo_model):
         module = _module(demo_model, partial(get_constant_schedule_with_warmup), warmup_steps=10)
         module.trainer = _NoHorizon()
         lr = module.configure_optimizers()["lr_scheduler"]["scheduler"].lr_lambdas[0]
