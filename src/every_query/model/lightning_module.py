@@ -676,6 +676,28 @@ class EveryQueryLightningModule(L.LightningModule):
             num_warmup_steps = 0
         hparams_to_log["LR_scheduler/num_warmup_steps"] = num_warmup_steps
 
+        if not horizon_aware:
+            if self.warmup_ratio > 0.0:
+                logger.warning(
+                    "Horizon-free LR schedule with warmup_ratio=%g: warmup is still sized from the run's "
+                    "horizon (%d steps).  Set warmup_steps (and warmup_ratio=0) for a horizon-free run.",
+                    self.warmup_ratio,
+                    num_warmup_steps,
+                )
+            else:
+                # Only a sanity check: the schedule itself never depends on the horizon.
+                try:
+                    horizon = self.trainer.estimated_stepping_batches
+                except Exception:  # an unsized dataloader etc.: nothing to compare against
+                    horizon = math.inf
+                if math.isfinite(horizon) and num_warmup_steps >= horizon:
+                    logger.warning(
+                        "warmup_steps=%d is at least this run's %d optimizer steps, so the LR never "
+                        "leaves warmup.  Lower lightning_module.warmup_steps for short runs.",
+                        num_warmup_steps,
+                        int(horizon),
+                    )
+
         # save_hyperparameters ran at init, before the trainer existed; log the
         # fit-time step counts separately so they show up in wandb's config.
         if self.logger is not None:

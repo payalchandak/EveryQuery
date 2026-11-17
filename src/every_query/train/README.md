@@ -81,8 +81,15 @@ base configs also needs `lightning_module.warmup_ratio=0` (`+anytime=ema25` does
 `+anytime=ema25` turns on Anytime Pretraining (#315): the same AdamW and peak LR, a fixed
 2,000-step warmup, then a constant LR, plus an `AnytimeEMA` callback that keeps an EMA of the
 weights whose half-life grows as `step / 25`. No terminal horizon appears anywhere, so every
-validation point is a valid stopping point, and a run can be extended on resume (raise
-`trainer.max_epochs` / `+trainer.max_steps`) without restarting a schedule.
+validation point is a valid stopping point, and a run can be extended on resume without restarting
+a schedule: raise `trainer.max_epochs`, or set `trainer.max_epochs=-1` together with a larger
+`trainer.max_steps` (the shipped configs cap the run at one epoch, so `max_steps` alone cannot
+extend it).
+
+The 2,000-step warmup is a default, not a recommendation: for short runs (e.g. `fast_config`'s
+400 steps) lower `lightning_module.warmup_steps`, and for an A/B against a cosine baseline set it
+to the baseline's logged `LR_scheduler/num_warmup_steps` so only the schedule differs. A warning is
+logged when the warmup is at least as long as the run.
 
 ```bash
 EQ_train +anytime=ema25 ...                                    # constant LR + EMA-25
@@ -92,8 +99,9 @@ EQ_train +anytime=ema25 trainer.callbacks.anytime_ema=null ... # constant LR, ra
 
 Validation and test score the EMA weights, so `tuning/loss`, best-checkpoint selection and early
 stopping all refer to the EMA model. Checkpoints keep the raw weights and optimizer state (for exact
-resume) and store the EMA as callback state; `EQ_predict` / `EQ_evaluate` load the EMA weights
-automatically when a checkpoint has them. The EMA is kept in fp32 and costs one extra copy of the
+resume) and store the EMA as callback state; `EQ_predict` / `EQ_predict_multitask` load the EMA
+weights automatically when a checkpoint has them, so the predictions `EQ_evaluate` scores come from
+the EMA model. The EMA is kept in fp32 and costs one extra copy of the
 trainable weights in accelerator memory (two during validation, which also holds the raw weights it
 swaps out). Sharded strategies (FSDP, DeepSpeed, ModelParallel) are not supported.
 
@@ -108,4 +116,5 @@ A resume whose checkpoint already meets the budget (`global_step >= max_steps`, 
 sits at the end of epoch `max_epochs`) skips `trainer.fit` entirely and only re-publishes
 `best_model.ckpt`: letting Lightning "train" zero steps rewrites `last.ckpt` with bumped epoch
 counters, after which a later `trainer.max_epochs=2` extension also trains zero steps. Raise
-`trainer.max_epochs` / `+trainer.max_steps` on the extending run.
+`trainer.max_epochs` on the extending run (or set `trainer.max_epochs=-1` with a larger
+`trainer.max_steps`).

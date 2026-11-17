@@ -260,13 +260,13 @@ def _module(demo_model, scheduler, **kwargs) -> EveryQueryLightningModule:
 
 
 class _NoHorizon:
-    """A trainer stand-in whose horizon must not be read."""
+    """A trainer stand-in with no usable horizon: the schedule must not depend on it."""
 
     logger = None
 
     @property
     def estimated_stepping_batches(self):
-        raise AssertionError("a horizon-free schedule read the trainer's horizon")
+        raise RuntimeError("no horizon available")
 
 
 class TestHorizonFreeSchedules:
@@ -378,3 +378,26 @@ def test_mid_validation_checkpoint_saves_raw_weights():
     cb.on_save_checkpoint(Mock(), model, checkpoint)
     torch.testing.assert_close(checkpoint["state_dict"]["lin.weight"], raw)
     assert torch.equal(model.lin.weight, torch.zeros_like(raw)), "the live module keeps scoring the EMA"
+
+
+class TestScheduleWarnings:
+    def test_warns_when_warmup_outlasts_the_run(self, demo_model, caplog):
+        module = _module(demo_model, partial(get_constant_schedule_with_warmup), warmup_steps=2000)
+        module.trainer = Mock(estimated_stepping_batches=400)
+        with caplog.at_level("WARNING", logger="every_query.model.lightning_module"):
+            module.configure_optimizers()
+        assert "never leaves warmup" in caplog.text
+
+    def test_quiet_when_warmup_fits(self, demo_model, caplog):
+        module = _module(demo_model, partial(get_constant_schedule_with_warmup), warmup_steps=20)
+        module.trainer = Mock(estimated_stepping_batches=400)
+        with caplog.at_level("WARNING", logger="every_query.model.lightning_module"):
+            module.configure_optimizers()
+        assert "warmup" not in caplog.text
+
+    def test_warns_when_horizon_free_schedule_uses_warmup_ratio(self, demo_model, caplog):
+        module = _module(demo_model, partial(get_constant_schedule_with_warmup), warmup_ratio=0.05)
+        module.trainer = Mock(estimated_stepping_batches=400)
+        with caplog.at_level("WARNING", logger="every_query.model.lightning_module"):
+            module.configure_optimizers()
+        assert "still sized from the run's horizon (20 steps)" in caplog.text

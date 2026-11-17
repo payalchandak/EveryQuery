@@ -13,7 +13,7 @@ Two weight sets coexist:
 - the **raw** weights, which the optimizer updates.  They stay in the module's ``state_dict`` so a
   resumed run continues the exact optimization trajectory;
 - the **EMA** weights, which validation and test score (they are swapped in for the loop and back
-  out afterwards) and which :func:`apply_ema_weights` installs for prediction/evaluation.  They are
+  out afterwards) and which :func:`apply_ema_weights` installs for prediction.  They are
   saved as this callback's checkpoint state.
 
 Because validation scores the EMA weights, ``tuning/loss`` and everything that monitors it (best
@@ -150,8 +150,9 @@ class AnytimeEMA(Callback):
     def on_train_start(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
         params = _trainable_named_params(pl_module)
         if not self.ema:
-            # Fresh run (or a resume from a checkpoint without EMA state, which starts a new
-            # averaging phase from the current weights).
+            # Fresh run.  (A Lightning resume from a checkpoint without EMA state would also land
+            # here and start a new averaging phase from the current weights; train.py's resume check
+            # refuses that config change, so it only arises outside EQ_train.)
             self.ema = {n: p.detach().to(torch.float32, copy=True) for n, p in params.items()}
             self.last_step = trainer.global_step
             logger.info("AnytimeEMA: initialized EMA-%g from the weights at step %d.", self.k, self.last_step)
