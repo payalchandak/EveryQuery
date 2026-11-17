@@ -83,8 +83,8 @@ base configs also needs `lightning_module.warmup_ratio=0` (`+anytime=ema25` does
 weights whose half-life grows as `step / 25`. No terminal horizon appears anywhere, so every
 validation point is a valid stopping point, and a run can be extended on resume without restarting
 a schedule: raise `trainer.max_epochs`, or set `trainer.max_epochs=-1` together with a larger
-`trainer.max_steps` (the shipped configs cap the run at one epoch, so `max_steps` alone cannot
-extend it).
+`++trainer.max_steps=N` (the shipped configs cap the run at one epoch, so `max_steps` alone cannot
+extend it; `++` works whether or not the config already sets `max_steps`).
 
 The 2,000-step warmup is a default, not a recommendation: for short runs (e.g. `fast_config`'s
 400 steps) lower `lightning_module.warmup_steps`, and for an A/B against a cosine baseline set it
@@ -99,9 +99,9 @@ EQ_train +anytime=ema25 trainer.callbacks.anytime_ema=null ... # constant LR, ra
 
 Validation and test score the EMA weights, so `tuning/loss`, best-checkpoint selection and early
 stopping all refer to the EMA model. Checkpoints keep the raw weights and optimizer state (for exact
-resume) and store the EMA as callback state; `EQ_predict` / `EQ_predict_multitask` load the EMA
-weights automatically when a checkpoint has them, so the predictions `EQ_evaluate` scores come from
-the EMA model. The EMA is kept in fp32 and costs one extra copy of the
+resume) and store the EMA as callback state. `load_from_checkpoint` (and so `EQ_predict` /
+`EQ_predict_multitask`) loads the EMA weights whenever a checkpoint has them, so the predictions
+`EQ_evaluate` scores come from the EMA model; pass `use_ema_weights=False` for the raw weights. The EMA is kept in fp32 and costs one extra copy of the
 trainable weights in accelerator memory (two during validation, which also holds the raw weights it
 swaps out). Sharded strategies (FSDP, DeepSpeed, ModelParallel) are not supported.
 
@@ -117,4 +117,4 @@ sits at the end of epoch `max_epochs`) skips `trainer.fit` entirely and only re-
 `best_model.ckpt`: letting Lightning "train" zero steps rewrites `last.ckpt` with bumped epoch
 counters, after which a later `trainer.max_epochs=2` extension also trains zero steps. Raise
 `trainer.max_epochs` on the extending run (or set `trainer.max_epochs=-1` with a larger
-`trainer.max_steps`).
+`++trainer.max_steps=N`).

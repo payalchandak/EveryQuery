@@ -2,10 +2,11 @@
 #
 # Anytime Pretraining (issue #315): AdamW at the same peak LR, a fixed-length warmup, then a
 # horizon-free LR (constant by default), plus an EMA of the weights whose half-life grows as
-# step / 25.  Validation, checkpoint selection, early stopping and EQ_predict(_multitask) all use
-# the EMA weights; the raw weights and optimizer state stay in the checkpoint so a run can be
-# resumed and extended (raise trainer.max_epochs, or trainer.max_epochs=-1 with a larger
-# trainer.max_steps) without a schedule restart.  See train/README.md.
+# step / 25.  Validation, checkpoint selection, early stopping and load_from_checkpoint (so
+# EQ_predict(_multitask)) all use the EMA weights; the raw weights and optimizer state stay in the
+# checkpoint so a run can be resumed and extended (raise trainer.max_epochs, or
+# trainer.max_epochs=-1 with a larger ++trainer.max_steps=N) without a schedule restart.  See
+# train/README.md.
 #
 #   EQ_train +anytime=ema25                                  # constant LR + EMA-25
 #   EQ_train +anytime=ema25 lr_scheduler=inverse_sqrt        # 1/sqrt(t) LR + EMA-25

@@ -423,3 +423,48 @@ class TestScheduleWarnings:
         with caplog.at_level("WARNING", logger="every_query.model.lightning_module"):
             module.configure_optimizers()
         assert "still sized from the run's horizon (20 steps)" in caplog.text
+
+
+def test_mismatched_resume_state_fails_clearly_at_sanity_validation():
+    """The restored EMA meets validation (sanity check) before on_train_start can validate it."""
+    cb = AnytimeEMA()
+    cb.load_state_dict({"k": 25.0, "last_step": 3, "ema": {"renamed.weight": torch.zeros(1, 3)}})
+    with pytest.raises(RuntimeError, match="does not match"):
+        cb.on_validation_start(Mock(), _Tiny())
+
+
+def test_warmup_warning_also_covers_horizon_aware_schedules(demo_model, caplog):
+    module = _module(demo_model, partial(get_cosine_schedule_with_warmup), warmup_steps=2000)
+    module.trainer = Mock(estimated_stepping_batches=400)
+    with caplog.at_level("WARNING", logger="every_query.model.lightning_module"):
+        module.configure_optimizers()
+    assert "never leaves warmup" in caplog.text
+
+
+def test_horizon_free_runs_still_log_the_step_count(demo_model):
+    module = _module(demo_model, partial(get_constant_schedule_with_warmup), warmup_steps=10)
+    module.trainer = Mock(estimated_stepping_batches=400)
+    module.configure_optimizers()
+    logged = module.trainer.logger.log_hyperparams.call_args.args[0]
+    assert logged == {"LR_scheduler/num_warmup_steps": 10, "LR_scheduler/num_training_steps": 400}
+
+
+def test_load_from_checkpoint_applies_ema_weights(demo_model, tmp_path):
+    """Every loader, not just setup_model, returns the EMA weights an anytime run was selected on."""
+    module = _module(demo_model, partial(get_constant_schedule_with_warmup), warmup_steps=1)
+    ema = {n: torch.full_like(p, 0.25) for n, p in module.named_parameters() if p.requires_grad}
+    path = tmp_path / "anytime.ckpt"
+    torch.save(
+        {
+            "state_dict": module.state_dict(),
+            "hyper_parameters": dict(module.hparams),
+            "pytorch-lightning_version": L.__version__,
+            "callbacks": {"AnytimeEMA": {"k": 25.0, "last_step": 1, "ema": ema}},
+        },
+        path,
+    )
+    with_ema = EveryQueryLightningModule.load_from_checkpoint(str(path))
+    raw = EveryQueryLightningModule.load_from_checkpoint(str(path), use_ema_weights=False)
+    name, value = next(iter(ema.items()))
+    torch.testing.assert_close(dict(with_ema.named_parameters())[name].detach(), value)
+    torch.testing.assert_close(dict(raw.named_parameters())[name].detach(), module.state_dict()[name])

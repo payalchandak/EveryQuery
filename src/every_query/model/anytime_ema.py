@@ -138,7 +138,10 @@ class AnytimeEMA(Callback):
         self._raw: dict[str, torch.Tensor] = {}
         # (EMA tensors, matching parameters) in one order, bound once per fit in on_train_start.
         self._ema_list: list[torch.Tensor] = []
-        self._param_list: list[torch.Tensor] = []
+        self._end_list: list[torch.Tensor] = []  # what the EMA lerps toward, all fp32
+        # (fp32 buffer, low-precision parameter) pairs refreshed before each update.
+        self._cast_bufs: list[torch.Tensor] = []
+        self._cast_params: list[torch.Tensor] = []
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -162,6 +165,12 @@ class AnytimeEMA(Callback):
             self._bind(params)
             return
 
+        self._check_matches(params)
+        # Checkpoint state may have been restored onto another device.
+        self.ema = {n: t.to(device=params[n].device, dtype=torch.float32) for n, t in self.ema.items()}
+        self._bind(params)
+
+    def _check_matches(self, params: dict[str, torch.nn.Parameter]) -> None:
         if set(self.ema) != set(params):
             missing = sorted(set(params) - set(self.ema))
             unexpected = sorted(set(self.ema) - set(params))
@@ -169,14 +178,20 @@ class AnytimeEMA(Callback):
                 "AnytimeEMA state restored from the checkpoint does not match the module's trainable "
                 f"parameters (missing={missing[:5]}, unexpected={unexpected[:5]})."
             )
-        # Checkpoint state may have been restored onto another device.
-        self.ema = {n: t.to(device=params[n].device, dtype=torch.float32) for n, t in self.ema.items()}
-        self._bind(params)
 
     def _bind(self, params: dict[str, torch.nn.Parameter]) -> None:
-        names = list(self.ema)
-        self._ema_list = [self.ema[n] for n in names]
-        self._param_list = [params[n].detach() for n in names]
+        """Fix the per-step tensor lists once per fit; the parameter set cannot change mid-fit."""
+        self._ema_list, self._end_list, self._cast_bufs, self._cast_params = [], [], [], []
+        for n, ema in self.ema.items():
+            p = params[n].detach()
+            self._ema_list.append(ema)
+            if p.dtype == torch.float32:
+                self._end_list.append(p)
+            else:  # bf16-true etc.: lerp toward a reused fp32 buffer, not a fresh copy per step
+                buf = torch.empty_like(p, dtype=torch.float32)
+                self._end_list.append(buf)
+                self._cast_bufs.append(buf)
+                self._cast_params.append(p)
 
     @torch.no_grad()
     def on_train_batch_end(self, trainer: L.Trainer, pl_module: L.LightningModule, *args: Any) -> None:
@@ -185,12 +200,9 @@ class AnytimeEMA(Callback):
             return  # mid-accumulation micro-batch, or no optimizer step happened
         self.last_step = step
 
-        torch._foreach_lerp_(
-            self._ema_list,
-            # The parameters themselves when fp32, fp32 copies of low-precision ones.
-            [p.float() for p in self._param_list],
-            ema_decay(step, self.k),
-        )
+        if self._cast_bufs:
+            torch._foreach_copy_(self._cast_bufs, self._cast_params)
+        torch._foreach_lerp_(self._ema_list, self._end_list, ema_decay(step, self.k))
 
     # ------------------------------------------------------------- weight swapping
 
@@ -198,6 +210,9 @@ class AnytimeEMA(Callback):
     def _swap_in(self, pl_module: L.LightningModule) -> None:
         if not self.ema or self._raw:
             return  # nothing to average yet (e.g. pre-fit validation), or already swapped
+        # On resume the restored EMA reaches here (sanity-check validation) before on_train_start
+        # validates it, so check it here too rather than fail midway with a bare KeyError.
+        self._check_matches(_trainable_named_params(pl_module))
         params = dict(pl_module.named_parameters())
         for n, ema in self.ema.items():
             p = params[n]
