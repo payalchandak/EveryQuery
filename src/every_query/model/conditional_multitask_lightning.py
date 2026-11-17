@@ -47,6 +47,7 @@ class ConditionalMultitaskLightningModule(EveryQueryLightningModule):
         LR_scheduler: Callable[..., Any] | None = None,
         warmup_ratio: float = 0.0,
         grad_norm_log_every_n_steps: int = 1000,
+        warmup_steps: int | None = None,
     ):
         super().__init__(
             model=model,
@@ -54,6 +55,7 @@ class ConditionalMultitaskLightningModule(EveryQueryLightningModule):
             LR_scheduler=LR_scheduler,
             warmup_ratio=warmup_ratio,
             grad_norm_log_every_n_steps=grad_norm_log_every_n_steps,
+            warmup_steps=warmup_steps,
         )
         # Full-vocabulary macro metrics are deliberately deferred.  Keep the parent's epoch
         # hooks and optimizer plumbing, but give them no scalar-model metrics to update.
@@ -182,4 +184,5 @@ class ConditionalMultitaskLightningModule(EveryQueryLightningModule):
             optimizer=optimizer,
             LR_scheduler=LR_scheduler,
             warmup_ratio=hparams.get("warmup_ratio", 0.0),
+            warmup_steps=hparams.get("warmup_steps"),
         )

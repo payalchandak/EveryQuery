@@ -8,6 +8,8 @@
 
 defaults:
   - _self_
+  # No LR schedule by default; selectable (e.g. by `+anytime=ema25`) via the lr_scheduler group.
+  - lr_scheduler: null
 
 output_dir: ???
 do_overwrite: true

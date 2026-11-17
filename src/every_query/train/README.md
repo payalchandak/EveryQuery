@@ -70,6 +70,31 @@ no "best" checkpoint is ever recorded and `best_model.ckpt` is taken from `check
 (logged as a warning); pair the cap with an integer `trainer.val_check_interval` to keep a real
 best checkpoint.
 
+## LR schedules and anytime training
+
+`lightning_module.LR_scheduler` comes from the `lr_scheduler` config group: `cosine` (the default,
+horizon-aware), or the horizon-free `constant` and `inverse_sqrt`. Warmup is sized by
+`lightning_module.warmup_ratio` (a fraction of the run's total steps) or by a fixed
+`+lightning_module.warmup_steps=N` (at most one of the two).
+
+`+anytime=ema25` turns on Anytime Pretraining (#315): the same AdamW and peak LR, a fixed
+2,000-step warmup, then a constant LR, plus an `AnytimeEMA` callback that keeps an EMA of the
+weights whose half-life grows as `step / 25`. No terminal horizon appears anywhere, so every
+validation point is a valid stopping point, and a run can be extended on resume (raise
+`trainer.max_epochs` / `+trainer.max_steps`) without restarting a schedule.
+
+```bash
+EQ_train +anytime=ema25 ...                                    # constant LR + EMA-25
+EQ_train +anytime=ema25 lr_scheduler=inverse_sqrt ...          # 1/sqrt(t) LR + EMA-25
+EQ_train +anytime=ema25 trainer.callbacks.anytime_ema=null ... # constant LR, raw weights (ablation)
+```
+
+Validation and test score the EMA weights, so `tuning/loss`, best-checkpoint selection and early
+stopping all refer to the EMA model. Checkpoints keep the raw weights and optimizer state (for exact
+resume) and store the EMA as callback state; `EQ_predict` / `EQ_evaluate` load the EMA weights
+automatically when a checkpoint has them. The EMA costs one extra fp32 copy of the trainable
+weights in accelerator memory, and sharded strategies (FSDP, DeepSpeed) are not supported.
+
 ## Resume behavior
 
 `do_resume=True` reuses an existing run dir's checkpoints and `config.yaml`. Because each launch

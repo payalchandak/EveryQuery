@@ -16,6 +16,7 @@ from hydra.utils import instantiate
 from lightning.pytorch import seed_everything
 from omegaconf import OmegaConf
 
+from every_query.model.anytime_ema import apply_ema_weights, ema_state_from_checkpoint
 from every_query.model.lightning_module import EveryQueryLightningModule
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ def setup_model(
     model_run_dir: str | Path,
     ckpt_name: str | None = None,
     module_cls: type[EveryQueryLightningModule] | None = None,
+    use_ema_weights: bool = True,
 ):
     """Resolve a ``model_run_dir`` into a ``(train_cfg, lightning_module, trainer)`` triple.
 
@@ -42,6 +44,10 @@ def setup_model(
             Defaults to :class:`EveryQueryLightningModule`; pass
             :class:`~every_query.model.conditional_multitask_lightning.ConditionalMultitaskLightningModule`
             for multitask runs.
+        use_ema_weights: When the checkpoint carries :class:`~every_query.model.anytime_ema.AnytimeEMA`
+            state (an Anytime Pretraining run), load the EMA weights rather than the raw optimizer
+            weights.  Those are the weights in-training validation scored, and so the ones
+            ``best_model.ckpt`` was selected for.  Ignored for checkpoints without EMA state.
 
     Returns:
         Tuple ``(train_cfg, lightning_module, trainer)``.  ``train_cfg`` is the OmegaConf
@@ -97,6 +103,13 @@ def setup_model(
         module_cls = EveryQueryLightningModule
     logger.info(f"Loading lightning module from checkpoint: {ckpt_path}")
     M = module_cls.load_from_checkpoint(str(ckpt_path))
+
+    if use_ema_weights:
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False, mmap=True)
+        ema = ema_state_from_checkpoint(ckpt)
+        if ema is not None:
+            logger.info("Checkpoint has Anytime EMA state; loading the EMA weights.")
+            apply_ema_weights(M, ema)
 
     logger.info("Instantiating trainer...")
     trainer = instantiate(train_cfg.trainer)

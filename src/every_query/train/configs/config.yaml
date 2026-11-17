@@ -1,5 +1,7 @@
 defaults:
   - _self_
+  # lightning_module.LR_scheduler: cosine (horizon-aware), constant or inverse_sqrt (horizon-free).
+  - lr_scheduler: cosine
 
 output_dir: ??? # required base — supply via `output_dir=`; Hydra appends <date>/<time> (see hydra block)
 do_overwrite: true
@@ -66,10 +68,7 @@ lightning_module:
   # Fraction of total optimizer steps spent in LR warmup; the module derives the
   # actual step counts from trainer.estimated_stepping_batches at fit time.
   warmup_ratio: 0.05
-  LR_scheduler:
-    _target_: transformers.get_cosine_schedule_with_warmup
-    _partial_: true
-    num_cycles: 0.5
+  # LR_scheduler comes from the `lr_scheduler` config group (see the defaults list above).
 
 trainer:
   _target_: lightning.pytorch.trainer.Trainer

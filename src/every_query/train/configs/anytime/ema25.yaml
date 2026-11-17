@@ -1,0 +1,24 @@
+# @package _global_
+#
+# Anytime Pretraining (issue #315): AdamW at the same peak LR, a fixed-length warmup, then a
+# horizon-free LR (constant by default), plus an EMA of the weights whose half-life grows as
+# step / 25.  Validation, checkpoint selection, early stopping and EQ_predict / EQ_evaluate all
+# use the EMA weights; the raw weights and optimizer state stay in the checkpoint so a run can be
+# resumed (and extended with trainer.max_epochs / trainer.max_steps) without a schedule restart.
+#
+#   EQ_train +anytime=ema25                                  # constant LR + EMA-25
+#   EQ_train +anytime=ema25 lr_scheduler=inverse_sqrt        # 1/sqrt(t) LR + EMA-25
+#   EQ_train +anytime=ema25 trainer.callbacks.anytime_ema=null  # constant LR, raw weights (ablation)
+defaults:
+  - override /lr_scheduler: constant
+
+lightning_module:
+  warmup_ratio: 0.0
+  # Fixed in optimizer steps so the schedule never depends on the run's length.
+  warmup_steps: 2000
+
+trainer:
+  callbacks:
+    anytime_ema:
+      _target_: every_query.model.anytime_ema.AnytimeEMA
+      k: 25.0

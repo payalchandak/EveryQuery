@@ -1,0 +1,9 @@
+# @package lightning_module.LR_scheduler
+#
+# Horizon-free: linear warmup, then lr * sqrt(timescale / (step - warmup + timescale)), i.e.
+# ~constant early and ~1/sqrt(step) late.  timescale defaults to the warmup length.  Like
+# `constant`, pair with a fixed lightning_module.warmup_steps and the AnytimeEMA callback:
+#   EQ_train +anytime=ema25 lr_scheduler=inverse_sqrt
+_target_: transformers.get_inverse_sqrt_schedule
+_partial_: true
+timescale: null
