@@ -1,6 +1,8 @@
 # Production training config for the decoder-only all-vocabulary multitask model.
 defaults:
   - _self_
+  # lightning_module.LR_scheduler: cosine (horizon-aware), constant or inverse_sqrt (horizon-free).
+  - lr_scheduler: cosine
 
 output_dir: ???
 do_overwrite: false
@@ -95,10 +97,7 @@ lightning_module:
     amsgrad: false
     fused: false
   warmup_ratio: 0.05
-  LR_scheduler:
-    _target_: transformers.get_cosine_schedule_with_warmup
-    _partial_: true
-    num_cycles: 0.5
+  # LR_scheduler comes from the `lr_scheduler` config group (see the defaults list above).
 
 trainer:
   _target_: lightning.pytorch.trainer.Trainer

@@ -9,7 +9,11 @@ from meds import held_out_split, train_split, tuning_split
 from every_query.data.multitask_dataset import MultitaskBoundaryBatch
 from every_query.data.multitask_eval_dataset import MultitaskEvalBatch
 from every_query.model.conditional_multitask_ar_model import ConditionalMultitaskARModel
-from every_query.model.lightning_module import EveryQueryLightningModule, _dict_to_factory
+from every_query.model.lightning_module import (
+    EveryQueryLightningModule,
+    _apply_checkpoint_ema,
+    _dict_to_factory,
+)
 
 
 class ConditionalMultitaskLightningModule(EveryQueryLightningModule):
@@ -47,6 +51,7 @@ class ConditionalMultitaskLightningModule(EveryQueryLightningModule):
         LR_scheduler: Callable[..., Any] | None = None,
         warmup_ratio: float = 0.0,
         grad_norm_log_every_n_steps: int = 1000,
+        warmup_steps: int | None = None,
     ):
         super().__init__(
             model=model,
@@ -54,6 +59,7 @@ class ConditionalMultitaskLightningModule(EveryQueryLightningModule):
             LR_scheduler=LR_scheduler,
             warmup_ratio=warmup_ratio,
             grad_norm_log_every_n_steps=grad_norm_log_every_n_steps,
+            warmup_steps=warmup_steps,
         )
         # Full-vocabulary macro metrics are deliberately deferred.  Keep the parent's epoch
         # hooks and optimizer plumbing, but give them no scalar-model metrics to update.
@@ -153,8 +159,14 @@ class ConditionalMultitaskLightningModule(EveryQueryLightningModule):
     }
 
     @classmethod
-    def load_from_checkpoint(cls, ckpt_path: str | None = None) -> "ConditionalMultitaskLightningModule":
-        """Restore a multitask checkpoint using its mandatory architecture discriminator."""
+    def load_from_checkpoint(
+        cls, ckpt_path: str | None = None, use_ema_weights: bool = True
+    ) -> "ConditionalMultitaskLightningModule":
+        """Restore a multitask checkpoint using its mandatory architecture discriminator.
+
+        Like the parent, installs the checkpoint's Anytime EMA weights unless ``use_ema_weights`` is
+        ``False``.
+        """
         checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         hparams = checkpoint.get("hyper_parameters", {})
         for key in ("model", "optimizer", "LR_scheduler"):
@@ -176,10 +188,13 @@ class ConditionalMultitaskLightningModule(EveryQueryLightningModule):
         optimizer = _dict_to_factory(hparams["optimizer"])
         LR_scheduler = _dict_to_factory(hparams["LR_scheduler"])
 
-        return super(EveryQueryLightningModule, cls).load_from_checkpoint(
+        module = super(EveryQueryLightningModule, cls).load_from_checkpoint(
             ckpt_path,
             model=model,
             optimizer=optimizer,
             LR_scheduler=LR_scheduler,
             warmup_ratio=hparams.get("warmup_ratio", 0.0),
+            warmup_steps=hparams.get("warmup_steps"),
         )
+        _apply_checkpoint_ema(module, checkpoint, use_ema_weights)
+        return module

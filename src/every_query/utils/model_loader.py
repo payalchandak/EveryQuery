@@ -25,6 +25,7 @@ def setup_model(
     model_run_dir: str | Path,
     ckpt_name: str | None = None,
     module_cls: type[EveryQueryLightningModule] | None = None,
+    use_ema_weights: bool = True,
 ):
     """Resolve a ``model_run_dir`` into a ``(train_cfg, lightning_module, trainer)`` triple.
 
@@ -42,6 +43,11 @@ def setup_model(
             Defaults to :class:`EveryQueryLightningModule`; pass
             :class:`~every_query.model.conditional_multitask_lightning.ConditionalMultitaskLightningModule`
             for multitask runs.
+        use_ema_weights: Passed to ``load_from_checkpoint``.  When the checkpoint carries
+            :class:`~every_query.model.anytime_ema.AnytimeEMA` state (an Anytime Pretraining run),
+            load the EMA weights rather than the raw optimizer weights.  Those are the weights
+            in-training validation scored, and so the ones ``best_model.ckpt`` was selected for.
+            Ignored for checkpoints without EMA state.
 
     Returns:
         Tuple ``(train_cfg, lightning_module, trainer)``.  ``train_cfg`` is the OmegaConf
@@ -96,7 +102,7 @@ def setup_model(
     if module_cls is None:
         module_cls = EveryQueryLightningModule
     logger.info(f"Loading lightning module from checkpoint: {ckpt_path}")
-    M = module_cls.load_from_checkpoint(str(ckpt_path))
+    M = module_cls.load_from_checkpoint(str(ckpt_path), use_ema_weights=use_ema_weights)
 
     logger.info("Instantiating trainer...")
     trainer = instantiate(train_cfg.trainer)

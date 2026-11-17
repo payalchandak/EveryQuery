@@ -1,4 +1,5 @@
 import copy
+import inspect
 import logging
 import math
 import re
@@ -10,11 +11,13 @@ import hydra
 import lightning as L
 import torch
 import torch.nn.parameter
+from lightning.fabric.utilities.exceptions import MisconfigurationException
 from meds import held_out_split, train_split, tuning_split
 from torchmetrics.classification import BinaryAUROC
 
 from every_query.data.dataset import EveryQueryBatch
 
+from .anytime_ema import apply_ema_weights, ema_state_from_checkpoint
 from .model import EveryQueryModel, EveryQueryOutput
 
 logger = logging.getLogger(__name__)
@@ -115,12 +118,49 @@ def _dict_to_factory(d: dict[str, Any] | None) -> partial | None:
     return None if d is None else hydra.utils.instantiate(d, _partial_=True)
 
 
+def _accepts_kwarg(factory: Callable[..., Any], name: str) -> bool:
+    """Whether ``factory`` can still be called with keyword ``name``.
+
+    Distinguishes horizon-aware LR scheduler factories (which take ``num_training_steps``) from
+    horizon-free ones (which do not), looking through ``functools.partial`` wrappers.
+
+    Examples:
+        >>> from transformers import get_constant_schedule_with_warmup, get_cosine_schedule_with_warmup
+        >>> _accepts_kwarg(partial(get_cosine_schedule_with_warmup, num_cycles=0.5), "num_training_steps")
+        True
+        >>> _accepts_kwarg(partial(get_constant_schedule_with_warmup), "num_training_steps")
+        False
+        >>> _accepts_kwarg(lambda optimizer, **kwargs: None, "num_training_steps")
+        True
+    """
+    try:
+        params = inspect.signature(factory).parameters
+    except (TypeError, ValueError):  # builtins without a signature: assume the classic HF contract
+        return True
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _apply_checkpoint_ema(module: torch.nn.Module, checkpoint: dict[str, Any], use_ema_weights: bool) -> None:
+    """Install the checkpoint's Anytime EMA weights into ``module`` when asked and present.
+
+    Shared by both ``load_from_checkpoint`` overrides, which already hold the loaded checkpoint.
+    """
+    if not use_ema_weights:
+        return
+    ema = ema_state_from_checkpoint(checkpoint)
+    if ema is not None:
+        logger.info("Checkpoint has Anytime EMA state; loading the EMA weights.")
+        apply_ema_weights(module, ema)
+
+
 class EveryQueryLightningModule(L.LightningModule):
     """LightningModule for EveryQuery with factory-friendly optimizers and metrics.
 
     ``warmup_ratio`` is the fraction of total optimizer steps spent in LR warmup; the
     step counts themselves are derived from the trainer at fit time (see
-    ``configure_optimizers``).  It must lie in ``[0.0, 1.0]``:
+    ``configure_optimizers``).  ``warmup_steps`` instead fixes the warmup length in optimizer
+    steps, independent of the run's horizon — what a horizon-free ("anytime") schedule needs.
+    At most one of the two may be set.  ``warmup_ratio`` must lie in ``[0.0, 1.0]``:
 
     Examples:
         >>> EveryQueryLightningModule(model=demo_model, warmup_ratio=1.5)
@@ -131,6 +171,14 @@ class EveryQueryLightningModule(L.LightningModule):
         Traceback (most recent call last):
             ...
         ValueError: warmup_ratio must be in [0.0, 1.0], got -0.1
+        >>> EveryQueryLightningModule(model=demo_model, warmup_steps=-1)
+        Traceback (most recent call last):
+            ...
+        ValueError: warmup_steps must be a non-negative integer, got -1
+        >>> EveryQueryLightningModule(model=demo_model, warmup_ratio=0.05, warmup_steps=100)
+        Traceback (most recent call last):
+            ...
+        ValueError: Set at most one of warmup_ratio (0.05) and warmup_steps (100).
     """
 
     def __init__(
@@ -140,14 +188,23 @@ class EveryQueryLightningModule(L.LightningModule):
         LR_scheduler: Callable[..., Any] | None = None,
         warmup_ratio: float = 0.0,
         grad_norm_log_every_n_steps: int = 1000,
+        warmup_steps: int | None = None,
     ):
         super().__init__()
         if not 0.0 <= warmup_ratio <= 1.0:
             raise ValueError(f"warmup_ratio must be in [0.0, 1.0], got {warmup_ratio}")
+        if warmup_steps is not None:
+            if isinstance(warmup_steps, bool) or not isinstance(warmup_steps, int) or warmup_steps < 0:
+                raise ValueError(f"warmup_steps must be a non-negative integer, got {warmup_steps}")
+            if warmup_ratio > 0.0:
+                raise ValueError(
+                    f"Set at most one of warmup_ratio ({warmup_ratio}) and warmup_steps ({warmup_steps})."
+                )
         self.model = model
         self.optimizer_factory = optimizer
         self.LR_scheduler_factory = LR_scheduler
         self.warmup_ratio = warmup_ratio
+        self.warmup_steps = warmup_steps
         # Logging knob only — intentionally kept out of save_hyperparameters so old
         # checkpoints load unchanged and load_from_checkpoint needs no edits.
         self.grad_norm_log_every_n_steps = grad_norm_log_every_n_steps
@@ -170,6 +227,7 @@ class EveryQueryLightningModule(L.LightningModule):
                 "optimizer": _factory_to_dict(self.optimizer_factory),
                 "LR_scheduler": _factory_to_dict(self.LR_scheduler_factory),
                 "warmup_ratio": warmup_ratio,
+                "warmup_steps": warmup_steps,
             }
         )
 
@@ -513,8 +571,11 @@ class EveryQueryLightningModule(L.LightningModule):
 
         Returns an optimizer when no LR scheduler factory is set, or a dict with
         ``"optimizer"`` and ``"lr_scheduler"`` keys when one is provided.  The factory
-        must be HF-style, i.e. accept ``num_warmup_steps`` and ``num_training_steps``
-        keyword arguments (e.g. ``transformers.get_cosine_schedule_with_warmup``).
+        must be HF-style, i.e. accept a ``num_warmup_steps`` keyword argument.  A factory
+        that also accepts ``num_training_steps`` (e.g. ``transformers.get_cosine_schedule_with_warmup``)
+        is horizon-aware and receives the trainer's total step estimate; one that does not
+        (e.g. ``transformers.get_constant_schedule_with_warmup`` or
+        ``transformers.get_inverse_sqrt_schedule``) is horizon-free and never needs it.
 
         Raises:
             ValueError: If no optimizer factory was provided at init time.
@@ -571,6 +632,21 @@ class EveryQueryLightningModule(L.LightningModule):
             >>> module_no_warm.trainer = trainer
             >>> module_no_warm.configure_optimizers()['lr_scheduler']['scheduler'].lr_lambdas[0](0)
             1.0
+
+            A horizon-free schedule with a fixed ``warmup_steps`` never consults the trainer's
+            horizon, so it works even when the total step count is unknown:
+
+            >>> from transformers import get_constant_schedule_with_warmup
+            >>> module_anytime = EveryQueryLightningModule(
+            ...     model=demo_model,
+            ...     optimizer=partial(torch.optim.AdamW, lr=1e-4),
+            ...     LR_scheduler=partial(get_constant_schedule_with_warmup),
+            ...     warmup_steps=100,
+            ... )
+            >>> module_anytime.trainer = Mock(estimated_stepping_batches=float("inf"))
+            >>> lr_lambda = module_anytime.configure_optimizers()['lr_scheduler']['scheduler'].lr_lambdas[0]
+            >>> lr_lambda(50), lr_lambda(100), lr_lambda(1_000_000)
+            (0.5, 1.0, 1.0)
         """
         if self.optimizer_factory is None:
             raise ValueError("Optimizer factory is not set. Cannot configure optimizers.")
@@ -585,32 +661,65 @@ class EveryQueryLightningModule(L.LightningModule):
         if self.LR_scheduler_factory is None:
             return optimizer
 
-        # HF-style schedulers size warmup against the full schedule.  Both step counts
-        # are derived here at fit time — estimated_stepping_batches is Lightning's own
-        # accounting of epochs, accumulation, and world size — so the Hydra config only
-        # ever specifies warmup_ratio.
-        num_training_steps = self.trainer.estimated_stepping_batches
+        # Horizon-aware HF schedulers size themselves against the full schedule, and
+        # warmup_ratio sizes warmup against it too.  The horizon is derived here at fit time —
+        # estimated_stepping_batches is Lightning's own accounting of epochs, accumulation, and
+        # world size.  Those two uses require a finite horizon; a horizon-free schedule with a
+        # fixed warmup_steps does not, and only logs it and sanity-checks the warmup against it.
+        horizon_aware = _accepts_kwarg(self.LR_scheduler_factory, "num_training_steps")
+        needs_horizon = horizon_aware or self.warmup_ratio > 0.0
 
-        if not math.isfinite(num_training_steps) or num_training_steps <= 0:
-            raise ValueError(
-                f"Cannot construct LR schedule with "
-                f"estimated_stepping_batches={num_training_steps}. "
-                "Set a finite Trainer(max_steps=...) or use a finite dataloader."
+        if needs_horizon:
+            num_training_steps = self.trainer.estimated_stepping_batches
+            if not math.isfinite(num_training_steps) or num_training_steps <= 0:
+                raise ValueError(
+                    f"Cannot construct LR schedule with "
+                    f"estimated_stepping_batches={num_training_steps}. "
+                    "Set a finite Trainer(max_steps=...) or use a finite dataloader."
+                )
+        else:
+            try:
+                num_training_steps = self.trainer.estimated_stepping_batches
+            except (RuntimeError, MisconfigurationException):  # no fit loop or data to size it from
+                num_training_steps = math.inf
+
+        if self.warmup_steps is not None:
+            num_warmup_steps = self.warmup_steps
+        elif self.warmup_ratio > 0.0:
+            num_warmup_steps = int(self.warmup_ratio * num_training_steps)
+        else:
+            num_warmup_steps = 0
+
+        hparams_to_log = {"LR_scheduler/num_warmup_steps": num_warmup_steps}
+        if math.isfinite(num_training_steps):
+            hparams_to_log["LR_scheduler/num_training_steps"] = int(num_training_steps)
+
+        if not horizon_aware and self.warmup_ratio > 0.0:
+            logger.warning(
+                "Horizon-free LR schedule with warmup_ratio=%g: warmup is still sized from the run's "
+                "horizon (%d steps).  Set warmup_steps (and warmup_ratio=0) for a horizon-free run.",
+                self.warmup_ratio,
+                num_warmup_steps,
             )
-        num_warmup_steps = int(self.warmup_ratio * num_training_steps)
+        if (
+            self.warmup_steps
+            and math.isfinite(num_training_steps)
+            and self.warmup_steps >= num_training_steps
+        ):
+            logger.warning(
+                "warmup_steps=%d is at least this run's %d optimizer steps, so the LR never leaves "
+                "warmup.  Lower lightning_module.warmup_steps for short runs.",
+                self.warmup_steps,
+                int(num_training_steps),
+            )
+
         # save_hyperparameters ran at init, before the trainer existed; log the
         # fit-time step counts separately so they show up in wandb's config.
         if self.logger is not None:
-            self.logger.log_hyperparams(
-                {
-                    "LR_scheduler/num_training_steps": int(num_training_steps),
-                    "LR_scheduler/num_warmup_steps": num_warmup_steps,
-                }
-            )
+            self.logger.log_hyperparams(hparams_to_log)
+        scheduler_kwargs = {"num_training_steps": num_training_steps} if horizon_aware else {}
         scheduler = self.LR_scheduler_factory(
-            optimizer,
-            num_warmup_steps=num_warmup_steps,
-            num_training_steps=num_training_steps,
+            optimizer, num_warmup_steps=num_warmup_steps, **scheduler_kwargs
         )
 
         return {
@@ -619,8 +728,15 @@ class EveryQueryLightningModule(L.LightningModule):
         }
 
     @classmethod
-    def load_from_checkpoint(cls, ckpt_path: str | None = None) -> "EveryQueryLightningModule":
+    def load_from_checkpoint(
+        cls, ckpt_path: str | None = None, use_ema_weights: bool = True
+    ) -> "EveryQueryLightningModule":
         """Restore an ``EveryQueryLightningModule`` from a Lightning checkpoint.
+
+        When the checkpoint carries :class:`~every_query.model.anytime_ema.AnytimeEMA` state (an
+        Anytime Pretraining run) the module gets the EMA weights, which are what in-training
+        validation scored and ``best_model.ckpt`` was selected on; ``use_ema_weights=False`` keeps
+        the raw optimizer weights.  Checkpoints without EMA state load as they always have.
 
         Extracts ``model``, ``optimizer``, and ``LR_scheduler`` hyper-parameters from the
         checkpoint, reconstructs the corresponding objects, then delegates to the base
@@ -712,11 +828,15 @@ class EveryQueryLightningModule(L.LightningModule):
         optimizer = _dict_to_factory(hparams["optimizer"])  # type: ignore[arg-type]
         LR_scheduler = _dict_to_factory(hparams["LR_scheduler"])  # type: ignore[arg-type]
 
-        return super().load_from_checkpoint(
+        module = super().load_from_checkpoint(
             ckpt_path,
             model=model,
             optimizer=optimizer,
             LR_scheduler=LR_scheduler,
             # Checkpoints predating warmup_ratio simply had no warmup.
             warmup_ratio=hparams.get("warmup_ratio", 0.0),
+            # Checkpoints predating warmup_steps sized warmup from warmup_ratio.
+            warmup_steps=hparams.get("warmup_steps"),
         )
+        _apply_checkpoint_ema(module, checkpoint, use_ema_weights)
+        return module
