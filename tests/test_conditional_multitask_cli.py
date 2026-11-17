@@ -661,3 +661,35 @@ def test_predict_multitask_scores_an_ancestor_query(
     assert result.returncode != 0
     assert "not in this run's vocabulary" in result.stderr + result.stdout
     assert not (tmp_path / "leaf.parquet").exists()
+
+
+def test_anytime_training_publishes_ema_weights(
+    eq_preprocessed_dataset: Path, conditional_multitask_labels_dir: Path, tmp_path: Path
+):
+    """``+anytime=ema25`` trains the multitask model end to end and its loader picks up the EMA."""
+    import torch
+
+    from every_query.model.anytime_ema import ema_state_from_checkpoint
+    from every_query.model.conditional_multitask_lightning import ConditionalMultitaskLightningModule
+
+    run_and_check(
+        _train_cmd(
+            eq_preprocessed_dataset,
+            conditional_multitask_labels_dir,
+            tmp_path,
+            "+anytime=ema25",
+            "lightning_module.warmup_steps=1",
+        ),
+        timeout=300.0,
+    )
+    ckpt = torch.load(tmp_path / "best_model.ckpt", map_location="cpu", weights_only=False)
+    ema = ema_state_from_checkpoint(ckpt)
+    assert ema is not None
+    assert ckpt["hyper_parameters"]["warmup_steps"] == 1
+
+    _, module, _ = setup_model(tmp_path, module_cls=ConditionalMultitaskLightningModule)
+    assert module.warmup_steps == 1
+    params = dict(module.named_parameters())
+    for name, weight in ema.items():
+        torch.testing.assert_close(params[name].detach(), weight.to(params[name].dtype))
+    assert any(not torch.equal(ckpt["state_dict"][n], ema[n]) for n in ema), "EMA should differ from raw"
