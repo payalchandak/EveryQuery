@@ -1,0 +1,67 @@
+# Consecutive low MAP
+#
+# Clinical question:
+#   Given a MAP below 65 charted during an ICU stay, will the next charted MAP also be
+#   below 65, in cases where that next reading occurs within 6 hours and before ICU
+#   discharge?
+#
+# Trigger:         every MAP < 65 charted during an open ICU stay.
+# Prediction time: the triggering low-MAP reading (`input.index_timestamp: end`).
+# Label:           `map_low` in the `target` window.
+# Cohort:          restricted to triggers with a follow-up MAP within 6h
+#                  (`followup_exists`) and no intervening ICU discharge.
+#
+# `target` starts one second after the trigger rather than at it.  A `map_low` event is
+# also a `map` event, and ACES resolves `->` by scanning forward from the window start
+# inclusive of that row, so an unoffset `start: trigger` makes `end: start -> map` match
+# the trigger itself and collapse the window to zero length.  The offset must stay
+# smaller than the shortest real interval between two MAP readings.
+
+predicates:
+  icu_admission:
+    code: ICU_ADMISSION
+  icu_discharge:
+    code: ICU_DISCHARGE
+  map:
+    code: LAB//220052
+  map_low:
+    code: LAB//220052
+    value_max: 65
+    value_max_inclusive: false
+
+trigger: map_low
+
+windows:
+  icu_context:
+    start: end <- icu_admission
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+
+  input:
+    start: null
+    end: trigger
+    start_inclusive: true
+    end_inclusive: true
+    has:
+      _ANY_EVENT: (10, None)
+    index_timestamp: end
+
+  followup_exists:
+    start: trigger
+    end: start + 6h
+    start_inclusive: false
+    end_inclusive: true
+    has:
+      map: (1, None)
+
+  target:
+    start: trigger + 1s
+    end: start -> map
+    start_inclusive: false
+    end_inclusive: true
+    has:
+      icu_discharge: (None, 0)
+    label: map_low
